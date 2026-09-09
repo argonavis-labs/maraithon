@@ -131,7 +131,7 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
           Jason.encode!(%{
             "model" => "qwen/qwen3.7-plus",
             "choices" => [
-              %{"finish_reason" => "length", "message" => %{"content" => ""}}
+              %{"finish_reason" => "stop", "message" => %{"content" => ""}}
             ],
             "usage" => %{
               "prompt_tokens" => 65_000,
@@ -150,7 +150,7 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
                    })
 
           assert summary.model == "qwen/qwen3.7-plus"
-          assert summary.finish_reason == "length"
+          assert summary.finish_reason == "stop"
           assert summary.usage.input_tokens == 65_000
           assert summary.usage.output_tokens == 1_200
         end)
@@ -266,7 +266,7 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
             "model" => "qwen/qwen3.7-max",
             "choices" => [
               %{
-                "finish_reason" => "length",
+                "finish_reason" => "stop",
                 "message" => %{
                   "content" => " \n\t",
                   "reasoning" => "provider-internal-reasoning"

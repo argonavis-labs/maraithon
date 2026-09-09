@@ -7,9 +7,16 @@ defmodule Maraithon.AssistantChat do
 
   alias Maraithon.Repo
   alias Maraithon.PrivacyErasure.WriteFence
-  alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard, ThreadNaming, TodoThreadPrimer}
+
+  alias Maraithon.AssistantChat.{
+    DirectIntent,
+    Execution,
+    SecretRequestGuard,
+    ThreadNaming,
+    TodoThreadPrimer
+  }
+
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.ModelRouting
   alias Maraithon.TelegramAssistant.{PreparedAction, Run, Runner}
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
@@ -17,6 +24,7 @@ defmodule Maraithon.AssistantChat do
 
   @max_message_bytes 16_384
   @max_thread_title_bytes 160
+  @max_pending_requests_per_user 50
 
   def list_threads(user_id, opts \\ []) when is_binary(user_id) do
     {:ok, TelegramConversations.list_mobile_threads(user_id, opts)}
@@ -144,25 +152,7 @@ defmodule Maraithon.AssistantChat do
            TelegramConversations.get_mobile_thread(user_id, thread_id),
          {:ok, body} <- message_body(attrs),
          {:ok, client_message_id} <- client_message_id(attrs) do
-      case TelegramConversations.find_turn_by_client_message_id(
-             conversation.id,
-             client_message_id
-           ) do
-        %Turn{} = existing ->
-          {:ok,
-           %{
-             thread: reload_thread(conversation),
-             run: TelegramConversations.latest_run_for_conversation(conversation.id),
-             message: existing,
-             duplicate?: true
-           }}
-
-        nil ->
-          # Messages sent while a run is active queue behind it — the
-          # per-conversation ThreadWorker processes runs FIFO, so a busy
-          # assistant must never drop a message on the floor.
-          insert_message_and_run(conversation, body, client_message_id)
-      end
+      accept_message(conversation, body, client_message_id)
     else
       nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -203,53 +193,139 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
-  def run_queued_request(%{
-        run_id: run_id,
-        conversation_id: conversation_id,
-        user_turn_id: user_turn_id
-      }) do
-    with %Run{} = run <- run_id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads(),
-         :ok <- WriteFence.check_user(run.user_id),
-         %Conversation{} = conversation <-
-           conversation_id |> then(&Repo.get(Conversation, &1)) |> Conversation.hydrate(),
-         %Turn{} = user_turn <- user_turn_id |> then(&Repo.get(Turn, &1)) |> Turn.hydrate() do
-      # Recovery sweeps may re-dispatch a run the original cast already
-      # handled; only queued runs execute.
-      if run.status == "queued" do
-        Runner.run_inbound(%{
-          user_id: run.user_id,
-          chat_id: run.chat_id,
-          text: user_turn.text,
-          conversation: conversation,
-          user_turn: user_turn,
-          surface: "mobile",
-          request_focus: request_focus_for(conversation),
-          linked_todo_id: linked_todo_id(conversation),
-          run: run,
-          started_at: run.started_at
-        })
-      else
-        {:ok, :already_processed}
-      end
-    else
-      _ -> {:error, :queued_request_not_found}
-    end
-  rescue
-    error ->
-      if run = run_id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads() do
-        {:ok, _run} = TelegramAssistant.fail_run(run, Exception.message(error), "failed")
-      end
+  # Only the durable job handler executes requests. This compatibility entrypoint
+  # now queues work instead of creating a second, unowned execution path.
+  def run_queued_request(request), do: Maraithon.AssistantChat.ThreadWorker.enqueue(request)
 
-      {:error, error}
+  @doc false
+  def execute_request(run, conversation, user_turn, resume? \\ false) do
+    previous_metadata = Logger.metadata()
+    Logger.metadata(target_reference: run.id)
+
+    try do
+      do_execute_request(run, conversation, user_turn, resume?)
+    after
+      Logger.reset_metadata(previous_metadata)
+    end
   end
 
-  defp insert_message_and_run(%Conversation{} = conversation, body, client_message_id) do
+  defp do_execute_request(run, conversation, user_turn, resume?) do
+    if resume? do
+      attrs = model_request_attrs(run, conversation, user_turn)
+      Runner.resume_request(attrs)
+    else
+      dispatch_user_message(
+        conversation,
+        run,
+        user_turn,
+        user_turn.text,
+        local_intent_for(user_turn.text, conversation)
+      )
+    end
+  end
+
+  defp run_model_request(run, conversation, user_turn) do
+    Runner.run_inbound(model_request_attrs(run, conversation, user_turn))
+  end
+
+  defp model_request_attrs(run, conversation, user_turn) do
+    %{
+      user_id: run.user_id,
+      chat_id: run.chat_id,
+      text: user_turn.text,
+      conversation: conversation,
+      user_turn: user_turn,
+      surface: "mobile",
+      request_focus: request_focus_for(conversation),
+      linked_todo_id: linked_todo_id(conversation),
+      run: run,
+      started_at: run.started_at,
+      durable_processing: true,
+      source_message_id: user_turn.id
+    }
+  end
+
+  defp accept_message(conversation, body, client_message_id) do
+    # Acceptance is local. Model routing belongs to the owned execution job,
+    # so reconnects and duplicate requests never pay for another classifier.
+    route_profile = route_profile_for(body, local_intent_for(body, conversation), conversation)
+
+    # Privacy fence first, then the conversation. Concurrent retries serialize
+    # here, before either the run or the client-message identity is inserted.
+    result =
+      Repo.transaction(fn ->
+        _ = WriteFence.lock_user_writable!(conversation.user_id)
+
+        conversation =
+          Conversation
+          |> where([c], c.id == ^conversation.id and c.user_id == ^conversation.user_id)
+          |> lock("FOR UPDATE")
+          |> Repo.one!()
+          |> Conversation.hydrate()
+
+        case TelegramConversations.find_turn_by_client_message_id(
+               conversation.id,
+               client_message_id
+             ) do
+          %Turn{role: "user"} = existing ->
+            if existing.text != body, do: Repo.rollback(:client_message_id_conflict)
+            run_id = Turn.effective_assistant_run_id(existing)
+
+            run =
+              if run_id,
+                do:
+                  Repo.get_by(Run,
+                    id: run_id,
+                    conversation_id: conversation.id,
+                    user_id: conversation.user_id,
+                    surface: "mobile"
+                  )
+                  |> Run.hydrate_payloads()
+
+            # Never return some later run as the receipt for an earlier message.
+            %{thread: conversation, run: run, message: existing, duplicate?: true}
+
+          nil ->
+            insert_message_and_run(conversation, body, client_message_id, route_profile)
+
+          _ ->
+            Repo.rollback(:client_message_id_conflict)
+        end
+      end)
+
+    case result do
+      {:ok, accepted} ->
+        Maraithon.AssistantChat.Progress.changed(conversation.user_id, conversation.id)
+        {:ok, %{accepted | thread: reload_thread(accepted.thread)}}
+
+      error ->
+        error
+    end
+  end
+
+  defp insert_message_and_run(
+         %Conversation{} = conversation,
+         body,
+         client_message_id,
+         route_profile
+       ) do
+    pending =
+      Repo.all(
+        from r in Run,
+          where:
+            r.user_id == ^conversation.user_id and r.surface == "mobile" and
+              r.status in ["queued", "running"],
+          limit: ^@max_pending_requests_per_user,
+          select: r.id
+      )
+
+    if length(pending) >= @max_pending_requests_per_user, do: Repo.rollback(:assistant_queue_full)
+
     now = DateTime.utc_now()
     linked_todo = linked_todo_for(conversation)
-    local_intent = local_intent_for(body, conversation)
-    route_profile = route_profile_for(body, local_intent, conversation)
 
-    with {:ok, {updated_conversation, user_turn}} <-
+    with {:ok, run} <- create_queued_run(conversation, now, route_profile),
+         {:ok, {updated_conversation, user_turn}} <-
            TelegramConversations.append_turn(conversation, %{
              "role" => "user",
              "client_message_id" => client_message_id,
@@ -260,25 +336,20 @@ defmodule Maraithon.AssistantChat do
              "structured_data" =>
                %{
                  "surface" => "mobile",
-                 "client_message_id" => client_message_id
+                 "client_message_id" => client_message_id,
+                 "run_id" => run.id
                }
                |> maybe_put_linked_todo(linked_todo)
            }),
-         {:ok, run} <- create_queued_run(updated_conversation, now, route_profile),
          {:ok, updated_conversation} <-
            TelegramConversations.update_metadata(updated_conversation, %{
              "last_mobile_run_id" => run.id,
              "title" => mobile_title(updated_conversation, body)
            }),
-         {:ok, run} <-
-           dispatch_user_message(updated_conversation, run, user_turn, body, local_intent) do
-      {:ok,
-       %{
-         thread: reload_thread(updated_conversation),
-         run: run,
-         message: user_turn,
-         duplicate?: false
-       }}
+         {:ok, _job} <- Execution.enqueue(run, user_turn) do
+      %{thread: updated_conversation, run: run, message: user_turn, duplicate?: false}
+    else
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 
@@ -362,14 +433,7 @@ defmodule Maraithon.AssistantChat do
          _body,
          :nomatch
        ) do
-    with :ok <-
-           Maraithon.AssistantChat.ThreadWorker.enqueue(%{
-             run_id: run.id,
-             conversation_id: conversation.id,
-             user_turn_id: user_turn.id
-           }) do
-      {:ok, run.id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads()}
-    end
+    run_model_request(run, conversation, user_turn)
   end
 
   defp create_queued_run(%Conversation{} = conversation, now, route_profile) do
@@ -401,16 +465,14 @@ defmodule Maraithon.AssistantChat do
     }
   end
 
-  defp route_profile_for(body, :nomatch, conversation) do
-    body
-    |> then(
-      &ModelRouting.profile_for(%{
-        text: &1,
-        request_focus: request_focus_for(conversation),
-        linked_todo_id: linked_todo_id(conversation)
-      })
-    )
-    |> Map.put(:model_provider, TelegramAssistant.model_provider_name())
+  defp route_profile_for(_body, :nomatch, _conversation) do
+    %{
+      tier: :pending,
+      task_class: :pending,
+      route_reason: "awaiting_execution",
+      model_provider: TelegramAssistant.model_provider_name(),
+      model_name: TelegramAssistant.model_name()
+    }
   end
 
   defp route_result_summary(route_profile) do
@@ -731,10 +793,17 @@ defmodule Maraithon.AssistantChat do
     payload
     |> maybe_put_payload("to", read_string(edits, "to") || read_string(edits, "recipient"))
     |> maybe_put_payload("recipient", read_string(edits, "to") || read_string(edits, "recipient"))
-    |> maybe_put_payload("cc", read_string(edits, "cc"))
-    |> maybe_put_payload("bcc", read_string(edits, "bcc"))
-    |> maybe_put_payload("subject", read_string(edits, "subject"))
+    |> put_clearable_draft_field("cc", edits)
+    |> put_clearable_draft_field("bcc", edits)
+    |> put_clearable_draft_field("subject", edits)
     |> maybe_put_payload("body", read_string(edits, "body") || read_string(edits, "text"))
+  end
+
+  defp put_clearable_draft_field(payload, key, edits) do
+    case Map.fetch(edits, key) do
+      {:ok, value} when is_binary(value) -> Map.put(payload, key, String.trim(value))
+      _ -> payload
+    end
   end
 
   defp maybe_put_payload(payload, _key, nil), do: payload
@@ -880,6 +949,15 @@ defmodule Maraithon.AssistantChat do
   defp maybe_put_linked_todo(structured_data, todo) do
     Map.put(structured_data, "linked_todo", Todos.serialize_for_prompt(todo))
   end
+
+  defp maybe_mark_linked_todo_done(
+         %PreparedAction{payload: %{"keep_todo_open" => true}},
+         _conversation
+       ),
+       do: :skip
+
+  defp maybe_mark_linked_todo_done(%PreparedAction{action_type: action_type}, _conversation)
+       when action_type not in ["gmail_send", "gmail_draft_send", "slack_post"], do: :skip
 
   defp maybe_mark_linked_todo_done(
          %PreparedAction{} = prepared_action,

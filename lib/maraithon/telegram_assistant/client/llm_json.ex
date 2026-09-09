@@ -1,6 +1,6 @@
 defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   @moduledoc """
-  JSON-contract model client for the Telegram assistant loop.
+  Model client for the shared assistant loop, with native tools for linked todos.
   """
 
   @behaviour Maraithon.TelegramAssistant.Client
@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   alias Maraithon.TelegramAssistant.RunStreamPreview
 
   @allowed_llm_opt_keys [
+    :tool_protocol,
     :chat_model,
     :reasoning_effort,
     :max_tokens,
@@ -72,7 +73,13 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
         end)
 
       try do
-        LLM.stream_complete_chat(params, on_chunk)
+        if Map.has_key?(params, "tools") do
+          # The native exchange is validated as a complete response. Public step
+          # progress continues through LivenessSession while the provider works.
+          LLM.complete_chat(Map.delete(params, "_on_reasoning"))
+        else
+          LLM.stream_complete_chat(params, on_chunk)
+        end
       after
         LivenessSession.stream_done(run_id)
         :ets.delete(streamer_table)

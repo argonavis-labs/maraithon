@@ -1,0 +1,186 @@
+{
+  "commit": "7c2dae52",
+  "revision": "maraithon-00284-db9",
+  "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-7c2dae522762-20260908221549-1",
+  "cloud_build": "c30c296e-2a00-4e66-8b39-122aba91f084",
+  "cloud_run_audit": "maraithon-todo-validation-v2k4g",
+  "tests": {
+    "command": "mix test test/maraithon/telegram_assistant/continuation_test.exs test/maraithon/telegram_assistant/runner_test.exs test/maraithon/runtime/coordination/storage_verification_cache_test.exs",
+    "tests": 24,
+    "failures": 0
+  },
+  "compile": {
+    "command": "mix compile --warnings-as-errors",
+    "result": "passed"
+  },
+  "live": {
+    "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+    "accepted_http_status": 202,
+    "acceptance_seconds": 3.199,
+    "accepted_run": {
+      "error": null,
+      "id": "9926ed40-cec6-43ea-a031-22bee94a725b",
+      "status": "queued",
+      "started_at": "2026-09-08T22:19:02.975063Z",
+      "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+      "finished_at": null,
+      "message_class": null,
+      "work_summary": {
+        "headline": "Waiting to start",
+        "status": "queued"
+      }
+    },
+    "error": null,
+    "run_response": {
+      "run": {
+        "error": null,
+        "id": "9926ed40-cec6-43ea-a031-22bee94a725b",
+        "status": "completed",
+        "started_at": "2026-09-08T22:19:42.510252Z",
+        "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+        "finished_at": "2026-09-08T22:20:09.226530Z",
+        "message_class": "todo_digest",
+        "work_summary": {
+          "headline": "Open work: Meet with Michael Lippi and Christina",
+          "status": "completed",
+          "steps": [
+            {
+              "detail": "Found 2 work items: Meet with Michael Lippi and Christina - Confirm two or three evenings with Christina; then offer the agreed options to M...",
+              "finished_at": "2026-09-08T22:19:58.109593Z",
+              "id": "4add7b68-38ea-4938-a6bb-4526bcd6d487",
+              "sequence": 4,
+              "started_at": "2026-09-08T22:19:57.999506Z",
+              "status": "completed",
+              "title": "Reviewed open work",
+              "type": "supporting_check"
+            }
+          ],
+          "tool_calls": [
+            {
+              "finished_at": "2026-09-08T22:19:58.109593Z",
+              "id": "4add7b68-38ea-4938-a6bb-4526bcd6d487",
+              "label": "Open work",
+              "started_at": "2026-09-08T22:19:57.999506Z",
+              "status": "completed",
+              "summary": "Found 2 work items: Meet with Michael Lippi and Christina - Confirm two or three evenings with Christina; then offer the agreed options to M...",
+              "tool": "open_work"
+            }
+          ]
+        }
+      }
+    },
+    "read_http_status": 200
+  },
+  "database_audit": {
+    "run": {
+      "error": null,
+      "id": "9926ed40-cec6-43ea-a031-22bee94a725b",
+      "status": "completed",
+      "summary": {
+        "llm_turns": 2,
+        "message_class": "todo_digest",
+        "model_tier": "chat",
+        "tool_steps": 1
+      },
+      "checkpoint_retained": false
+    },
+    "at": "2026-09-08T22:23:26.417718Z",
+    "job": {
+      "id": "3a095ca8-7cc5-4f94-a607-8f6a83f7ebfe",
+      "status": "completed",
+      "result": {
+        "run_id": "9926ed40-cec6-43ea-a031-22bee94a725b",
+        "state": "completed"
+      },
+      "source": {
+        "conversation_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+        "run_id": "9926ed40-cec6-43ea-a031-22bee94a725b",
+        "user_turn_id": "87d7d0fc-cfee-44f5-a1ec-63d9f9db6df1"
+      },
+      "attempts": 0,
+      "scheduled_at": "2026-09-08T22:19:03.231836Z",
+      "claimed_at": null,
+      "completed_at": "2026-09-08T22:20:09.359659Z",
+      "assignments": [
+        {
+          "id": "0b170754-c008-4c74-8cee-de97119b7598",
+          "outcome": "completed",
+          "outcome_evidence": true,
+          "provider_boundary": "outcome_known",
+          "state": "settled"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "id": "d2401c16-510d-4c54-9ab5-b81c7d46bcf5",
+        "status": "completed",
+        "type": "context_fetch",
+        "sequence": 1,
+        "tool": null,
+        "call_id": null
+      },
+      {
+        "id": "3813393c-370b-468d-8cba-4debf257c2af",
+        "status": "completed",
+        "type": "llm_request",
+        "sequence": 2,
+        "tool": null,
+        "call_id": null
+      },
+      {
+        "id": "b76a3fe1-eda9-466d-ac97-61730819ed41",
+        "status": "completed",
+        "type": "llm_response",
+        "sequence": 3,
+        "tool": null,
+        "call_id": null
+      },
+      {
+        "id": "4add7b68-38ea-4938-a6bb-4526bcd6d487",
+        "status": "completed",
+        "type": "tool_call",
+        "sequence": 4,
+        "tool": "list_todos",
+        "call_id": "9926ed40-cec6-43ea-a031-22bee94a725b:4"
+      },
+      {
+        "id": "f1faec80-7168-4e62-9fc3-69db73554c78",
+        "status": "completed",
+        "type": "llm_request",
+        "sequence": 5,
+        "tool": null,
+        "call_id": null
+      },
+      {
+        "id": "4f917096-b9a6-4db4-b18f-85e3a6b40aa5",
+        "status": "completed",
+        "type": "llm_response",
+        "sequence": 6,
+        "tool": null,
+        "call_id": null
+      }
+    ],
+    "turns": [
+      {
+        "count": 3,
+        "role": "assistant"
+      },
+      {
+        "count": 1,
+        "role": "user"
+      }
+    ],
+    "partitions": [
+      {
+        "count": 64,
+        "state": "ready"
+      }
+    ]
+  },
+  "limitations": [
+    "Crash recovery was exercised in automated tests, not by killing a production worker.",
+    "The production list_todos request used the existing multi-part digest delivery path, with three assistant turns.",
+    "This does not establish full runtime health or sustained efficiency."
+  ]
+}

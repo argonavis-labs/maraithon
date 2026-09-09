@@ -1,4 +1,5 @@
 import Foundation
+import AssistantProgressKit
 
 /// Least-privilege Todo filters exposed by the paired-device API.
 enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
@@ -28,11 +29,13 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     let dueAt: String?
     let priority: Int
     let status: String
+    var workflow: TodoWorkflow? = nil
     let snoozedUntil: String?
     let updatedAt: String?
     let actionCard: CompanionTodoActionCard?
     var closedAt: String? = nil
     var metadata: PublicMetadata? = nil
+    var brief: CompanionTodoBrief? = nil
 
     struct PublicMetadata: Codable, Hashable, Sendable {
         let resolutionNote: String?
@@ -53,14 +56,17 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
         case dueAt = "due_at"
         case priority
         case status
+        case workflow
         case snoozedUntil = "snoozed_until"
         case updatedAt = "updated_at"
         case actionCard = "action_card"
         case closedAt = "closed_at"
         case metadata
+        case brief
     }
 
     var recommendedMove: String? {
+        if let next = Self.nonblank(workflow?.nextAction) { return next }
         guard canMarkDone else { return nil }
         if ["manual", "mobile"].contains(source) {
             return Self.nonblank(nextAction) ?? Self.nonblank(actionCard?.nextBestAction)
@@ -126,11 +132,15 @@ struct CompanionTodoSourceAction: Codable, Hashable, Sendable {
     let openURL: String?
     let openLabel: String?
     let draftText: String?
+    var provider: String? = nil
+    var subject: String? = nil
+    var recipient: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case openURL = "open_url"
         case openLabel = "open_label"
         case draftText = "draft_text"
+        case provider, subject, recipient
     }
 
     var destination: URL? {

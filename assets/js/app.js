@@ -1,6 +1,8 @@
+import {TodoWorkspace, TodoTimeline} from "./todo_workspace"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/maraithon"
+import {PeopleGraph, PeopleDates} from "./people_graph"
 
 const csrfToken = document
   .querySelector("meta[name='csrf-token']")
@@ -8,7 +10,7 @@ const csrfToken = document
 
 const liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks}
+  hooks: {TodoWorkspace, TodoTimeline, ...colocatedHooks, PeopleGraph, PeopleDates}
 })
 
 // Show the slim top progress bar only when navigation takes noticeable time.

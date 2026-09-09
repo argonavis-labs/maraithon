@@ -1,3 +1,4 @@
+import AssistantProgressKit
 import Foundation
 import SwiftData
 
@@ -120,6 +121,82 @@ struct ChatSyncService {
         try modelContext.save()
     }
 
+    /// The view owns this observation's lifetime. A reconnect reads state and
+    /// never resubmits a message, approves an action, or starts another run.
+    func observeThread(_ thread: ChatThread, modelContext: ModelContext,
+        sessionStore: SessionStore,
+        onPreview: @escaping @MainActor @Sendable (String?) -> Void,
+        onFailure: @escaping @MainActor @Sendable (String) -> Void,
+        onChange: @escaping @MainActor @Sendable (String?) -> Void
+    ) async {
+        guard let remoteID = thread.remoteID else { return }
+        var cursor: String?
+        var snapshotSavedAt: Date?
+        var runAwaitingResult = thread.pendingRunID
+        var failures = 0
+        while !Task.isCancelled {
+            do {
+                let token = try sessionToken(from: sessionStore)
+                // A send, approval, or background sync can replace local state
+                // after this cursor was applied. Reconnect from a fresh snapshot.
+                if snapshotSavedAt != thread.lastSyncedAt { cursor = nil }
+                try await api.observeChatProgress(sessionToken: token, id: remoteID, cursor: cursor) { event in
+                    try Task.checkCancellation()
+                    switch event {
+                    case .snapshot(let snapshot):
+                        guard snapshot.thread.id == remoteID else { return }
+                        // Retain the last active run until its final result has
+                        // been read. A terminal snapshot correctly clears the
+                        // pending marker but does not carry the failure reason.
+                        if let runID = thread.pendingRunID { runAwaitingResult = runID }
+                        if let run = snapshot.thread.pendingRun, run.runStatus.isPending {
+                            runAwaitingResult = run.id
+                        }
+                        try merge(snapshot.thread, modelContext: modelContext,
+                            preferredThread: thread, reconcileMessages: true)
+                        try modelContext.save()
+                        cursor = snapshot.cursor
+                        snapshotSavedAt = thread.lastSyncedAt
+                        onPreview(nil)
+                        onChange(nil)
+                        if thread.pendingRunID == nil, let runID = runAwaitingResult {
+                            let result = try await api.getChatRun(sessionToken: token, id: runID)
+                            try Task.checkCancellation()
+                            if !result.runStatus.isPending {
+                                runAwaitingResult = nil
+                                if shouldSurfaceRunFailure(result, in: thread) {
+                                    onFailure(ChatSyncError.assistantResponseFailed(result.error).localizedDescription)
+                                }
+                            }
+                        }
+                    case .preview(let preview):
+                        guard UUID(uuidString: preview.threadID) == remoteID,
+                            UUID(uuidString: preview.runID) == thread.pendingRunID else { return }
+                        onPreview(preview.reply)
+                    }
+                }
+                failures = 0
+                try await Task.sleep(for: .milliseconds(500))
+            } catch is CancellationError { return }
+            catch ChatSyncError.missingSession { return }
+            catch MobileAPIError.unauthorized { return }
+            catch {
+                if Task.isCancelled { return }
+                failures += 1
+                cursor = nil
+                onPreview(nil)
+                onChange("Connection interrupted. Reconnecting…")
+                // Keep older servers usable during the staged rollout.
+                do {
+                    try await refreshThread(thread, modelContext: modelContext, sessionStore: sessionStore)
+                    onChange(nil)
+                } catch { }
+                do { try await Task.sleep(for: .seconds(min(30, 2 * failures))) }
+                catch { return }
+            }
+        }
+    }
+
     func openTodoThread(
         for todo: TodoItem,
         modelContext: ModelContext,
@@ -181,11 +258,17 @@ struct ChatSyncService {
         guard !body.isEmpty else { throw ChatSyncError.emptyMessage }
 
         let sessionToken = try sessionToken(from: sessionStore)
-        let clientMessageID = UUID()
-        let userMessage = optimisticUserMessage(body: body, clientMessageID: clientMessageID, thread: thread)
-
-        modelContext.insert(userMessage)
-        thread.messages.append(userMessage)
+        let retry = thread.messages
+            .filter { $0.role == .user && $0.body == body && $0.deliveryState == .failed && $0.remoteID == nil }
+            .max { $0.sentAt < $1.sentAt }
+        let clientMessageID = retry?.clientMessageID ?? UUID()
+        let userMessage = retry ?? optimisticUserMessage(body: body, clientMessageID: clientMessageID, thread: thread)
+        userMessage.clientMessageID = clientMessageID
+        userMessage.deliveryState = .sending
+        if retry == nil {
+            modelContext.insert(userMessage)
+            thread.messages.append(userMessage)
+        }
         thread.updatedAt = now()
         thread.syncStatus = .syncing
 
@@ -471,6 +554,7 @@ struct ChatSyncService {
             )
         }
 
+        try applyLinkedTodo(remoteThread.linkedTodo, modelContext: modelContext)
         return thread
     }
 
@@ -694,7 +778,15 @@ struct ChatSyncService {
         descriptor.fetchLimit = 1
         guard let todo = try modelContext.fetch(descriptor).first else { return }
 
-        if todoData["status"]?.string == "dismissed" {
+        // Chat history contains old todo snapshots. Only apply a current version.
+        let incomingRevision = todoData["workflow"]?.object?["revision"]?.int ?? 0
+        guard incomingRevision >= (todo.workflow?.revision ?? 0) else { return }
+        if let updated = date(from: todoData["updated_at"]), updated < todo.updatedAt { return }
+        if let workflow = todoData["workflow"], workflow.object?["state"] != nil {
+            todo.workflowData = try Self.metadataEncoder.encode(workflow)
+        }
+
+        if todoData["status"]?.string == "dismissed" && todo.workflow == nil {
             modelContext.delete(todo)
             return
         }

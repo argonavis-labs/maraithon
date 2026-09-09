@@ -184,6 +184,87 @@ defmodule Maraithon.PrivacyErasureTest do
     assert final.state == "completed"
   end
 
+  @tag exact_runtime: true
+  test "the production conversation adapter erases through the exact central claim" do
+    Application.put_env(:maraithon, PrivacyErasure,
+      conversation_erasure_adapter: Maraithon.TelegramConversations.Privacy
+    )
+
+    user = user_fixture("production-adapter")
+
+    conversation =
+      %Conversation{}
+      |> Conversation.changeset(%{
+        user_id: user.id,
+        chat_id: "production-adapter",
+        status: "closed"
+      })
+      |> Repo.insert!()
+
+    now = DatabaseClock.now!()
+
+    background_job =
+      %BackgroundJob{}
+      |> BackgroundJob.changeset(%{
+        user_id: user.id,
+        queue: "privacy-test",
+        job_type: "controlled_erasure_work",
+        scheduled_at: DateTime.add(now, 3600),
+        payload: %{"controlled" => true}
+      })
+      |> Repo.insert!()
+
+    run =
+      %AssistantRun{}
+      |> AssistantRun.changeset(%{
+        user_id: user.id,
+        conversation_id: conversation.id,
+        chat_id: conversation.chat_id,
+        surface: "mobile",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        started_at: now,
+        finished_at: now
+      })
+      |> Repo.insert!()
+
+    action =
+      %PreparedAction{}
+      |> PreparedAction.changeset(%{
+        user_id: user.id,
+        conversation_id: conversation.id,
+        run_id: run.id,
+        chat_id: conversation.chat_id,
+        surface: "mobile",
+        action_type: "send_external",
+        target_type: "controlled",
+        payload: %{"controlled" => true},
+        preview_text: "Controlled receipt only",
+        status: "executed",
+        expires_at: DateTime.add(now, 300),
+        executed_at: now
+      })
+      |> Repo.insert!()
+
+    {:ok, request} = PrivacyErasure.request_user(user.id)
+    assert %{state: "erasing"} = drive_to_state(request.id, "erasing")
+
+    assert {:ok, %{blocker_code: "conversation_copy_cleanup_pending"}} =
+             PrivacyErasure.perform(request.id)
+
+    assert %DateTime{} = Repo.get!(Conversation, conversation.id).content_scrubbed_at
+    assert %DateTime{} = Repo.get!(AssistantRun, run.id).payload_purged_at
+    assert %DateTime{} = Repo.get!(PreparedAction, action.id).payload_purged_at
+
+    final = drive_to_completion(request.id)
+    assert final.receipt.local_data_deleted
+    assert Repo.get(User, user.id) == nil
+    assert Repo.get(BackgroundJob, background_job.id) == nil
+  end
+
   test "externally ambiguous prepared action blocks exact erasure without deleting authority" do
     Application.put_env(:maraithon, :privacy_erasure_test_pid, self())
 

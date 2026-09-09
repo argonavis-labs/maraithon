@@ -52,9 +52,24 @@ defmodule Maraithon.Tools.UpsertTodos do
       |> Map.get("metadata", %{})
       |> then(fn value -> if is_map(value), do: value, else: %{} end)
 
-    todo
-    |> Map.put("source", source)
-    |> Map.put("metadata", Map.put(metadata, "explicit_user_request", true))
+    source = Map.get(todo, "source") || source
+
+    discovered? =
+      source not in ~w(mcp manual user assistant) or
+        Enum.any?(
+          ~w(source_item_id source_ref source_record source_excerpt source_quote),
+          fn key ->
+            not is_nil(Map.get(todo, key) || Map.get(metadata, key))
+          end
+        )
+
+    # Tool calls may carry discovered work; keep provenance and assess ownership.
+    metadata =
+      metadata
+      |> Map.drop(~w(explicit_user_request user_requested))
+      |> Map.put("explicit_user_request", not discovered?)
+
+    todo |> Map.put("source", source) |> Map.put("metadata", metadata)
   end
 
   defp normalize_error(reason) when is_binary(reason), do: reason

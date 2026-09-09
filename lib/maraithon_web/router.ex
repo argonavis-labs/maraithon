@@ -43,6 +43,17 @@ defmodule MaraithonWeb.Router do
     plug MaraithonWeb.Plugs.CompanionDeviceAuth
   end
 
+  # Streaming has its own content negotiation; authentication matches the existing chat API.
+  scope "/api/v1/mobile", MaraithonWeb do
+    pipe_through [:mobile_api_auth]
+    get "/chat/threads/:id/events", AssistantProgressController, :show
+  end
+
+  scope "/api/v1/companion", MaraithonWeb do
+    pipe_through [:companion_auth]
+    get "/chat/threads/:id/events", AssistantProgressController, :show
+  end
+
   # Health check endpoint
   scope "/health", MaraithonWeb do
     get "/", HealthController, :index
@@ -138,6 +149,7 @@ defmodule MaraithonWeb.Router do
       live "/chat", ChatLive, :index
       live "/chat/:thread_id", ChatLive, :show
       live "/operator/people", PeopleLive, :index
+      live "/operator/people/manage", PeopleManageLive, :index
       live "/operator/memories", MemoriesLive, :index
     end
   end
@@ -179,11 +191,14 @@ defmodule MaraithonWeb.Router do
     get "/todos/:id", MobileTodoController, :show
     post "/todos/:id/opened", MobileTodoController, :opened
     post "/todos/:id/chat", MobileTodoController, :chat_thread
+    post "/todos/:id/workflow", MobileTodoController, :workflow
     post "/todos/:id/reply", MobileTodoController, :reply
     patch "/todos/:id", MobileTodoController, :update
     delete "/todos/:id", MobileTodoController, :delete
     post "/todos/:id/actions/:action", MobileTodoController, :perform_action
     get "/people", MobilePeopleController, :index
+    get "/people/network", PeopleNetworkController, :index
+    get "/people/network/:node_id", PeopleNetworkController, :show
     get "/people/reconnect", MobilePeopleController, :reconnect
     post "/people", MobilePeopleController, :create
     get "/people/:id", MobilePeopleController, :show
@@ -213,6 +228,7 @@ defmodule MaraithonWeb.Router do
     # Exact runtime lifecycle (deploy handover)
     get "/runtime/status", RuntimeController, :status
     post "/runtime/drain", RuntimeController, :drain
+    post "/runtime/retire", RuntimeController, :retire
     post "/runtime/rejoin", RuntimeController, :rejoin
 
     # Agent management
@@ -270,6 +286,8 @@ defmodule MaraithonWeb.Router do
     post "/reminders", CompanionController, :ingest_reminders
     post "/contacts", CompanionController, :ingest_contacts
     post "/files", CompanionController, :ingest_files
+    post "/browser/claim", CompanionBrowserController, :claim
+    post "/browser/:id/result", CompanionBrowserController, :complete
     post "/browser-history", CompanionController, :ingest_browser_history
     post "/recall", CompanionController, :recall
 
@@ -278,9 +296,19 @@ defmodule MaraithonWeb.Router do
     get "/todos", MobileTodoController, :index
     get "/todos/:id", MobileTodoController, :show
     post "/todos", CompanionTodoController, :create
+    get "/people/network", PeopleNetworkController, :index
+    get "/people/network/:node_id", PeopleNetworkController, :show
     post "/todos/:id/actions/done", CompanionTodoController, :done
     post "/todos/:id/actions/dismiss", CompanionTodoController, :dismiss
     post "/todos/:id/actions/reopen", CompanionTodoController, :reopen
+    post "/todos/:id/opened", MobileTodoController, :opened
+    post "/todos/:id/reply", MobileTodoController, :reply
+    post "/todos/:id/chat", MobileTodoController, :chat_thread
+    post "/todos/:id/workflow", MobileTodoController, :workflow
+    get "/chat/threads/:id", MobileChatController, :show
+    post "/chat/threads/:thread_id/messages", MobileChatController, :create_message
+    get "/chat/runs/:id", MobileChatController, :show_run
+    post "/chat/prepared-actions/:id/decision", MobileChatController, :decide_prepared_action
     post "/device-keys", CompanionController, :upload_device_key
     get "/device-keys/me", CompanionController, :current_device_key
     get "/whoami", CompanionController, :whoami

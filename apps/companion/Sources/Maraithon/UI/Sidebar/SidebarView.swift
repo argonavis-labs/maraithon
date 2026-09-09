@@ -23,6 +23,8 @@ struct SidebarView: View {
             Section("Assistant") {
                 Label("Todos", systemImage: "checklist")
                     .tag(SidebarItem.todos)
+                Label("People", systemImage: "person.2")
+                    .tag(SidebarItem.people)
                 Label("Recall", systemImage: "magnifyingglass")
                     .tag(SidebarItem.recall)
             }

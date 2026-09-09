@@ -1,0 +1,279 @@
+{
+  "kind": "controlled_fixture_erasure_recovery",
+  "reproduced_failure": "conversation_erasure_unavailable",
+  "fixes": [
+    "Encode request and claim UUIDs for Postgrex raw SQL parameters.",
+    "After validating the live central erasure claim, provide each fixed table and the database-clock cutoff required by the existing purge guard.",
+    "Leave drained background jobs to the central coordinator deletion phase; do not issue an intermediate payload update forbidden by their user write fence."
+  ],
+  "local_verification": {
+    "tests": 11,
+    "failures": 0,
+    "compile_warnings_as_errors": "passed",
+    "production_adapter_case": "Purge a closed conversation, completed run and executed action; delete the drained background job and finish central erasure.",
+    "test_files": [
+      "test/maraithon/privacy_erasure_test.exs",
+      "test/maraithon/privacy_erasure_race_test.exs"
+    ]
+  },
+  "production_before": [
+    {
+      "status": {
+        "scope": "user",
+        "state": "erasing",
+        "request_id": "1d701cce-984d-4a0b-9472-7520a4154af9",
+        "blocker_code": "conversation_erasure_unavailable",
+        "target_agent_count": 0,
+        "provider_revocation_outcome": null,
+        "completed_at": null,
+        "requested_at": "2026-09-08T23:26:08.250059Z",
+        "pending_agent_count": 0,
+        "receipt": null
+      },
+      "user_id": "runtime-reconciliation-1788907769@example.invalid",
+      "user_absent": false
+    },
+    {
+      "status": {
+        "scope": "user",
+        "state": "erasing",
+        "request_id": "4b63ee19-7605-4c7f-8d48-5abbc48e3cc2",
+        "blocker_code": "conversation_erasure_unavailable",
+        "target_agent_count": 0,
+        "provider_revocation_outcome": null,
+        "completed_at": null,
+        "requested_at": "2026-09-08T23:26:08.635891Z",
+        "pending_agent_count": 0,
+        "receipt": null
+      },
+      "user_id": "runtime-outcome-1788908790@example.invalid",
+      "user_absent": false
+    }
+  ],
+  "production_after": {
+    "execution": "maraithon-todo-validation-htq8t",
+    "at": "2026-09-08T23:47:59.922241Z",
+    "events": [
+      {
+        "count": 1,
+        "event_type": "checkpoint_created",
+        "newest": "2026-09-08T23:33:40.085343"
+      },
+      {
+        "count": 4,
+        "event_type": "effect_completed",
+        "newest": "2026-09-08T23:40:11.400025"
+      }
+    ],
+    "kind": "hardening_completion_audit",
+    "fixture_cleanup": [
+      {
+        "status": {
+          "scope": "user",
+          "state": "completed",
+          "request_id": "1d701cce-984d-4a0b-9472-7520a4154af9",
+          "blocker_code": null,
+          "target_agent_count": 0,
+          "provider_revocation_outcome": "not_applicable",
+          "completed_at": "2026-09-08T23:47:10.110198Z",
+          "requested_at": "2026-09-08T23:26:08.250059Z",
+          "pending_agent_count": 0,
+          "receipt": {
+            "scope": "user",
+            "credentials_locally_revoked": true,
+            "classification": "content_free_erasure_authority_v1",
+            "erased_agent_count": 0,
+            "expires_at": "2026-12-07T23:47:10.110198Z",
+            "issued_at": "2026-09-08T23:47:10.110198Z",
+            "local_data_deleted": true,
+            "outcome": "completed",
+            "provider_revocation_outcome": "not_applicable"
+          }
+        },
+        "user_id": "runtime-reconciliation-1788907769@example.invalid",
+        "user_absent": true
+      },
+      {
+        "status": {
+          "scope": "user",
+          "state": "completed",
+          "request_id": "4b63ee19-7605-4c7f-8d48-5abbc48e3cc2",
+          "blocker_code": null,
+          "target_agent_count": 0,
+          "provider_revocation_outcome": "partial_unverified",
+          "completed_at": "2026-09-08T23:47:18.388662Z",
+          "requested_at": "2026-09-08T23:26:08.635891Z",
+          "pending_agent_count": 0,
+          "receipt": {
+            "scope": "user",
+            "credentials_locally_revoked": true,
+            "classification": "content_free_erasure_authority_v1",
+            "erased_agent_count": 0,
+            "expires_at": "2026-12-07T23:47:18.388662Z",
+            "issued_at": "2026-09-08T23:47:18.388662Z",
+            "local_data_deleted": true,
+            "outcome": "completed",
+            "provider_revocation_outcome": "partial_unverified"
+          }
+        },
+        "user_id": "runtime-outcome-1788908790@example.invalid",
+        "user_absent": true
+      }
+    ],
+    "partitions": [
+      {
+        "count": 64,
+        "live": 64,
+        "state": "ready"
+      }
+    ],
+    "tasks": [
+      {
+        "count": 2,
+        "oldest": "2026-09-08T23:47:45.171739",
+        "state": "running"
+      }
+    ],
+    "snapshots": [
+      {
+        "count": 5,
+        "max_ciphertext_bytes": 80701,
+        "newest": "2026-09-08T23:40:12.773224"
+      }
+    ],
+    "recent_effect_proofs": [
+      {
+        "at": "2026-09-08T23:29:14.627219Z",
+        "event_id": 12100,
+        "effect_id": "f3dfc0ac-ef3d-42aa-af21-c9b007460d38",
+        "evidence": [
+          {
+            "id": "57228a13-8b8d-4ae5-bea4-7561a1948d46",
+            "identity_matches": true,
+            "outcome": "completed",
+            "recorded_at": "2026-09-08T23:29:14.138765",
+            "revision": "maraithon-00287-rcz",
+            "state": "settled"
+          }
+        ]
+      },
+      {
+        "at": "2026-09-08T23:29:22.427523Z",
+        "event_id": 12102,
+        "effect_id": "72f5f26d-b6e6-49dc-84c0-113021a132a0",
+        "evidence": [
+          {
+            "id": "88819c1c-2a3a-4b1d-a0f3-ff2ff1cfd88d",
+            "identity_matches": true,
+            "outcome": "completed",
+            "recorded_at": "2026-09-08T23:29:21.989604",
+            "revision": "maraithon-00287-rcz",
+            "state": "settled"
+          }
+        ]
+      },
+      {
+        "at": "2026-09-08T23:39:56.698445Z",
+        "event_id": 12108,
+        "effect_id": "a56b638d-6603-4ac0-8e1c-d5942d8a1599",
+        "evidence": [
+          {
+            "id": "069f7189-2672-4705-8e6f-449e6a37793b",
+            "identity_matches": true,
+            "outcome": "completed",
+            "recorded_at": "2026-09-08T23:39:56.228188",
+            "revision": "maraithon-00288-rcs",
+            "state": "settled"
+          }
+        ]
+      },
+      {
+        "at": "2026-09-08T23:40:11.400025Z",
+        "event_id": 12110,
+        "effect_id": "96746490-d1ee-4eba-a464-5cf20b95b62b",
+        "evidence": [
+          {
+            "id": "b69d5ef4-a174-4def-986d-bcc061f6cde8",
+            "identity_matches": true,
+            "outcome": "completed",
+            "recorded_at": "2026-09-08T23:40:10.955719",
+            "revision": "maraithon-00288-rcs",
+            "state": "settled"
+          }
+        ]
+      }
+    ]
+  },
+  "legacy_test_diagnostic": {
+    "file": "test/maraithon/telegram_conversation_privacy_test.exs",
+    "unrelated_failures": 5,
+    "causes": [
+      "Legacy backfill checks encounter missing stopped-fleet evidence and canonical column-update privileges; they are not part of this exact-mode runtime verification.",
+      "Malformed ciphertext fixture is rejected by the current key-envelope guard before the expected read.",
+      "Retention fixture runs in legacy mode although the database requires exact mode."
+    ],
+    "file_left_unchanged": true,
+    "limit": "The full dormant legacy migration/privacy suite is not claimed to pass."
+  },
+  "implementation_commits": [
+    "e1887fc2",
+    "4d41cbaf"
+  ],
+  "release": {
+    "commit": "4d41cbaf",
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-4d41cbaf8c37-20260908234232-1",
+    "revision": "maraithon-00289-q2f",
+    "cloud_build": "3f9b74a8-afba-4d19-876d-bd2e18e3e63a"
+  },
+  "agent_logs": [
+    {
+      "insertId": "6aa09e6c000587d3cfc7293c",
+      "jsonPayload": {
+        "agent_reference": "24bd6156748af4a7",
+        "message": "Exact Agent recovered, transitioning to idle",
+        "timestamp": "2026-09-08T23:46:52.362Z"
+      },
+      "labels": {
+        "function": "expose_recovered_agent/4",
+        "instanceId": "00a41e8c1dda78f610c03165740233446fa60d66ef7ea010e7645874ca42c4e5266753d097c25e77a3c2df80d71f4058322e303c24cc2f83196bdb0f5ddacd7e88bcc6a600e1f2bbfea59b22324a",
+        "line": "463",
+        "maraithon-process-role": "web",
+        "module": "Elixir.Maraithon.Runtime.Agent"
+      },
+      "logName": "projects/maraithon/logs/run.googleapis.com%2Fstdout",
+      "receiveTimestamp": "2026-09-08T23:46:52.452182831Z",
+      "resource": {
+        "labels": {
+          "configuration_name": "maraithon",
+          "location": "us-central1",
+          "project_id": "maraithon",
+          "revision_name": "maraithon-00289-q2f",
+          "service_name": "maraithon"
+        },
+        "type": "cloud_run_revision"
+      },
+      "severity": "INFO",
+      "timestamp": "2026-09-08T23:46:52.362451Z"
+    }
+  ],
+  "status": {
+    "phase": "ready",
+    "node_incarnation_id": "bb337e12-5b88-47fd-af36-ddd1f8552dbb",
+    "process_role": "combined",
+    "node_fenced": false,
+    "admitting_nodes": 1,
+    "admitting_partitions": 64,
+    "unready_partitions": 0,
+    "owned_partitions": 64,
+    "open_tasks": 0,
+    "unproven_tasks": 0,
+    "local_agent_leases": 1,
+    "agent_leases": 1
+  },
+  "verification_scope": {
+    "final_release": "Fixture erasure, current partition and task readiness, and Agent recovery were observed on maraithon-00289-q2f.",
+    "recent_runtime_history": "Effect receipts and persisted checkpoints in the audit cover the preceding releases since 23:23 UTC. Each effect proof records its actual executing revision.",
+    "provider_revocation": "The fixtures had no live provider credentials. The synthetic connected account retained partial_unverified as the provider-revocation outcome; local erasure and credential deletion completed. This is not a claim of verified remote revocation.",
+    "legacy_suite": "Five separate historical migration/privacy fixture failures remain documented; the full dormant suite is not claimed to pass."
+  }
+}

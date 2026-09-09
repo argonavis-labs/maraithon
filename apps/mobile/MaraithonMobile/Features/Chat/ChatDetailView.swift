@@ -15,18 +15,21 @@ struct ChatDetailView: View {
     var sourceAction: TodoSourceAction?
     var sourceActionSend: ((String, String?) async throws -> Void)?
     var quickPrompts: [ChiefOfStaffPrompt]
-    @State private var draft = ""
+    var workspaceHeader: ((@escaping (String) -> Void, Bool) -> AnyView)?
+    @Binding var requestedPrompt: String?
+    @SceneStorage private var draft: String
+    @State private var streamPreview: String?
+    @State private var connectionNotice: String?
     @State private var errorMessage: String?
     @State private var lastFailedMessage: String?
     @State private var isSending = false
-    @State private var isPollingRun = false
     @State private var isRenamingThread = false
     @State private var draftThreadTitle = ""
     @State private var didConsumeInitialPrompt = false
     @State private var sendTask: Task<Void, Never>?
     @State private var renameTask: Task<Void, Never>?
     @State private var deleteTask: Task<Void, Never>?
-    @State private var scenePollTask: Task<Void, Never>?
+    @State private var visibleMessageLimit = 60
     @State private var timelineRows: [ChatTimelineRow]
     @FocusState private var isComposerFocused: Bool
 
@@ -42,7 +45,9 @@ struct ChatDetailView: View {
         contextHeader: ChatContextHeader? = nil,
         sourceAction: TodoSourceAction? = nil,
         sourceActionSend: ((String, String?) async throws -> Void)? = nil,
-        quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat
+        quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat,
+        requestedPrompt: Binding<String?> = .constant(nil),
+        workspaceHeader: ((@escaping (String) -> Void, Bool) -> AnyView)? = nil
     ) {
         self.thread = thread
         self.focusComposerOnAppear = focusComposerOnAppear
@@ -53,6 +58,9 @@ struct ChatDetailView: View {
         self.sourceAction = sourceAction
         self.sourceActionSend = sourceActionSend
         self.quickPrompts = quickPrompts
+        self.workspaceHeader = workspaceHeader
+        _requestedPrompt = requestedPrompt
+        _draft = SceneStorage(wrappedValue: "", "chat.composer.\(thread.id.uuidString)")
         // Seed the timeline so the first frame renders without an empty flash;
         // it is kept fresh via onChange(of: thread.messages.count). The body
         // re-runs on every draft keystroke, so the sort must not live in a
@@ -71,7 +79,15 @@ struct ChatDetailView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // Measure variable-height draft cards before jumping to a
+                    // new turn. Lazy height estimation can loop during a long
+                    // programmatic scroll on iOS 26; bound the initial history.
+                    VStack(spacing: 0) {
+                        if let workspaceHeader {
+                            workspaceHeader(send, isComposerDisabled)
+                                .padding(.bottom, 16)
+                        }
+
                         if let contextHeader {
                             ChatContextHeaderView(header: contextHeader)
                                 .padding(.bottom, 12)
@@ -84,9 +100,13 @@ struct ChatDetailView: View {
 
                         if timelineRows.isEmpty {
                             emptyConversation
-                                .padding(.top, contextHeader == nil ? 80 : 24)
+                                .padding(.top, workspaceHeader == nil && contextHeader == nil ? 80 : 16)
                         } else {
-                            ForEach(timelineRows) { row in
+                            if timelineRows.count > visibleMessageLimit {
+                                Button("Show earlier messages") { visibleMessageLimit += 60 }
+                                    .font(.subheadline).padding(.vertical, 12)
+                            }
+                            ForEach(timelineRows.suffix(visibleMessageLimit)) { row in
                                 if row.layout.showsDateHeader {
                                     ChatDateHeader(date: row.message.sentAt)
                                         .padding(.top, 8)
@@ -97,7 +117,9 @@ struct ChatDetailView: View {
                                     message: row.message,
                                     startsGroup: row.layout.startsGroup,
                                     endsGroup: row.layout.endsGroup,
-                                    actionHandler: decide
+                                    actionHandler: decide,
+                                    prepareHandler: send,
+                                    actionsDisabled: isComposerDisabled
                                 )
                                 .id(row.id)
                                 .padding(.top, row.layout.startsGroup ? 8 : 2)
@@ -131,66 +153,68 @@ struct ChatDetailView: View {
                     .padding(.bottom, 12)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .defaultScrollAnchor(.bottom)
+                .defaultScrollAnchor(workspaceHeader == nil ? .bottom : .top)
                 .onChange(of: thread.messages.count) { _, _ in
                     rebuildTimelineRows()
                     scrollToBottom(proxy)
                 }
+                .onChange(of: thread.pendingRunID) { _, runID in
+                    if runID != nil { scrollToBottom(proxy) }
+                }
                 .onAppear {
-                    scrollToBottom(proxy, animated: false)
-                    if focusComposerOnAppear || thread.messages.isEmpty {
+                    if workspaceHeader == nil { scrollToBottom(proxy, animated: false) }
+                    if focusComposerOnAppear || (workspaceHeader == nil && thread.messages.isEmpty) {
                         isComposerFocused = true
                     }
                     consumeInitialPromptIfNeeded()
                 }
             }
         }
-        .task {
-            await refreshAndPollIfNeeded()
+        .onChange(of: requestedPrompt) { _, _ in consumeRequestedPrompt() }
+        .onChange(of: isComposerDisabled) { _, disabled in
+            if !disabled { consumeRequestedPrompt() }
         }
-        .task(id: thread.pendingRunID) {
-            guard thread.pendingRunID != nil else { return }
-            await pollPendingRunIfNeeded()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            scenePollTask?.cancel()
-            scenePollTask = Task {
-                await pollPendingRunIfNeeded()
+        .task(id: "\(thread.remoteID?.uuidString ?? "local")-\(scenePhase == .active)") {
+            guard scenePhase == .active else { return }
+            await refreshConversation()
+            await chatSyncService.observeThread(thread, modelContext: modelContext, sessionStore: sessionStore,
+                onPreview: { streamPreview = $0 },
+                onFailure: { errorMessage = $0 }) { notice in
+                connectionNotice = notice
+                rebuildTimelineRows()
             }
         }
         .onDisappear {
             sendTask?.cancel()
             renameTask?.cancel()
             deleteTask?.cancel()
-            scenePollTask?.cancel()
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if shouldShowQuickPrompts {
+                if workspaceHeader == nil && shouldShowQuickPrompts {
                     quickPromptBar
                 }
                 if let errorMessage {
                     errorBanner(errorMessage, actionTitle: errorActionTitle)
+                } else if let connectionNotice {
+                    Text(connectionNotice).font(.caption).foregroundStyle(.secondary)
                 }
                 composer
             }
             .background(.bar)
         }
-        .navigationTitle(thread.title)
+        .modifier(ChatNavigationTitle(title: workspaceHeader == nil ? thread.title : nil))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        beginRenameThread()
-                    } label: {
-                        Label(ChatDetailCopy.renameMenuTitle, systemImage: "pencil")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+            if workspaceHeader == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { beginRenameThread() } label: {
+                            Label(ChatDetailCopy.renameMenuTitle, systemImage: "pencil")
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel(ChatDetailCopy.threadOptionsAccessibilityLabel)
                 }
-                .accessibilityLabel(ChatDetailCopy.threadOptionsAccessibilityLabel)
             }
         }
         .alert(ChatDetailCopy.renameAlertTitle, isPresented: $isRenamingThread) {
@@ -224,7 +248,7 @@ struct ChatDetailView: View {
             }
             .accessibilityLabel(ChatDetailCopy.messageOptionsAccessibilityLabel)
 
-            TextField(ChatDetailCopy.messageFieldPlaceholder, text: $draft, axis: .vertical)
+            TextField(workspaceHeader == nil ? ChatDetailCopy.messageFieldPlaceholder : "Ask about this todo…", text: $draft, axis: .vertical)
                 .focused($isComposerFocused)
                 .lineLimit(1...6)
                 .textFieldStyle(.plain)
@@ -296,7 +320,12 @@ struct ChatDetailView: View {
         HStack(alignment: .bottom, spacing: 7) {
             ChatAvatar(title: "Maraithon", systemImage: "sparkles", size: 28, tint: .accentColor)
 
-            ChatPendingWorkSummary(summary: thread.pendingWorkSummary)
+            VStack(alignment: .leading, spacing: 8) {
+                ChatPendingWorkSummary(summary: thread.pendingWorkSummary)
+                if let streamPreview, !streamPreview.isEmpty {
+                    Text(streamPreview).font(.body).textSelection(.enabled)
+                }
+            }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -335,7 +364,7 @@ struct ChatDetailView: View {
 
     private func send(_ text: String) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
+        guard !body.isEmpty, !isComposerDisabled else { return }
 
         if text == draft {
             draft = ""
@@ -343,10 +372,10 @@ struct ChatDetailView: View {
 
         errorMessage = nil
         lastFailedMessage = nil
-        isComposerFocused = true
+        isComposerFocused = false
+        isSending = true
         sendTask?.cancel()
         sendTask = Task {
-            isSending = true
             defer { isSending = false }
 
             do {
@@ -364,16 +393,18 @@ struct ChatDetailView: View {
                 return
             }
 
-            await pollPendingRunIfNeeded()
+            await refreshConversation()
         }
     }
 
     private func decide(_ action: ChatMessageAction) {
-        guard action.decision != nil else { return }
+        guard action.decision != nil, !isComposerDisabled else { return }
+        isSending = true
 
         errorMessage = nil
         sendTask?.cancel()
         sendTask = Task {
+            defer { isSending = false }
             do {
                 try await chatSyncService.decidePreparedAction(
                     action,
@@ -412,15 +443,28 @@ struct ChatDetailView: View {
         }
     }
 
-    private func refreshAndPollIfNeeded() async {
+    private func refreshConversation() async {
         do {
             try await chatSyncService.refreshThread(
                 thread,
                 modelContext: modelContext,
                 sessionStore: sessionStore
             )
-            errorMessage = nil
-            lastFailedMessage = nil
+            // A process killed before receiving the response leaves an
+            // optimistic row in "sending". Reconcile the server first, then
+            // expose a retry using that same persisted client message ID.
+            if !isSending {
+                for message in thread.messages where message.role == .user &&
+                    message.remoteID == nil && message.deliveryState == .sending {
+                    message.deliveryState = .failed
+                }
+                try modelContext.save()
+            }
+            let failed = thread.messages
+                .filter { $0.role == .user && $0.deliveryState == .failed && $0.remoteID == nil }
+                .max { $0.sentAt < $1.sentAt }
+            lastFailedMessage = failed?.body
+            errorMessage = failed == nil ? nil : "Your message was not confirmed. You can safely retry it."
             // A merge can update existing messages without changing the count.
             rebuildTimelineRows()
         } catch is CancellationError {
@@ -432,26 +476,6 @@ struct ChatDetailView: View {
             return
         }
 
-        await pollPendingRunIfNeeded()
-    }
-
-    private func pollPendingRunIfNeeded() async {
-        guard !isPollingRun, thread.pendingRunID != nil else { return }
-        isPollingRun = true
-        defer { isPollingRun = false }
-
-        do {
-            try await chatSyncService.pollPendingRun(
-                in: thread,
-                modelContext: modelContext,
-                sessionStore: sessionStore
-            )
-            errorMessage = nil
-        } catch is CancellationError {
-        } catch ChatSyncError.missingSession {
-        } catch {
-            errorMessage = MobileErrorCopy.message(for: error)
-        }
     }
 
     private func delete(_ message: ChatMessage) {
@@ -474,6 +498,12 @@ struct ChatDetailView: View {
 
     private func copy(_ message: ChatMessage) {
         UIPasteboard.general.string = message.body
+    }
+
+    private func consumeRequestedPrompt() {
+        guard let prompt = requestedPrompt, !isComposerDisabled else { return }
+        requestedPrompt = nil
+        send(prompt)
     }
 
     private func consumeInitialPromptIfNeeded() {
@@ -499,7 +529,7 @@ struct ChatDetailView: View {
             send(lastFailedMessage)
         } else {
             Task {
-                await refreshAndPollIfNeeded()
+                await refreshConversation()
             }
         }
     }
@@ -587,5 +617,12 @@ private struct ChatDateHeader: View {
             // Solid fill instead of .thinMaterial: material blur is expensive
             // inside scrolling rows.
             .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+    }
+}
+
+private struct ChatNavigationTitle: ViewModifier {
+    let title: String?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let title { content.navigationTitle(title) } else { content }
     }
 }

@@ -143,8 +143,12 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     current_prepared_action_id = get_in(turn.structured_data || %{}, ["prepared_action_id"])
     next_prepared_action_id = get_in(attrs, ["structured_data", "prepared_action_id"])
 
+    next_todo = attrs["structured_data"]["linked_todo"] |> Jason.encode!() |> Jason.decode!()
+
     if current_version == @primer_version and
-         current_prepared_action_id == next_prepared_action_id do
+         current_prepared_action_id == next_prepared_action_id and turn.text == attrs["text"] and
+         get_in(turn.structured_data || %{}, ["linked_todo"]) ==
+           next_todo do
       {:ok, turn}
     else
       turn
@@ -226,18 +230,18 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   end
 
   defp primer_text(%Todo{} = todo, card, draft) do
+    brief = Brief.current(todo) || %{}
+
     [
-      "I’ve got this work item in context.",
-      read_line("My read", read_string(card, "decision_prompt") || read_string(card, "headline")),
-      read_line("Why now", read_string(card, "why_now")),
-      if(action_card_source?(todo, draft), do: nil, else: draft_section(draft)),
-      "I can tighten the wording, prepare the connected action for approval, or mark it done once you’ve handled it."
+      brief["summary"] || read_string(card, "headline") || todo.next_action || todo.title,
+      read_line("Done when", brief["done_when"]),
+      if(action_card_source?(todo, draft) || draft["kind"] == "next_step",
+        do: nil,
+        else: draft_section(draft)
+      )
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n\n")
-    |> then(fn text ->
-      if present?(todo.title), do: text, else: "I’ve got this work item in context.\n\n#{text}"
-    end)
   end
 
   defp read_line(_label, nil), do: nil

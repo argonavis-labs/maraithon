@@ -1,4 +1,5 @@
 import Foundation
+import AssistantProgressKit
 import SwiftData
 
 @Model
@@ -37,6 +38,7 @@ final class TodoItem {
     var ownerLabel: String?
     var sourceOccurredAt: Date?
     var todoBriefData: Data?
+    var workflowData: Data?
     var sourceSystem: String?
     var sourceProvider: String?
     var sourceProviderLabel: String?
@@ -49,6 +51,11 @@ final class TodoItem {
     var sourceSubject: String?
     var sourceContextData: Data?
     @Relationship(deleteRule: .nullify, inverse: \CRMContact.todos) var contact: CRMContact?
+
+    var workflow: TodoWorkflow? {
+        guard let workflowData else { return nil }
+        return try? JSONDecoder().decode(TodoWorkflow.self, from: workflowData)
+    }
 
     var priority: TodoPriority {
         get { TodoPriority(rawValue: priorityRawValue) ?? .medium }
@@ -109,6 +116,7 @@ final class TodoItem {
         ownerLabel: String? = nil,
         sourceOccurredAt: Date? = nil,
         todoBriefData: Data? = nil,
+        workflowData: Data? = nil,
         sourceSystem: String? = nil,
         sourceProvider: String? = nil,
         sourceProviderLabel: String? = nil,
@@ -151,6 +159,7 @@ final class TodoItem {
         self.ownerLabel = ownerLabel
         self.sourceOccurredAt = sourceOccurredAt
         self.todoBriefData = todoBriefData
+        self.workflowData = workflowData
         self.sourceSystem = sourceSystem
         self.sourceProvider = sourceProvider
         self.sourceProviderLabel = sourceProviderLabel

@@ -102,6 +102,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
         :nudge_sweep_initial_delay_ms
       ),
       interval_spec("critical_todo_push", :timer.minutes(5), :timer.seconds(15)),
+      interval_spec("people_network_discovery", :timer.minutes(10), :timer.seconds(30)),
       configured_interval_spec(
         "staleness_triage_sweep",
         :staleness_triage_sweep_interval_ms,
@@ -356,6 +357,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
   defp run_cycle("todo_outcome_learning_recovery"), do: OutcomeLearning.recover_pending()
   defp run_cycle("privacy_erasure_discovery"), do: PrivacyErasure.discover_missing_jobs(50)
   defp run_cycle("privacy_retention"), do: PrivacyRetention.run_cycle()
+  defp run_cycle("people_network_discovery"), do: Maraithon.PeopleNetwork.discover()
   defp run_cycle(name), do: PeriodicJobs.schedule(name)
 
   defp take_advisory_authority! do

@@ -10,6 +10,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
   @behaviour Maraithon.LLM.Adapter
 
   alias Maraithon.LLM.RequestBudget
+  alias Maraithon.LLM.OpenRouterUsage
   alias Maraithon.Spend
   alias Maraithon.Tracing
 
@@ -75,7 +76,9 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
     with :ok <- RequestBudget.validate_body(body) do
       Tracing.with_span("llm.request", request_span_attributes(body, false), fn ->
-        do_complete_request(body, params, api_key, model)
+        OpenRouterUsage.measure(model, fn ->
+          do_complete_request(body, params, api_key, model)
+        end)
       end)
     end
   end
@@ -146,7 +149,9 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
     with :ok <- RequestBudget.validate_body(body) do
       Tracing.with_span("llm.request", request_span_attributes(body, true), fn ->
-        do_stream_request(body, params, api_key, {on_chunk, on_reasoning}, model)
+        OpenRouterUsage.measure(model, fn ->
+          do_stream_request(body, params, api_key, {on_chunk, on_reasoning}, model)
+        end)
       end)
     end
   end
@@ -482,9 +487,22 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     refusal? = choices_valid? and provider_refusal?(choices)
     content = if choices_valid?, do: extract_message_content(choices), else: ""
     finish_reason = choices |> extract_finish_reason() |> safe_finish_reason()
+
+    message =
+      case List.first(choices) do
+        %{"message" => message} -> message
+        _ -> %{}
+      end
+
+    native_message = native_tool_message(message)
+    native? = finish_reason == "tool_calls" and is_map(native_message)
     input_tokens = usage_value(response, "prompt_tokens", "input_tokens")
     output_tokens = usage_value(response, "completion_tokens", "output_tokens")
-    usage = Spend.calculate_cost(model, input_tokens, output_tokens)
+    observation = OpenRouterUsage.capture(response, model)
+
+    usage =
+      Spend.calculate_cost(model, input_tokens, output_tokens)
+      |> OpenRouterUsage.apply_reported_cost(observation)
 
     cond do
       not choices_valid? ->
@@ -505,7 +523,13 @@ defmodule Maraithon.LLM.OpenRouterProvider do
       not String.valid?(content) ->
         invalid_http_response(requested_model, "invalid_response_encoding")
 
-      String.trim(content) == "" ->
+      finish_reason == "length" ->
+        {:error, {:incomplete_response, %{reason: "provider_incomplete"}}}
+
+      finish_reason == "tool_calls" and not native? ->
+        invalid_http_response(requested_model, "invalid_tool_calls")
+
+      String.trim(content) == "" and not native? ->
         summary = invalid_response_summary(response, model, finish_reason)
 
         Logger.warning("LLM call returned empty content",
@@ -522,10 +546,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
         {:error, {:invalid_response, summary}}
 
-      finish_reason == "length" ->
-        {:error, {:incomplete_response, %{reason: "provider_incomplete"}}}
-
-      finish_reason != "stop" ->
+      finish_reason != "stop" and not native? ->
         invalid_http_response(requested_model, "invalid_finish_reason")
 
       true ->
@@ -547,7 +568,10 @@ defmodule Maraithon.LLM.OpenRouterProvider do
            tokens_out: output_tokens,
            finish_reason: finish_reason,
            usage: usage
-         }}
+         }
+         |> then(fn result ->
+           if native?, do: Map.put(result, :message, native_message), else: result
+         end)}
     end
   end
 
@@ -1119,6 +1143,8 @@ defmodule Maraithon.LLM.OpenRouterProvider do
   defp maybe_put_stream_usage(acc, _usage), do: acc
 
   defp finalize_stream(acc, requested_model, callbacks) do
+    OpenRouterUsage.capture(%{"usage" => acc.usage}, safe_model(acc.model, requested_model))
+
     case stream_completion_error(acc) do
       nil ->
         text = acc.text_chunks |> Enum.reverse() |> IO.iodata_to_binary()
@@ -1133,7 +1159,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
                   "finish_reason" => acc.finish_reason
                 }
               ],
-              "usage" => acc.usage || %{"prompt_tokens" => 0, "completion_tokens" => 0}
+              "usage" => acc.usage || %{}
             },
             requested_model
           )
@@ -1219,22 +1245,44 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
   defp blank_stream_buffer?(_buffer), do: false
 
+  defp native_tool_message(%{"role" => "assistant", "tool_calls" => calls} = message)
+       when is_list(calls) and calls != [] do
+    valid? =
+      Enum.all?(calls, fn
+        %{"id" => id, "type" => "function", "function" => %{"name" => name, "arguments" => args}}
+        when is_binary(id) and is_binary(name) and is_binary(args) ->
+          byte_size(id) in 1..255 and byte_size(name) in 1..255 and
+            match?({:ok, %{}}, Jason.decode(args))
+
+        _ ->
+          false
+      end)
+
+    if valid?, do: Map.take(message, ["role", "content", "tool_calls", "reasoning_details"])
+  end
+
+  defp native_tool_message(_), do: nil
+
   defp normalize_messages(messages) when is_list(messages) do
     Enum.map(messages, &normalize_message/1)
   end
 
-  defp normalize_message(%{"role" => role, "content" => content}) do
-    %{
-      role: normalize_role(role),
-      content: normalize_content(content)
-    }
-  end
+  defp normalize_message(message) when is_map(message) do
+    role = normalize_role(Map.get(message, "role", Map.get(message, :role)))
 
-  defp normalize_message(%{role: role, content: content}) do
-    %{
-      role: normalize_role(role),
-      content: normalize_content(content)
+    base = %{
+      "role" => role,
+      "content" => normalize_content(Map.get(message, "content", Map.get(message, :content)))
     }
+
+    keys =
+      case role do
+        "assistant" -> ["tool_calls", "reasoning_details"]
+        "tool" -> ["tool_call_id"]
+        _ -> []
+      end
+
+    Map.merge(base, Map.take(message, keys))
   end
 
   defp normalize_message(message) when is_binary(message) do

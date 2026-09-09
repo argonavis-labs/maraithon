@@ -10,6 +10,7 @@ defmodule Maraithon.TelegramAssistant do
 
   alias Maraithon.TelegramAssistant.{
     ActionFailureCopy,
+    ActionReconciliation,
     LivenessSession,
     LivenessSupervisor,
     BriefTodoReview,
@@ -24,6 +25,7 @@ defmodule Maraithon.TelegramAssistant do
     TodoActions
   }
 
+  alias Maraithon.AssistantChat.Execution
   alias Maraithon.AssistantChat.SecretRequestGuard
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
@@ -38,6 +40,7 @@ defmodule Maraithon.TelegramAssistant do
   @nudge_action_types ~w(gmail_send gmail_draft_send slack_post)
   @prepared_execution_result_key "_maraithon_execution_result"
   @prepared_execution_error_key "_maraithon_execution_error"
+  @prepared_reconciliation_receipt_key "_maraithon_reconciliation_receipt"
   @prepared_result_delivered_at_key "_maraithon_result_delivered_at"
   @prepared_execution_attempts_key "_maraithon_execution_attempts"
   @prepared_execution_token_key "_maraithon_execution_token"
@@ -56,6 +59,7 @@ defmodule Maraithon.TelegramAssistant do
   @prepared_mutable_runtime_payload_keys [
     @prepared_execution_result_key,
     @prepared_execution_error_key,
+    @prepared_reconciliation_receipt_key,
     @prepared_result_delivered_at_key,
     @prepared_execution_attempts_key,
     @prepared_execution_token_key,
@@ -143,11 +147,13 @@ defmodule Maraithon.TelegramAssistant do
     end
   end
 
-  def write_tools_enabled? do
+  def write_tools_enabled?(surface \\ "telegram") do
     case Keyword.get(config(), :telegram_assistant_write_tools_enabled) do
       true -> true
       false -> false
-      nil -> enabled?()
+      # App conversations have their own authenticated approval flow and do
+      # not depend on the Telegram bot or a particular model provider.
+      nil -> surface == "mobile" or enabled?()
     end
   end
 
@@ -280,30 +286,36 @@ defmodule Maraithon.TelegramAssistant do
       do: {:fallback, :invalid_confirmation}
 
   def start_run(attrs) when is_map(attrs) do
-    %Run{}
-    |> Run.changeset(attrs)
-    |> Repo.insert()
+    Maraithon.AssistantChat.Execution.write(fn ->
+      %Run{}
+      |> Run.changeset(attrs)
+      |> Repo.insert()
+      |> Maraithon.AssistantChat.Progress.notify_result()
+    end)
   end
 
   def complete_run(%Run{} = run, attrs \\ %{}) do
-    finish_at =
-      Map.get(attrs, :finished_at) || Map.get(attrs, "finished_at") || DateTime.utc_now()
+    Maraithon.AssistantChat.Execution.write_run(run, fn run ->
+      finish_at =
+        Map.get(attrs, :finished_at) || Map.get(attrs, "finished_at") || DateTime.utc_now()
 
-    with :ok <- run_completion_guard(run, attrs) do
-      _ = Maraithon.TelegramAssistant.RunStreamPreview.delete(run.id)
+      with :ok <- run_completion_guard(run, attrs) do
+        _ = Maraithon.TelegramAssistant.RunStreamPreview.delete(run.id)
 
-      run
-      |> Run.hydrate_payloads()
-      |> Run.changeset(%{
-        status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",
-        result_summary:
-          Map.get(attrs, :result_summary) || Map.get(attrs, "result_summary") || %{},
-        finished_at: finish_at,
-        error: Map.get(attrs, :error) || Map.get(attrs, "error")
-      })
-      |> Repo.update()
-      |> hydrate_run_result()
-    end
+        run
+        |> Run.hydrate_payloads()
+        |> Run.changeset(%{
+          status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",
+          result_summary:
+            Map.get(attrs, :result_summary) || Map.get(attrs, "result_summary") || %{},
+          finished_at: finish_at,
+          error: Map.get(attrs, :error) || Map.get(attrs, "error")
+        })
+        |> Repo.update()
+        |> hydrate_run_result()
+        |> Maraithon.AssistantChat.Progress.notify_result()
+      end
+    end)
   end
 
   defp run_completion_guard(run, attrs) do
@@ -318,11 +330,14 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   def update_run(%Run{} = run, attrs) when is_map(attrs) do
-    run
-    |> Run.hydrate_payloads()
-    |> Run.changeset(attrs)
-    |> Repo.update()
-    |> hydrate_run_result()
+    Maraithon.AssistantChat.Execution.write_run(run, fn run ->
+      run
+      |> Run.hydrate_payloads()
+      |> Run.changeset(attrs)
+      |> Repo.update()
+      |> hydrate_run_result()
+      |> Maraithon.AssistantChat.Progress.notify_result()
+    end)
   end
 
   def resumable_delivery_run(conversation_id, source_message_id)
@@ -381,6 +396,11 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   def create_step(attrs) when is_map(attrs) do
+    run = Repo.get!(Run, Map.get(attrs, :run_id) || Map.fetch!(attrs, "run_id"))
+    Maraithon.AssistantChat.Execution.write_run(run, fn _ -> create_step_unfenced(attrs) end)
+  end
+
+  defp create_step_unfenced(attrs) do
     case insert_step(attrs) do
       {:error, %Ecto.Changeset{errors: errors} = changeset} ->
         # A primary-key collision means the generated id raced an existing
@@ -401,9 +421,18 @@ defmodule Maraithon.TelegramAssistant do
     %Step{}
     |> Step.changeset(attrs)
     |> Repo.insert()
+    |> Maraithon.AssistantChat.Progress.notify_result()
   end
 
   def complete_step(%Step{} = step, attrs \\ %{}) do
+    run = Repo.get!(Run, step.run_id)
+
+    Maraithon.AssistantChat.Execution.write_run(run, fn _ ->
+      complete_step_unfenced(Repo.get!(Step, step.id), attrs)
+    end)
+  end
+
+  defp complete_step_unfenced(step, attrs) do
     step
     |> Step.hydrate_payloads()
     |> Step.changeset(%{
@@ -416,6 +445,7 @@ defmodule Maraithon.TelegramAssistant do
     })
     |> Repo.update()
     |> hydrate_step_result()
+    |> Maraithon.AssistantChat.Progress.notify_result()
   end
 
   defp hydrate_run_result({:ok, %Run{} = run}), do: {:ok, Run.hydrate_payloads(run)}
@@ -434,6 +464,7 @@ defmodule Maraithon.TelegramAssistant do
     |> PreparedAction.changeset(attrs)
     |> Repo.insert()
     |> hydrate_prepared_action_result()
+    |> Maraithon.AssistantChat.Progress.notify_result()
   end
 
   def update_prepared_action(%PreparedAction{} = prepared_action, attrs) when is_map(attrs) do
@@ -442,6 +473,7 @@ defmodule Maraithon.TelegramAssistant do
     |> PreparedAction.changeset(attrs)
     |> Repo.update()
     |> hydrate_prepared_action_result()
+    |> Maraithon.AssistantChat.Progress.notify_result()
   end
 
   def get_prepared_action(id) when is_binary(id),
@@ -843,7 +875,9 @@ defmodule Maraithon.TelegramAssistant do
   # partition: return an error so durable ingress retries, while accepting that
   # the retry can produce a duplicate provider message.
   defp append_delivered_turn(conversation, turn_attrs) do
-    case TelegramConversations.append_turn_with_status(conversation, turn_attrs) do
+    case Maraithon.AssistantChat.Execution.write(fn ->
+           TelegramConversations.append_turn_with_status(conversation, turn_attrs)
+         end) do
       {:error, reason} ->
         Logger.warning("Telegram provider send succeeded but turn persistence failed",
           conversation_reference: Maraithon.Redaction.fingerprint(conversation.id),
@@ -1635,15 +1669,164 @@ defmodule Maraithon.TelegramAssistant do
     end
   end
 
+  @doc "Reconciles a frozen approval using exact external evidence, without replaying an entered mutation."
+  def reconcile_prepared_action(%PreparedAction{} = action) do
+    case reconciliation_snapshot(action) do
+      {:observe, snapshot} ->
+        case ActionReconciliation.observe(snapshot) do
+          {:ok, receipt} -> checkpoint_reconciled_action(snapshot, receipt)
+          other -> other
+        end
+
+      {:unentered, snapshot} ->
+        # No claim was ever acquired. The normal atomic claim is the only path
+        # into the provider, including when the original requester races us.
+        case execute_confirmed_prepared_action(snapshot, durable: true) do
+          {:ok, executed, _receipt} -> {:ok, executed, :executed}
+          {:ok, executed, _receipt, :already_executed} -> {:ok, executed, :executed}
+          {:error, failed, _reason, :already_failed} -> {:ok, failed, :failed}
+          {:error, _current, reason, _state} -> {:pending, reason}
+          {:error, _current, reason} -> {:pending, reason}
+        end
+
+      {:ok, executed, :executed} = result ->
+        _ = Execution.write(fn -> Maraithon.Todos.ActionHandoff.apply_safely(executed) end)
+        result
+
+      {:error, _current, reason} ->
+        {:error, reason}
+
+      other ->
+        other
+    end
+  end
+
+  defp reconciliation_snapshot(action) do
+    with_locked_prepared_action(action, fn current ->
+      cond do
+        current.user_id != action.user_id or current.conversation_id != action.conversation_id ->
+          {:error, :reconciliation_binding_mismatch}
+
+        current.status == "executed" ->
+          {:ok, current, :executed}
+
+        current.status not in ["confirmed", "execution_unknown"] ->
+          {:ok, current, :not_applicable}
+
+        current.payload[@prepared_confirmed_payload_hash_key] !=
+            action.payload[@prepared_confirmed_payload_hash_key] ->
+          {:error, :reconciliation_binding_mismatch}
+
+        validate_prepared_payload_integrity(current.payload) != :ok ->
+          {:error, :prepared_action_payload_tampered}
+
+        not ActionReconciliation.identified?(current) ->
+          {:pending, :reconciliation_identity_unavailable}
+
+        current.status == "confirmed" and
+            prepared_execution_claim_active?(current.payload, database_now!()) ->
+          {:pending, :prepared_action_execution_in_progress}
+
+        current.status == "confirmed" and
+            is_binary(current.payload[@prepared_execution_token_key]) ->
+          case checkpoint_prepared_action_unknown_locked(
+                 current,
+                 current.payload,
+                 :prepared_action_execution_owner_lost
+               ) do
+            {:unknown, unknown} -> {:observe, unknown}
+            other -> other
+          end
+
+        current.status == "confirmed" and prepared_execution_attempts(current.payload) == 0 ->
+          {:unentered, current}
+
+        true ->
+          {:observe, current}
+      end
+    end)
+  end
+
+  defp checkpoint_reconciled_action(snapshot, receipt) do
+    receipt = serialize_result(receipt)
+
+    result =
+      with_locked_prepared_action(snapshot, fn current ->
+        cond do
+          current.status == "executed" ->
+            {:ok, current, :executed}
+
+          current.status not in ["confirmed", "execution_unknown"] ->
+            {:ok, current, :not_applicable}
+
+          current.payload[@prepared_confirmed_payload_hash_key] !=
+            snapshot.payload[@prepared_confirmed_payload_hash_key] or
+              validate_prepared_payload_integrity(current.payload) != :ok ->
+            {:error, :prepared_action_payload_tampered}
+
+          prepared_execution_claim_active?(current.payload, database_now!()) ->
+            {:pending, :prepared_action_execution_in_progress}
+
+          true ->
+            proof =
+              receipt
+              |> Map.take(~w(source message_id thread_id command_id event_id reconciled))
+              |> Map.put("observed_at", DateTime.to_iso8601(database_now!()))
+              |> Map.put(
+                "confirmed_payload_hash",
+                snapshot.payload[@prepared_confirmed_payload_hash_key]
+              )
+
+            payload =
+              current.payload
+              |> clear_prepared_execution_claim()
+              |> reset_prepared_result_delivery()
+              |> Map.put(@prepared_execution_result_key, prepared_execution_checkpoint(receipt))
+              |> Map.put(@prepared_reconciliation_receipt_key, proof)
+              |> Map.delete(@prepared_execution_error_key)
+
+            executed =
+              update_prepared_action_or_rollback(current, %{
+                status: "executed",
+                executed_at: database_now!(),
+                error: nil,
+                payload: payload
+              })
+
+            {:ok, executed, :executed}
+        end
+      end)
+
+    case result do
+      {:ok, executed, :executed} ->
+        _ =
+          Execution.write(fn ->
+            _ = Maraithon.Todos.ActionHandoff.apply_safely(executed)
+            _ = maybe_record_todo_nudge(executed)
+            maybe_record_calendar_block(executed, receipt)
+          end)
+
+        result
+
+      {:error, _current, reason} ->
+        {:error, reason}
+
+      other ->
+        other
+    end
+  end
+
   defp confirm_or_resume_prepared_action(%PreparedAction{} = prepared_action, opts) do
-    case Repo.transaction(
-           fn ->
-             prepared_action
-             |> lock_prepared_action!()
-             |> freeze_prepared_action_decision(opts)
-           end,
-           timeout: prepared_persistence_timeout_ms()
-         ) do
+    case Execution.write(fn ->
+           Repo.transaction(
+             fn ->
+               prepared_action
+               |> lock_prepared_action!()
+               |> freeze_prepared_action_decision(opts)
+             end,
+             timeout: prepared_persistence_timeout_ms()
+           )
+         end) do
       {:ok, result} ->
         result
 
@@ -1677,6 +1860,7 @@ defmodule Maraithon.TelegramAssistant do
       {:error, expired_action, :confirmation_expired}
     else
       with {:ok, payload} <- confirmed_payload(prepared_action, opts),
+           payload = ActionReconciliation.freeze_identity(prepared_action, payload),
            {:ok, payload_hash} <- prepared_payload_hash(payload) do
         frozen_payload =
           Map.put(payload, @prepared_confirmed_payload_hash_key, payload_hash)
@@ -1689,7 +1873,10 @@ defmodule Maraithon.TelegramAssistant do
             payload: frozen_payload
           })
 
-        {:ok, confirmed_action, :confirmed}
+        case ActionReconciliation.enqueue(confirmed_action) do
+          {:ok, _} -> {:ok, confirmed_action, :confirmed}
+          {:error, reason} -> Repo.rollback({:reconciliation_enqueue_failed, reason})
+        end
       else
         {:error, reason} -> {:error, prepared_action, reason}
       end
@@ -1941,17 +2128,34 @@ defmodule Maraithon.TelegramAssistant do
   defp prepared_execution_claim_active?(_payload, _now), do: false
 
   defp execute_claimed_prepared_action(claimed_action, token, opts) do
-    task = Task.async(fn -> safely_execute_prepared_action(claimed_action) end)
+    authority = Execution.capture_authority()
+
+    task =
+      Task.async(fn ->
+        Execution.with_authority(authority, fn ->
+          safely_execute_prepared_action(claimed_action)
+        end)
+      end)
 
     case await_prepared_action_provider(task, claimed_action, token) do
       {:ok, {:ok, result}} ->
         case checkpoint_prepared_action_success(claimed_action, token, result) do
           {:ok, executed_action, :executed} ->
-            _ = maybe_record_todo_nudge(executed_action)
-            _ = maybe_record_calendar_block(executed_action, result)
+            _ =
+              Execution.write(fn ->
+                _ = Maraithon.Todos.ActionHandoff.apply_safely(executed_action)
+                _ = maybe_record_todo_nudge(executed_action)
+                maybe_record_calendar_block(executed_action, result)
+              end)
+
             {:ok, executed_action, result}
 
           {:ok, executed_action, :already_executed} ->
+            _ =
+              Execution.write(fn ->
+                Maraithon.Todos.ActionHandoff.apply_safely(executed_action)
+              end)
+
             {:ok, executed_action, prepared_execution_result(executed_action), :already_executed}
 
           {:error, current_action, reason} ->
@@ -1964,7 +2168,7 @@ defmodule Maraithon.TelegramAssistant do
         end
 
       {:ok, {:error, reason}} ->
-        if ambiguous_execution_failure?(reason) and
+        if (ambiguous_execution_failure?(reason) or server_failure_after_entry?(reason)) and
              not replay_safe_prepared_action?(claimed_action) do
           checkpoint_prepared_action_unknown(claimed_action, token, reason)
         else
@@ -2035,7 +2239,9 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp safely_execute_prepared_action(prepared_action) do
-    prepared_action_executor().execute_prepared_action(prepared_action)
+    with :ok <- Execution.write(fn -> :ok end) do
+      prepared_action_executor().execute_prepared_action(prepared_action)
+    end
   rescue
     error -> {:error, {:prepared_action_execution_exception, error}}
   catch
@@ -2365,17 +2571,19 @@ defmodule Maraithon.TelegramAssistant do
 
   defp with_locked_prepared_action(%PreparedAction{} = prepared_action, callback)
        when is_function(callback, 1) do
-    case Repo.transaction(
-           fn ->
-             :ok = Maraithon.DurablePayload.require_current_mutation!()
+    case Execution.write(fn ->
+           Repo.transaction(
+             fn ->
+               :ok = Maraithon.DurablePayload.require_current_mutation!()
 
-             prepared_action
-             |> lock_prepared_action!()
-             |> PreparedAction.hydrate_payload()
-             |> callback.()
-           end,
-           timeout: prepared_persistence_timeout_ms()
-         ) do
+               prepared_action
+               |> lock_prepared_action!()
+               |> PreparedAction.hydrate_payload()
+               |> callback.()
+             end,
+             timeout: prepared_persistence_timeout_ms()
+           )
+         end) do
       {:ok, result} ->
         result
 
@@ -2495,6 +2703,26 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp explicit_prepared_action_error_class(_reason), do: nil
+
+  # A server-side failure can follow a committed write. A retryable read
+  # failure is not evidence that a non-idempotent mutation was rejected.
+  defp server_failure_after_entry?({kind, status, _})
+       when kind in [:api_error, :http_error, :http_status] and status in 500..599, do: true
+
+  defp server_failure_after_entry?({kind, status})
+       when kind in [:api_error, :http_error, :http_status] and status in 500..599, do: true
+
+  defp server_failure_after_entry?(reason) when is_tuple(reason),
+    do: reason |> Tuple.to_list() |> Enum.any?(&server_failure_after_entry?/1)
+
+  defp server_failure_after_entry?(reason) when is_map(reason) do
+    structured_error_http_status(reason) in 500..599 or
+      server_failure_after_entry?(
+        reason[:reason] || reason["reason"] || reason[:error] || reason["error"]
+      )
+  end
+
+  defp server_failure_after_entry?(_), do: false
 
   defp ambiguous_execution_failure?(reason)
        when reason in [
@@ -2969,6 +3197,9 @@ defmodule Maraithon.TelegramAssistant do
   # `owed_to_me`, a nudge keeps the loop open) or close the todo out with a
   # resolution note referencing what was sent (every other direction: the
   # send itself was the requested action, e.g. an `owed_by_me` reply).
+  defp maybe_record_todo_nudge(%PreparedAction{payload: %{"keep_todo_open" => true}}),
+    do: :ok
+
   defp maybe_record_todo_nudge(
          %PreparedAction{action_type: action_type, user_id: user_id, payload: payload} =
            prepared_action
@@ -3077,6 +3308,11 @@ defmodule Maraithon.TelegramAssistant do
     case Todos.get_for_user(user_id, todo_id) do
       %Todo{direction: "owed_to_me"} ->
         _ = Todos.record_nudge_sent(user_id, todo_id, channel: action_type)
+        :ok
+
+      %Todo{workflow: %{"outcome" => outcome}} when is_binary(outcome) ->
+        # Sending is evidence for the next handoff, never blanket completion
+        # of a tracked outcome. Connected-source review advances the owner.
         :ok
 
       %Todo{} ->

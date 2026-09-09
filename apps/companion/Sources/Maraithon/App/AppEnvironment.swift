@@ -30,6 +30,7 @@ final class AppEnvironment {
     /// Realtime WebSocket channel for instant sync. Each ingest helper
     /// receives a reference and prefers it over HTTP when connected.
     let realtime: RealtimeChannel
+    let browserRelay: BrowserRelay
 
     private(set) var isPaused: Bool = false
 
@@ -67,6 +68,12 @@ final class AppEnvironment {
             }
         )
         self.realtime = realtimeChannel
+        let relay = BrowserRelay(client: MaraithonClient(tokenProvider: { [weak auth] in
+            await MainActor.run { [auth] in auth?.currentToken }
+        }), log: { [weak log] event in
+            Task { @MainActor in log?.info(event, source: .browser) }
+        })
+        self.browserRelay = relay
 
         let imessageIngest = IMessageIngest(
             tokenProvider: { [weak deviceAuth] in
@@ -193,6 +200,7 @@ final class AppEnvironment {
             // on launch. Sources that need permissions they don't yet have
             // surface as `.needsAttention(...)` rather than crashing.
             registry.startAll()
+            Task { await relay.start() }
         }
     }
 

@@ -23,6 +23,7 @@ defmodule Maraithon.Todos.PublicPayload do
     {"owner_label", :owner_label},
     {"priority", :priority},
     {"status", :status},
+    {"workflow", :workflow},
     {"snoozed_until", :snoozed_until},
     {"closed_at", :closed_at},
     {"source_account_label", :source_account_label},
@@ -35,6 +36,7 @@ defmodule Maraithon.Todos.PublicPayload do
     todo
     |> UserFacingCopy.polish_attrs()
     |> Map.from_struct()
+    |> Map.put(:workflow, Maraithon.Todos.Workflow.current(todo))
     |> todo()
   end
 
@@ -53,6 +55,9 @@ defmodule Maraithon.Todos.PublicPayload do
   def todo(_todo), do: %{}
 
   defp put_public_value(nil, acc, _key), do: acc
+
+  defp put_public_value(value, acc, "workflow") when is_map(value),
+    do: Map.put(acc, "workflow", Maraithon.Todos.Workflow.public(value))
 
   defp put_public_value(value, acc, key) when is_binary(value) do
     if String.trim(value) == "" do

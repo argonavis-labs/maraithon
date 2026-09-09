@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import AssistantProgressKit
 
 struct TodoDetailView: View {
     @Environment(\.dismiss) private var dismiss
@@ -7,6 +8,9 @@ struct TodoDetailView: View {
     @Environment(SessionStore.self) private var sessionStore
     let todo: TodoItem
 
+    @State private var showsWorkflow = false
+    @State private var showsContext = false
+    @State private var requestedPrompt: String?
     @State private var chatThread: ChatThread?
     @State private var isLoadingThread = false
     @State private var loadErrorMessage: String?
@@ -17,23 +21,42 @@ struct TodoDetailView: View {
     private let chatSyncService = ChatSyncService()
 
     var body: some View {
-        Group {
-            if let chatThread {
-                ChatDetailView(
-                    thread: chatThread,
-                    contextHeader: todoContextHeader,
-                    sourceAction: todo.sourceAction,
-                    sourceActionSend: sendReply,
-                    quickPrompts: todoQuickPrompts
-                )
-            } else {
-                progressiveDetailView
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                if let chatThread {
+                    ChatDetailView(
+                        thread: chatThread,
+                        quickPrompts: todoQuickPrompts,
+                        requestedPrompt: $requestedPrompt,
+                        workspaceHeader: { send, disabled in
+                            AnyView(workspaceHeader(send: send, disabled: disabled))
+                        }
+                    )
+                    .id(chatThread.id)
+                } else {
+                    ScrollView {
+                        workspaceHeader(send: { _ in }, disabled: true)
+                        chatLoadingCard
+                    }.padding()
+                }
+                if geometry.size.width >= 850 {
+                    Divider()
+                    contextPanel
+                        .frame(width: 300)
+                }
             }
         }
+        .sheet(isPresented: $showsWorkflow) {
+            if let workflow = todo.workflow {
+                TodoWorkflowEditor(workflow: workflow, people: workflowPeople, save: saveWorkflow)
+            }
+        }
+        .toolbar(.hidden, for: .tabBar)
         .navigationTitle(TodoDetailCopy.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("People and details", systemImage: "person.2") { showsContext = true }
                 Menu {
                     if todo.status == .done {
                         Button {
@@ -90,6 +113,18 @@ struct TodoDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showsContext) {
+            NavigationStack {
+                contextPanel
+                    .navigationTitle("Todo context")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showsContext = false }
+                        }
+                    }
+            }
+        }
         .sheet(isPresented: $isEditingTodo) {
             TodoEditorView(todo: todo)
         }
@@ -105,30 +140,75 @@ struct TodoDetailView: View {
             async let opened: Void = markTodoOpened()
             await loadThreadIfNeeded()
             _ = await opened
+            await refreshBrief()
         }
     }
 
-    private var progressiveDetailView: some View {
-        ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
+    private func workspaceHeader(send: @escaping (String) -> Void, disabled: Bool) -> some View {
+        TodoWorkspaceHeader(
+            todo: todo, summary: summaryText,
+            actionsDisabled: disabled, isUpdating: isPerformingAction,
+            send: send, complete: { Task { await performAction("done") } },
+            reopen: { Task { await reopenTodo() } },
+            showPeople: { showsContext = true },
+            showWorkflow: { showsWorkflow = true }, sourceSend: sendReply
+        )
+    }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ChatContextHeaderView(header: todoContextHeader)
-
-                    if let sourceAction = todo.sourceAction {
-                        SourceActionCardView(action: sourceAction, onSend: sendReply)
-                    }
-
-                    chatLoadingCard
+    private var contextPanel: some View {
+        TodoWorkspaceContextView(
+            people: todo.todoBrief?.people,
+            hasBrief: todo.todoBrief != nil,
+            actionsDisabled: chatThread == nil || chatThread?.pendingRunID != nil,
+            ask: { prompt in
+                showsContext = false
+                requestedPrompt = prompt
+            },
+            details: AnyView(VStack(alignment: .leading, spacing: 16) {
+                ChatContextHeaderView(header: todoContextHeader)
+                if let action = todo.sourceAction {
+                    if !action.participants.isEmpty { CardParticipantsSection(participants: action.participants) }
+                    if !action.conversation.isEmpty { CardConversationSection(messages: action.conversation, maxMessages: 12) }
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
-            }
+            })
+        )
+    }
+
+    /// Opening schedules server-side preparation. Refresh only this todo, with
+    /// a bounded lifetime; a failed request leaves the cached workspace usable.
+    private func refreshBrief() async {
+        guard let token = sessionStore.user?.sessionToken else { return }
+        for attempt in 0..<12 {
+            do {
+                if attempt > 0 { try await Task.sleep(for: .seconds(5)) }
+                try Task.checkCancellation()
+                let remote = try await MobileAPIClient().getTodo(sessionToken: token, id: todo.id)
+                ProductionDataSync.apply(remote, to: todo)
+                try modelContext.save()
+                if remote.brief?.suggestedActions != nil { return }
+            } catch { return }
         }
-        .accessibilityIdentifier("todo-progressive-detail")
+    }
+
+    private var workflowPeople: [TodoWorkflow.Owner] {
+        (todo.todoBrief?.people ?? []).compactMap {
+            UUID(uuidString: $0.id) == nil ? nil : TodoWorkflow.Owner(kind: "person", id: $0.id, label: $0.name)
+        }
+    }
+
+    @MainActor private func saveWorkflow(_ change: TodoWorkflowChange) async throws {
+        guard let token = sessionStore.user?.sessionToken else { throw URLError(.userAuthenticationRequired) }
+        let remote = try await MobileAPIClient().transitionTodo(sessionToken: token, id: todo.id, change: change)
+        ProductionDataSync.apply(remote, to: todo)
+        try modelContext.save()
+    }
+
+    private var summaryText: String {
+        if !todo.isActive, let note = cleanedText(todo.resolutionNote) { return note }
+        return cleanedText(todo.todoBrief?.summary)
+            ?? cleanedText(todo.decisionContextSummary)
+            ?? cleanedText(todo.notes)
+            ?? "Preparing the context you need to act."
     }
 
     @ViewBuilder

@@ -59,7 +59,7 @@ defmodule Maraithon.TelegramAssistant.RunReaper do
 
         Repo.update_all(
           from(r in Run,
-            where: r.status == "running",
+            where: r.status == "running" and r.surface == "telegram",
             where: r.started_at < ^cutoff
           ),
           set: [

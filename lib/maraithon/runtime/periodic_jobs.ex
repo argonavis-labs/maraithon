@@ -51,7 +51,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @source_graph_publication "parent_completion_v1"
   @slack_reconciliation_fanout_spacing_seconds 6
   @slack_reconciliation_plan_cooldown_seconds 55
-  @completion_backstop_interval_seconds 30 * 60
+  @completion_backstop_interval_seconds 60
 
   @token_job "runtime_partition:token_refresh"
   @watch_job "runtime_partition:watch_renewal"
@@ -86,6 +86,22 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       :second
     )
   end
+
+  @doc "Coalesces changed synced context into a durable todo workflow review."
+  def wake_todo_workflows(user_id) when is_binary(user_id) and user_id != "" do
+    if Repo.exists?(
+         from t in Todo, where: t.user_id == ^user_id and t.status in ["open", "snoozed"]
+       ) do
+      # A small fixed delay absorbs a companion's multi-source batch. Active
+      # deduplication also covers a wake arriving during an existing review;
+      # the minute backstop picks up changes that arrived after its snapshot.
+      enqueue_workflow_review(user_id, DateTime.add(database_now!(), 20, :second))
+    else
+      {:skip, :no_open_todos}
+    end
+  end
+
+  def wake_todo_workflows(_user_id), do: {:error, :invalid_user}
 
   @doc "Durably wakes the discovery and applicable closure workers for one source account."
   def wake_source_account(account, opts \\ [])
@@ -532,6 +548,17 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp schedule_proactive_users do
     now = database_now!()
     hygiene = ProactiveCheckIn.run_hygiene(now)
+
+    if Maraithon.Push.Notifier.configuration_status() == :ready and
+         Maraithon.TelegramAssistant.unified_push_enabled?() and
+         Maraithon.TelegramAssistant.proactive_delivery_planner_enabled?() do
+      enqueue_proactive_users(now, hygiene)
+    else
+      {:ok, Map.merge(hygiene, %{schedule: "proactive_check_in", discovered: 0, enqueued: 0})}
+    end
+  end
+
+  defp enqueue_proactive_users(now, hygiene) do
     batch_size = Config.positive_integer(:proactive_check_in_batch_size, 25)
     active_users = active_user_ids(@proactive_job)
 
@@ -1309,17 +1336,21 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     if recent? do
       {:skip, :completion_backstop_not_due}
     else
-      BackgroundJobs.enqueue(@todo_completion_job, %{
-        user_id: user_id,
-        queue: @model_queue,
-        dedupe_key: model_dedupe_key("todo_completion_backstop", user_id),
-        partition_key: tenant_partition(user_id),
-        rate_limit_key: "model",
-        max_attempts: 3,
-        scheduled_at: now,
-        payload: %{"user_id" => user_id, "partition_role" => "backstop"}
-      })
+      enqueue_workflow_review(user_id, now)
     end
+  end
+
+  defp enqueue_workflow_review(user_id, scheduled_at) do
+    BackgroundJobs.enqueue(@todo_completion_job, %{
+      user_id: user_id,
+      queue: @model_queue,
+      dedupe_key: model_dedupe_key("todo_completion_backstop", user_id),
+      partition_key: tenant_partition(user_id),
+      rate_limit_key: "model",
+      max_attempts: 3,
+      scheduled_at: scheduled_at,
+      payload: %{"user_id" => user_id, "partition_role" => "backstop"}
+    })
   end
 
   defp enqueue_source_account_cycle(account, now) do
@@ -1802,14 +1833,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp execute_model(%BackgroundJob{job_type: @todo_completion_job} = job) do
     with {:ok, user_id} <- partition_user_id(job) do
-      opts =
-        case Map.get(job.payload || %{}, "partition_role") do
-          "backstop" -> [skip_account_message_sources: true]
-          "legacy" -> [source_account_unassigned?: true]
-          _other -> []
-        end
+      case Map.get(job.payload || %{}, "partition_role") do
+        "backstop" ->
+          Maraithon.Runtime.TodoWorkflowReview.run(job)
 
-      TodoCompletionSweep.run_for_user(user_id, opts) |> normalize_work_result()
+        role ->
+          opts = if role == "legacy", do: [source_account_unassigned?: true], else: []
+          TodoCompletionSweep.run_for_user(user_id, opts) |> normalize_work_result()
+      end
     end
   end
 

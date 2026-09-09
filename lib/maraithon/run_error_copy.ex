@@ -15,6 +15,16 @@ defmodule Maraithon.RunErrorCopy do
   def assistant_response(nil), do: nil
   def assistant_response(""), do: nil
 
+  def assistant_response(reason)
+      when reason in ["interrupted_run_requires_review", :interrupted_run_requires_review] do
+    "Execution was interrupted. Review the saved actions before retrying; an action may already have happened."
+  end
+
+  def assistant_response(reason)
+      when reason in ["queued_run_source_missing", :queued_run_source_missing] do
+    "This older request could not be linked safely to its original message. Send the request again."
+  end
+
   def assistant_response(reason) do
     classify(reason,
       fallback: @assistant_fallback,

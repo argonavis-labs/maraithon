@@ -192,6 +192,7 @@ enum ProductionDataSync {
         let ownerLabel: String?
         let sourceOccurredAt: Date?
         let todoBriefData: Data?
+        let workflowData: Data?
         let hasActionCardField: Bool
         let relatedPersonIDs: [UUID]
         let sourceSystem: String?
@@ -257,6 +258,7 @@ enum ProductionDataSync {
             ownerLabel: cleanedText(remoteTodo.ownerLabel),
             sourceOccurredAt: remoteTodo.sourceOccurredAt,
             todoBriefData: encodedBrief(remoteTodo.brief),
+            workflowData: remoteTodo.workflow.flatMap { try? JSONEncoder().encode($0) },
             hasActionCardField: remoteTodo.hasActionCardField,
             relatedPersonIDs: remoteTodo.relatedPeople.compactMap { UUID(uuidString: $0.id) },
             sourceSystem: cleanedText(remoteTodo.source),
@@ -332,6 +334,7 @@ enum ProductionDataSync {
         todo.ownerLabel = prepared.ownerLabel
         todo.sourceOccurredAt = prepared.sourceOccurredAt
         todo.todoBriefData = prepared.todoBriefData
+        todo.workflowData = prepared.workflowData
         if let contactsByID {
             todo.contact = relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: contactsByID)
         }
@@ -510,6 +513,7 @@ enum ProductionDataSync {
             ownerLabel: prepared.ownerLabel,
             sourceOccurredAt: prepared.sourceOccurredAt,
             todoBriefData: prepared.todoBriefData,
+            workflowData: prepared.workflowData,
             sourceSystem: prepared.sourceSystem,
             sourceProvider: prepared.card.sourceProvider,
             sourceProviderLabel: prepared.card.sourceProviderLabel,
@@ -534,6 +538,12 @@ enum ProductionDataSync {
         guard let brief else { return nil }
 
         let snapshot = TodoBriefSnapshot(
+            summary: cleanedText(brief.summary),
+            doneWhen: cleanedText(brief.doneWhen),
+            involvement: brief.involvement,
+            call: brief.call,
+            people: brief.people,
+            suggestedActions: brief.suggestedActions,
             whyItMatters: cleanedText(brief.whyItMatters),
             situation: cleanedText(brief.situation),
             recommendation: cleanedText(brief.recommendation),

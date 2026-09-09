@@ -1,4 +1,5 @@
 import SwiftUI
+import AssistantProgressKit
 
 struct TodoRow: View {
     let todo: TodoItem
@@ -32,7 +33,12 @@ struct TodoRow: View {
                     .strikethrough(todo.isCompleted)
                     .foregroundStyle(todo.isCompleted ? .secondary : .primary)
 
-                if let context = decisionContext.rowContext {
+                if let workflow = todo.workflow {
+                    TodoOwnershipLabel(workflow: workflow).font(.caption)
+                }
+                if todo.isActive, let next = todo.workflow?.nextAction, !next.isEmpty {
+                    Text("Next: \(next)").font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                } else if let context = decisionContext.rowContext {
                     Text(context)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)

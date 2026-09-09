@@ -37,6 +37,7 @@ defmodule Maraithon.Runtime.Supervisor do
       {Registry, keys: :unique, name: Maraithon.Runtime.AgentRegistry},
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
       Maraithon.Runtime.TaskSystemSupervisor,
+      Maraithon.PeopleNetwork.ReadRepo,
       {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
       Maraithon.Runtime.Effects.LLMRateLimiter,
       {Task.Supervisor, name: Maraithon.Runtime.AgentRecoveryTaskSupervisor}
@@ -61,7 +62,12 @@ defmodule Maraithon.Runtime.Supervisor do
             # policy; only the two homogeneous lanes below use local rotation.
             Supervisor.child_spec(
               {Maraithon.Runtime.BackgroundJobRunner,
-               exclude_queues: [PeriodicJobs.provider_queue(), PeriodicJobs.model_queue()]},
+               exclude_queues: [
+                 PeriodicJobs.provider_queue(),
+                 PeriodicJobs.model_queue(),
+                 Maraithon.Todos.Brief.queue(),
+                 Maraithon.PeopleNetwork.queue()
+               ]},
               id: Maraithon.Runtime.BackgroundJobRunner
             ),
             Supervisor.child_spec(
@@ -76,17 +82,31 @@ defmodule Maraithon.Runtime.Supervisor do
               id: Maraithon.Runtime.ProviderBackgroundJobRunner
             ),
             Supervisor.child_spec(
-              {Maraithon.Runtime.BackgroundJobRunner,
-               name: Maraithon.Runtime.ModelBackgroundJobRunner,
-               queues: [PeriodicJobs.model_queue()],
-               fair?: true,
-               max_concurrency: Config.positive_integer(:model_job_max_concurrency, 3),
-               max_partition_concurrency: 1,
-               max_rate_limit_concurrency: Config.positive_integer(:model_job_max_concurrency, 3),
-               reconcile_recurring_jobs?: false},
+              {
+                Maraithon.Runtime.BackgroundJobRunner,
+                # Preparation shares the bounded model pool but not the source-analysis backlog.
+                name: Maraithon.Runtime.ModelBackgroundJobRunner,
+                queues: [PeriodicJobs.model_queue(), Maraithon.Todos.Brief.queue()],
+                fair?: true,
+                max_concurrency: Config.positive_integer(:model_job_max_concurrency, 3),
+                max_partition_concurrency: 1,
+                max_rate_limit_concurrency: Config.positive_integer(:model_job_max_concurrency, 3),
+                reconcile_recurring_jobs?: false
+              },
               id: Maraithon.Runtime.ModelBackgroundJobRunner
             ),
             Maraithon.Runtime.Scheduler,
+            Supervisor.child_spec(
+              {Maraithon.Runtime.BackgroundJobRunner,
+               name: Maraithon.Runtime.PeopleNetworkRunner,
+               queues: [Maraithon.PeopleNetwork.queue()],
+               fair?: true,
+               max_concurrency: 1,
+               max_partition_concurrency: 1,
+               max_rate_limit_concurrency: 1,
+               reconcile_recurring_jobs?: false},
+              id: Maraithon.Runtime.PeopleNetworkRunner
+            ),
             Maraithon.Runtime.ShutdownReporter,
             # These two remain independent observers by design. If the durable
             # queue or every lane runner wedges, putting its reporter/alarm in

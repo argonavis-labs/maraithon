@@ -4,7 +4,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    CURRENT_PROJECT_VERSION: 20260905190838
+    CURRENT_PROJECT_VERSION: 20260908195700
     MARKETING_VERSION: 1.0.1
     # Swift *language mode*, not the toolchain version — 6.3 is not a valid
     # language mode and Xcode silently coerces it. 6 turns on full
@@ -15,6 +15,11 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     DEVELOPMENT_TEAM: PS5W7BFTQ2
     CODE_SIGN_STYLE: Automatic
+packages:
+  AssistantProgressKit:
+    path: ../assistant-progress
+  PeopleNetworkKit:
+    path: ../people-network
 targets:
   MaraithonMobile:
     type: application
@@ -25,6 +30,9 @@ targets:
       Release: Config/MaraithonMobile.xcconfig
     sources:
       - path: MaraithonMobile
+    dependencies:
+      - package: AssistantProgressKit
+      - package: PeopleNetworkKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bliss.maraithonmobile

@@ -401,7 +401,8 @@ defmodule Maraithon.TelegramConversations.Privacy do
                      acc
 
                    family, {erased, remaining} ->
-                     ids = lock_erasure_ids(family, user_id, remaining)
+                     {table, ids} = lock_erasure_ids(family, user_id, remaining)
+                     if ids != [], do: mark_payload_purge!(table, now)
                      count = purge_family_ids(family, ids, now)
                      {Map.put(erased, family, count), remaining - length(ids)}
                  end)
@@ -438,7 +439,7 @@ defmodule Maraithon.TelegramConversations.Privacy do
              AND claim_expires_at > timezone('UTC', clock_timestamp())
            FOR UPDATE
            """,
-           [request_id, user_id, claim_token],
+           [Ecto.UUID.dump!(request_id), user_id, Ecto.UUID.dump!(claim_token)],
            log: false
          ).rows do
       [[1]] -> :ok
@@ -455,7 +456,7 @@ defmodule Maraithon.TelegramConversations.Privacy do
               FROM public.privacy_erasure_agent_targets
               WHERE request_id = $2::uuid AND state <> 'drained')
            """,
-           [user_id, request_id],
+           [user_id, Ecto.UUID.dump!(request_id)],
            log: false
          ).rows do
       [[0, 0]] -> :ok
@@ -463,6 +464,9 @@ defmodule Maraithon.TelegramConversations.Privacy do
     end
   end
 
+  # Terminal background jobs are deleted by the central erasure coordinator
+  # after it proves their execution has drained. Their user write fence rejects
+  # an intermediate payload UPDATE once erasure is requested.
   defp erasure_families do
     [
       :turns,
@@ -474,7 +478,6 @@ defmodule Maraithon.TelegramConversations.Privacy do
       :operator_events,
       :user_memory_profiles,
       :operator_memory_summaries,
-      :background_jobs,
       :scheduled_jobs,
       :ingress_receipts
     ]
@@ -564,13 +567,31 @@ defmodule Maraithon.TelegramConversations.Privacy do
   end
 
   defp lock_erasure_ids(family, user_id, limit) do
-    family
-    |> erasure_query(user_id)
-    |> order_by([row], asc: row.id)
-    |> select([row], row.id)
-    |> limit(^limit)
-    |> lock("FOR UPDATE SKIP LOCKED")
-    |> Repo.all()
+    query = erasure_query(family, user_id)
+    {table, _schema} = query.from.source
+
+    ids =
+      query
+      |> order_by([row], asc: row.id)
+      |> select([row], row.id)
+      |> limit(^limit)
+      |> lock("FOR UPDATE SKIP LOCKED")
+      |> Repo.all()
+
+    {table, ids}
+  end
+
+  # Erasure still obeys each table's terminal-state and narrow-payload guards.
+  # The central claim is checked before selecting any of these fixed families.
+  defp mark_payload_purge!(table, cutoff) do
+    Repo.query!(
+      """
+      SELECT set_config('maraithon.privacy_retention_table', $1, true),
+             set_config('maraithon.privacy_retention_cutoff', ($2::timestamp)::text, true)
+      """,
+      [table, DateTime.to_naive(cutoff)],
+      log: false
+    )
   end
 
   defp purge_family_ids(_family, [], _now), do: 0

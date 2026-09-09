@@ -1,0 +1,1016 @@
+{
+  "execution": "maraithon-todo-validation-2l5pj",
+  "start": "2026-09-08T22:28:01.787701Z",
+  "end": "2026-09-08T22:40:06.940393Z",
+  "duration_seconds": 725.152692,
+  "sample_count": 13,
+  "chunks_validated": 520,
+  "statistics": [
+    {
+      "dealloc": 0,
+      "stats_reset": "2026-08-28T16:32:45.365479Z"
+    }
+  ],
+  "categories": {
+    "other": {
+      "calls": 127369,
+      "rows": 548636,
+      "shared_blks_hit": 1634517,
+      "shared_blks_read": 2,
+      "total_exec_time": 29877.973816996666
+    },
+    "jobs": {
+      "calls": 5165,
+      "rows": 2321,
+      "shared_blks_hit": 1206327,
+      "shared_blks_read": 0,
+      "total_exec_time": 18537.395628999915
+    },
+    "ownership": {
+      "calls": 17753,
+      "rows": 16058,
+      "shared_blks_hit": 278272,
+      "shared_blks_read": 0,
+      "total_exec_time": 8926.998761002853
+    },
+    "conversation": {
+      "calls": 476,
+      "rows": 6586,
+      "shared_blks_hit": 22920,
+      "shared_blks_read": 0,
+      "total_exec_time": 281.13757099999964
+    },
+    "storage_verification": {
+      "calls": 10,
+      "rows": 10,
+      "shared_blks_hit": 371258,
+      "shared_blks_read": 0,
+      "total_exec_time": 3150.132214000332
+    },
+    "task_authority": {
+      "calls": 6635,
+      "rows": 3765,
+      "shared_blks_hit": 448768,
+      "shared_blks_read": 0,
+      "total_exec_time": 3836.1422269994196
+    },
+    "query_text_unavailable": {
+      "calls": 144,
+      "rows": 216,
+      "shared_blks_hit": 7488,
+      "shared_blks_read": 0,
+      "total_exec_time": 863.772043999983
+    }
+  },
+  "hot_statements": [
+    {
+      "query_id": "981175127720773589",
+      "role_id": "19460",
+      "category": "jobs",
+      "calls": 346,
+      "rows": 346,
+      "shared_blks_hit": 20774,
+      "shared_blks_read": 0,
+      "total_exec_time": 6996.3988299984485
+    },
+    {
+      "query_id": "1404192655550042779",
+      "role_id": "19460",
+      "category": "ownership",
+      "calls": 686,
+      "rows": 686,
+      "shared_blks_hit": 3432,
+      "shared_blks_read": 0,
+      "total_exec_time": 4936.702490004711
+    },
+    {
+      "query_id": "9186173252985059441",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 12,
+      "rows": 47351,
+      "shared_blks_hit": 24,
+      "shared_blks_read": 0,
+      "total_exec_time": 4246.95057
+    },
+    {
+      "query_id": "2335570116778969100",
+      "role_id": "19460",
+      "category": "jobs",
+      "calls": 346,
+      "rows": 346,
+      "shared_blks_hit": 18272,
+      "shared_blks_read": 0,
+      "total_exec_time": 3945.0484989965335
+    },
+    {
+      "query_id": "-6236800985948537238",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 1259,
+      "rows": 0,
+      "shared_blks_hit": 250541,
+      "shared_blks_read": 0,
+      "total_exec_time": 2717.978915001964
+    },
+    {
+      "query_id": "-5766153685877259453",
+      "role_id": "19460",
+      "category": "ownership",
+      "calls": 3873,
+      "rows": 3873,
+      "shared_blks_hit": 19631,
+      "shared_blks_read": 0,
+      "total_exec_time": 2262.3928999989294
+    },
+    {
+      "query_id": "2105318101366116433",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 1259,
+      "rows": 1259,
+      "shared_blks_hit": 250541,
+      "shared_blks_read": 0,
+      "total_exec_time": 1962.0872259996831
+    },
+    {
+      "query_id": "-616299888709632132",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 343,
+      "rows": 21952,
+      "shared_blks_hit": 311483,
+      "shared_blks_read": 0,
+      "total_exec_time": 1841.9902080004103
+    },
+    {
+      "query_id": "2874725820457403514",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 142,
+      "rows": 142,
+      "shared_blks_hit": 35340,
+      "shared_blks_read": 0,
+      "total_exec_time": 1791.5547409999854
+    },
+    {
+      "query_id": "-384928606627126868",
+      "role_id": "19460",
+      "category": "storage_verification",
+      "calls": 5,
+      "rows": 5,
+      "shared_blks_hit": 201634,
+      "shared_blks_read": 0,
+      "total_exec_time": 1780.1970209999708
+    },
+    {
+      "query_id": "-4933763322305680563",
+      "role_id": "19460",
+      "category": "jobs",
+      "calls": 31,
+      "rows": 31,
+      "shared_blks_hit": 316746,
+      "shared_blks_read": 0,
+      "total_exec_time": 1639.8083419998875
+    },
+    {
+      "query_id": "4855846349653890910",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 346,
+      "rows": 346,
+      "shared_blks_hit": 3581,
+      "shared_blks_read": 0,
+      "total_exec_time": 1639.6049509965815
+    },
+    {
+      "query_id": "-6914359962200327536",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 508,
+      "rows": 508,
+      "shared_blks_hit": 2023,
+      "shared_blks_read": 0,
+      "total_exec_time": 1447.6062079975381
+    },
+    {
+      "query_id": "-8163735404610229139",
+      "role_id": "19460",
+      "category": "storage_verification",
+      "calls": 5,
+      "rows": 5,
+      "shared_blks_hit": 169624,
+      "shared_blks_read": 0,
+      "total_exec_time": 1369.9351930003613
+    },
+    {
+      "query_id": "7630406300534073505",
+      "role_id": "19460",
+      "category": "other",
+      "calls": 48,
+      "rows": 48,
+      "shared_blks_hit": 0,
+      "shared_blks_read": 0,
+      "total_exec_time": 1326.4795279997634
+    },
+    {
+      "query_id": "-7670412275880692222",
+      "role_id": "19460",
+      "category": "jobs",
+      "calls": 183,
+      "rows": 183,
+      "shared_blks_hit": 10297,
+      "shared_blks_read": 0,
+      "total_exec_time": 1233.9668480013497
+    },
+    {
+      "query_id": "-4048039950269809038",
+      "role_id": "19460",
+      "category": "jobs",
+      "calls": 59,
+      "rows": 59,
+      "shared_blks_hit": 2551,
+      "shared_blks_read": 0,
+      "total_exec_time": 1012.2863680003211
+    },
+    {
+      "query_id": "-4047740668875744484",
+      "role_id": "19460",
+      "category": "jobs",
+      "calls": 2523,
+      "rows": 0,
+      "shared_blks_hit": 377878,
+      "shared_blks_read": 0,
+      "total_exec_time": 938.820719003561
+    },
+    {
+      "query_id": "3580338117799337276",
+      "role_id": "19460",
+      "category": "task_authority",
+      "calls": 2523,
+      "rows": 346,
+      "shared_blks_hit": 350215,
+      "shared_blks_read": 0,
+      "total_exec_time": 885.0510770006222
+    },
+    {
+      "query_id": null,
+      "role_id": "10",
+      "category": "query_text_unavailable",
+      "calls": 144,
+      "rows": 216,
+      "shared_blks_hit": 7488,
+      "shared_blks_read": 0,
+      "total_exec_time": 863.772043999983
+    }
+  ],
+  "snapshots": [
+    {
+      "index": 0,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:28:01.787701Z",
+      "statement_count": 3945,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -7.301983,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -36.495604,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:29:02.222062Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -3.511091,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 19.471683,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 3,
+          "oldest_due_seconds": -6.255036,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -21.571221,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:30:02.666218Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 12,
+          "oldest_due_seconds": 21.570686,
+          "queue": "people_network",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": -8.352008,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 18.604024,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 3,
+          "oldest_due_seconds": -1.272938,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -40.733364,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:31:03.071432Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": -67.367503,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -41.272124,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:32:03.457510Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": 9.033297,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -6.981855,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": 3.503239,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:33:03.853480Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": -16.928271,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 7.796302,
+          "queue": "runtime_provider_account",
+          "status": "running"
+        },
+        {
+          "count": 18,
+          "oldest_due_seconds": -43.194198,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 0.443537,
+          "queue": "runtime_recurring",
+          "status": "running"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:34:04.282726Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": -18.036792,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 7.054432,
+          "queue": "runtime_provider_account",
+          "status": "running"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": 0.363339,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:35:04.670200Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -0.627541,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 11.677502,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 3,
+          "oldest_due_seconds": -5.774333,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": 0.751499,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:36:05.086657Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -5.397843,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 6.524135,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -18.235227,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": 0.709639,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:37:05.545138Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -5.503339,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 28.821098,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 3,
+          "oldest_due_seconds": 3.510326,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 3.510329,
+          "queue": "runtime_provider_account",
+          "status": "running"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -0.087272,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "idle in transaction",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:38:06.059579Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": 0.226269,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 3.104043,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 3,
+          "oldest_due_seconds": 3.104047,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 3.104048,
+          "queue": "runtime_provider_account",
+          "status": "running"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -2.763681,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:39:06.526105Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": 1.992924,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 4,
+          "oldest_due_seconds": 1.992948,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 1.992952,
+          "queue": "runtime_provider_account",
+          "status": "running"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -3.000934,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": "IO"
+        },
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T22:40:06.940393Z",
+      "statement_count": 3946,
+      "statement_chunks": 40,
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 8,
+          "oldest_due_seconds": 23.849222,
+          "queue": "people_network",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 1.178495,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 7,
+          "oldest_due_seconds": 1.178499,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -3.280676,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "idle in transaction",
+          "wait_event_type": "Client"
+        }
+      ]
+    }
+  ],
+  "limitation": "Read-only baseline under organic production activity, not sustained synthetic load or an end-to-end latency/cost result. Categories are heuristic.",
+  "aggregation_note": "Repeated visible query IDs and redacted query IDs are summed by role and category before differencing. This corrects the original overwrite of redacted rows."
+}

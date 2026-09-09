@@ -72,10 +72,25 @@ defmodule Maraithon.Tools.GmailDrafts do
   end
 
   defp send_draft(args) do
-    with {:ok, draft_id} <- ActionHelpers.required_string(args, "draft_id") do
-      case GmailApiHelpers.request(args, :post, "/users/me/drafts/send", %{id: draft_id}) do
+    with {:ok, body} <- send_body(args) do
+      draft_id = body.id
+
+      case GmailApiHelpers.request(args, :post, "/users/me/drafts/send", body) do
         {:ok, message} -> {:ok, %{source: "gmail", draft_id: draft_id, message: message}}
         {:error, reason} -> GmailApiHelpers.normalize_error(reason)
+      end
+    end
+  end
+
+  @doc false
+  def send_body(args) do
+    with {:ok, draft_id} <- ActionHelpers.required_string(args, "draft_id") do
+      if args["send_frozen_content"] == true do
+        # Gmail accepts replacement MIME in the send request. This removes the
+        # mutable-draft gap between an update and a separate send operation.
+        with {:ok, body} <- draft_body(args), do: {:ok, Map.put(body, :id, draft_id)}
+      else
+        {:ok, %{id: draft_id}}
       end
     end
   end
@@ -95,6 +110,7 @@ defmodule Maraithon.Tools.GmailDrafts do
          {:ok, text_body} <- ActionHelpers.required_string(args, "body") do
       raw =
         GmailApiHelpers.raw_message(to, subject, text_body,
+          message_id_header: ActionHelpers.optional_string(args, "message_id_header"),
           cc: ActionHelpers.optional_string(args, "cc"),
           bcc: ActionHelpers.optional_string(args, "bcc"),
           in_reply_to: ActionHelpers.optional_string(args, "in_reply_to"),

@@ -4,6 +4,7 @@ import SwiftUI
 enum AppTab: Hashable {
     case today
     case todos
+    case people
     case chat
 }
 
@@ -40,6 +41,9 @@ struct AppShellView: View {
 
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: .chat) {
                 ChatThreadsView()
+            }
+            Tab("People", systemImage: "person.2", value: .people) {
+                CRMView()
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)

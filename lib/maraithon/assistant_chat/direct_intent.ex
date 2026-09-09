@@ -55,9 +55,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
                            "snooze",
                            "snooze this",
                            "snooze this todo",
-                           "remind me tomorrow",
-                           "tomorrow",
-                           "later"
+                           "remind me tomorrow"
                          ])
 
   @fast_chat_replies %{
@@ -400,7 +398,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   end
 
   defp linked_todo_action(text, %Conversation{} = conversation) do
-    if linked_todo_id(conversation) do
+    if is_binary(linked_todo_id(conversation)) and not String.contains?(text, "?") do
       text
       |> normalize_fast_chat_text()
       |> classify_linked_todo_action()
@@ -409,40 +407,14 @@ defmodule Maraithon.AssistantChat.DirectIntent do
     end
   end
 
+  # Only complete, explicit commands can bypass model interpretation. A date,
+  # a quoted action, or a negation in a larger request is not a mutation.
   defp classify_linked_todo_action(normalized) do
     cond do
-      MapSet.member?(@linked_done_phrases, normalized) ->
-        {:ok, :done}
-
-      Regex.match?(
-        ~r/\b(mark|set|move)\b.*\b(done|complete|completed|handled|resolved)\b/u,
-        normalized
-      ) ->
-        {:ok, :done}
-
-      Regex.match?(
-        ~r/\b(this|it)\b.*\b(is|was)\b.*\b(done|complete|completed|handled|resolved)\b/u,
-        normalized
-      ) ->
-        {:ok, :done}
-
-      MapSet.member?(@linked_dismiss_phrases, normalized) ->
-        {:ok, :dismiss}
-
-      Regex.match?(~r/\b(dismiss|delete|remove)\b.*\b(this|todo|task|work item)\b/u, normalized) ->
-        {:ok, :dismiss}
-
-      Regex.match?(~r/\b(no longer relevant|not relevant|irrelevant)\b/u, normalized) ->
-        {:ok, :dismiss}
-
-      MapSet.member?(@linked_snooze_phrases, normalized) ->
-        {:ok, :snooze}
-
-      Regex.match?(~r/\b(snooze|remind me|later|tomorrow)\b/u, normalized) ->
-        {:ok, :snooze}
-
-      true ->
-        :nomatch
+      MapSet.member?(@linked_done_phrases, normalized) -> {:ok, :done}
+      MapSet.member?(@linked_dismiss_phrases, normalized) -> {:ok, :dismiss}
+      MapSet.member?(@linked_snooze_phrases, normalized) -> {:ok, :snooze}
+      true -> :nomatch
     end
   end
 

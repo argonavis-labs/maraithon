@@ -1,0 +1,2634 @@
+{
+  "kind": "sustained_runtime_database_measurement",
+  "execution": "maraithon-todo-validation-xxr45",
+  "sample_count": 13,
+  "chunks_validated": 520,
+  "statistics": [
+    {
+      "dealloc": 0,
+      "stats_reset": "2026-08-28T16:32:45.365479Z"
+    }
+  ],
+  "whole_window": {
+    "start": "2026-09-08T23:06:30.783022Z",
+    "end": "2026-09-08T23:18:36.158005Z",
+    "calls": 171330,
+    "total_statement_ms": 106467.64239001335,
+    "categories": {
+      "other": {
+        "calls": 137971,
+        "total_statement_ms": 48350.89024200914
+      },
+      "jobs": {
+        "calls": 5389,
+        "total_statement_ms": 21397.39504899741
+      },
+      "ownership": {
+        "calls": 17591,
+        "total_statement_ms": 22968.419993004332
+      },
+      "conversation": {
+        "calls": 2413,
+        "total_statement_ms": 3827.3689469999917
+      },
+      "task_authority": {
+        "calls": 7810,
+        "total_statement_ms": 4813.257675003181
+      },
+      "storage_verification": {
+        "calls": 12,
+        "total_statement_ms": 4162.33799599926
+      },
+      "query_text_unavailable": {
+        "calls": 144,
+        "total_statement_ms": 947.9724880000576
+      }
+    },
+    "top_statements": [
+      {
+        "query_id": "1404192655550042779",
+        "role_id": "19460",
+        "category": "ownership",
+        "calls": 772,
+        "total_statement_ms": 16977.147936004214
+      },
+      {
+        "query_id": "981175127720773589",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 347,
+        "total_statement_ms": 8836.318990999833
+      },
+      {
+        "query_id": "-6914359962200327536",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 1038,
+        "total_statement_ms": 7107.645375000779
+      },
+      {
+        "query_id": "2335570116778969100",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 348,
+        "total_statement_ms": 4287.061028998345
+      },
+      {
+        "query_id": "9186173252985059441",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 12,
+        "total_statement_ms": 4182.231486
+      },
+      {
+        "query_id": "2874725820457403514",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 161,
+        "total_statement_ms": 3323.1950419999775
+      },
+      {
+        "query_id": "4855846349653890910",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 348,
+        "total_statement_ms": 3148.1294230083004
+      },
+      {
+        "query_id": "4597665286316384479",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 279,
+        "total_statement_ms": 3113.738747999829
+      },
+      {
+        "query_id": "-6236800985948537238",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 1288,
+        "total_statement_ms": 2863.873664001003
+      },
+      {
+        "query_id": "-5766153685877259453",
+        "role_id": "19460",
+        "category": "ownership",
+        "calls": 3563,
+        "total_statement_ms": 2792.129408001201
+      },
+      {
+        "query_id": "-384928606627126868",
+        "role_id": "19460",
+        "category": "storage_verification",
+        "calls": 5,
+        "total_statement_ms": 2096.4705439999234
+      },
+      {
+        "query_id": "2105318101366116433",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 1288,
+        "total_statement_ms": 2095.9284360003658
+      },
+      {
+        "query_id": "-8163735404610229139",
+        "role_id": "19460",
+        "category": "storage_verification",
+        "calls": 7,
+        "total_statement_ms": 2065.8674519993365
+      },
+      {
+        "query_id": "4966440990251341828",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 220,
+        "total_statement_ms": 2043.4515759998467
+      },
+      {
+        "query_id": "-616299888709632132",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 321,
+        "total_statement_ms": 1716.1920209997334
+      },
+      {
+        "query_id": "-4933763322305680563",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 34,
+        "total_statement_ms": 1679.5566989998915
+      },
+      {
+        "query_id": "-7670412275880692222",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 197,
+        "total_statement_ms": 1521.3228689979296
+      },
+      {
+        "query_id": "-7278400749596540891",
+        "role_id": "19460",
+        "category": "ownership",
+        "calls": 1629,
+        "total_statement_ms": 1381.4799280000152
+      },
+      {
+        "query_id": "7630406300534073505",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 50,
+        "total_statement_ms": 1275.6426959998207
+      },
+      {
+        "query_id": "-4048039950269809038",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 70,
+        "total_statement_ms": 1266.0264730020426
+      }
+    ],
+    "verification_share_percent": 3.9094863965821096
+  },
+  "after_rollout": {
+    "start": "2026-09-08T23:09:32.232447Z",
+    "end": "2026-09-08T23:18:36.158005Z",
+    "calls": 126747,
+    "total_statement_ms": 67885.82477400731,
+    "categories": {
+      "other": {
+        "calls": 101002,
+        "total_statement_ms": 29919.990284009153
+      },
+      "jobs": {
+        "calls": 4305,
+        "total_statement_ms": 15793.12971699461
+      },
+      "ownership": {
+        "calls": 13494,
+        "total_statement_ms": 12627.418731001671
+      },
+      "conversation": {
+        "calls": 1714,
+        "total_statement_ms": 2545.8121379999907
+      },
+      "storage_verification": {
+        "calls": 9,
+        "total_statement_ms": 2862.857026998303
+      },
+      "task_authority": {
+        "calls": 6115,
+        "total_statement_ms": 3435.1541150037774
+      },
+      "query_text_unavailable": {
+        "calls": 108,
+        "total_statement_ms": 701.4627619998064
+      }
+    },
+    "top_statements": [
+      {
+        "query_id": "1404192655550042779",
+        "role_id": "19460",
+        "category": "ownership",
+        "calls": 506,
+        "total_statement_ms": 8690.504976000637
+      },
+      {
+        "query_id": "981175127720773589",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 280,
+        "total_statement_ms": 6214.482561999932
+      },
+      {
+        "query_id": "-6914359962200327536",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 774,
+        "total_statement_ms": 3619.3444430017844
+      },
+      {
+        "query_id": "2335570116778969100",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 281,
+        "total_statement_ms": 3335.0175849972293
+      },
+      {
+        "query_id": "9186173252985059441",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 9,
+        "total_statement_ms": 2971.3386490000003
+      },
+      {
+        "query_id": "2874725820457403514",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 118,
+        "total_statement_ms": 2343.9868399999978
+      },
+      {
+        "query_id": "-6236800985948537238",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 936,
+        "total_statement_ms": 2079.593247999437
+      },
+      {
+        "query_id": "-5766153685877259453",
+        "role_id": "19460",
+        "category": "ownership",
+        "calls": 2888,
+        "total_statement_ms": 2002.724528002087
+      },
+      {
+        "query_id": "4855846349653890910",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 281,
+        "total_statement_ms": 1599.4653600067832
+      },
+      {
+        "query_id": "-384928606627126868",
+        "role_id": "19460",
+        "category": "storage_verification",
+        "calls": 4,
+        "total_statement_ms": 1547.1483699999517
+      },
+      {
+        "query_id": "2105318101366116433",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 935,
+        "total_statement_ms": 1536.5484160006745
+      },
+      {
+        "query_id": "4597665286316384479",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 182,
+        "total_statement_ms": 1533.868536999944
+      },
+      {
+        "query_id": "-616299888709632132",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 253,
+        "total_statement_ms": 1470.4225330003537
+      },
+      {
+        "query_id": "-8163735404610229139",
+        "role_id": "19460",
+        "category": "storage_verification",
+        "calls": 5,
+        "total_statement_ms": 1315.7086569983512
+      },
+      {
+        "query_id": "-4933763322305680563",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 25,
+        "total_statement_ms": 1166.4040089998161
+      },
+      {
+        "query_id": "4966440990251341828",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 149,
+        "total_statement_ms": 1144.1583519997075
+      },
+      {
+        "query_id": "-7670412275880692222",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 158,
+        "total_statement_ms": 1072.0839319985826
+      },
+      {
+        "query_id": "-4048039950269809038",
+        "role_id": "19460",
+        "category": "jobs",
+        "calls": 53,
+        "total_statement_ms": 980.654912000522
+      },
+      {
+        "query_id": "7630406300534073505",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 36,
+        "total_statement_ms": 948.174752999912
+      },
+      {
+        "query_id": "1297766673341939570",
+        "role_id": "19460",
+        "category": "other",
+        "calls": 49,
+        "total_statement_ms": 862.8159890000825
+      }
+    ],
+    "verification_share_percent": 4.217164682802023
+  },
+  "samples": [
+    {
+      "index": 0,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:06:30.783022Z",
+      "statement_count": 3970,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 1,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:07:20.284485",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:07:27.310577",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:06:41.425917",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:07:03.942904",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:06:42.429546",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:09:47.451272",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:06:43.670694",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:09:40.817212",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:07:18.204190",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:07:24.207920",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:06:38.606925",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:07:16.174177",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:07:20.839894",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": 22.582678,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -0.401921,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -7.728164,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 37,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:07:31.318708Z",
+      "statement_count": 3977,
+      "statement_chunks": 40,
+      "assignments": [],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:07:20.284485",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:07:27.310577",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:07:43.624584",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:07:03.942904",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:07:44.689687",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:09:47.451272",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:07:45.885979",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:09:40.817212",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:07:18.204190",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:07:24.207920",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:07:40.746145",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:07:16.174177",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:07:20.839894",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 24,
+          "state": "unassigned"
+        },
+        {
+          "count": 40,
+          "state": "draining"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": 51.234063,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -1.099204,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": 27.428617,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 52,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:08:31.799368Z",
+      "statement_count": 3979,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 1,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:09:06.682865",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:09:10.435652",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:09:14.103771",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:13:01.903419",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:09:15.254310",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:09:47.451272",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:09:17.016131",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:09:40.817212",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:09:04.834224",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:09:09.196412",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:09:12.572537",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:13:03.167846",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:13:07.988862",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 4,
+          "state": "preparing"
+        },
+        {
+          "count": 12,
+          "state": "unassigned"
+        },
+        {
+          "count": 48,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": 57.077926,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 99.854011,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -21.588749,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -32.98334,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "idle in transaction",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:09:32.232447Z",
+      "statement_count": 3980,
+      "statement_chunks": 40,
+      "assignments": [],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:10:07.247602",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:10:11.809212",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:10:15.437468",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:13:01.903419",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:10:17.805056",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:09:47.451272",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:10:19.051147",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:09:40.817212",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:10:06.674308",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:10:10.582851",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:10:14.276794",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:13:03.167846",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:13:07.988862",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": -96.125384,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -8.535876,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:10:32.721644Z",
+      "statement_count": 3991,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 1,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:11:09.261895",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:11:12.804479",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:11:18.734163",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:13:01.903419",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:11:19.848731",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:11:21.075576",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:11:08.295171",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:11:11.556301",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:11:15.763452",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:13:03.167846",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:13:07.988862",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": 1.319097,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 4,
+          "oldest_due_seconds": -6.491034,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -35.516383,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        },
+        {
+          "count": 1,
+          "state": "idle in transaction",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:11:33.169955Z",
+      "statement_count": 3996,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 1,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:12:11.963985",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:12:14.333074",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:12:19.325883",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:13:01.903419",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:12:20.347050",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:12:23.638655",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:12:09.576404",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:12:13.135184",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:12:17.196537",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:13:03.167846",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:13:07.988862",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": 14.771267,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": -80.985119,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -36.358547,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:12:33.587938Z",
+      "statement_count": 3996,
+      "statement_chunks": 40,
+      "assignments": [],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:13:14.105766",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:13:17.578007",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:13:20.359418",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:13:01.903419",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:13:21.449381",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:13:24.807243",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:13:11.125991",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:13:15.665296",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:13:19.744723",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:13:03.167846",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:13:07.988862",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -20.570477,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -28.270908,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:13:33.995573Z",
+      "statement_count": 3996,
+      "statement_chunks": 40,
+      "assignments": [],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:14:15.332352",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:14:18.986738",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:14:21.475189",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:18:03.084761",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:14:23.668702",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:14:27.001952",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:14:13.336678",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:14:16.529254",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:14:20.766641",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:18:04.272757",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:18:08.711912",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -11.345386,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -39.292595,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:14:34.391540Z",
+      "statement_count": 3996,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 2,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:15:17.000152",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:15:20.775024",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:15:27.668132",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:18:03.084761",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:15:28.648603",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:15:30.931522",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:14:32.264612",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:15:15.122652",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:15:19.451339",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:15:23.889706",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:18:04.272757",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:18:08.711912",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -5.59508,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 11.472824,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -4.408446,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": 2.172651,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:15:34.848318Z",
+      "statement_count": 3996,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 3,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:16:17.451830",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:16:21.179666",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:16:28.915655",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:18:03.084761",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:16:30.060323",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:16:32.417992",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:29:36.564913",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:16:16.644833",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:16:19.962246",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:16:24.996474",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:18:04.272757",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:18:08.711912",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": -5.386327,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 30.542227,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": -73.676226,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -41.751341,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:16:35.213242Z",
+      "statement_count": 3997,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 2,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:17:20.638299",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:17:24.060000",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:17:29.690609",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:18:03.084761",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:17:30.821778",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:17:33.153682",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:29:36.564913",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:17:18.269888",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:17:21.812740",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:17:26.892800",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:18:04.272757",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:18:08.711912",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -9.576061,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 13.598711,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -2.419454,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -43.005423,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 2,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:17:35.667445Z",
+      "statement_count": 3998,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 2,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:18:21.278529",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:18:24.769861",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:18:30.723600",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:18:03.084761",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:18:32.825967",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:18:34.062767",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:29:36.564913",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:18:19.014122",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:18:22.493731",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:18:28.606204",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:18:04.272757",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:18:08.711912",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 1,
+          "oldest_due_seconds": -7.58286,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": 7.659462,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 2,
+          "oldest_due_seconds": -8.736745,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -27.364437,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 1,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 35,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "statistics": [
+        {
+          "dealloc": 0,
+          "stats_reset": "2026-08-28T16:32:45.365479Z"
+        }
+      ],
+      "at": "2026-09-08T23:18:36.158005Z",
+      "statement_count": 3998,
+      "statement_chunks": 40,
+      "assignments": [
+        {
+          "count": 1,
+          "state": "running"
+        }
+      ],
+      "recurring": [
+        {
+          "id": "3399038e-dee4-48b4-9cb5-fa7b8f0a8e6d",
+          "job_type": "runtime_recurring:assistant_run_recovery",
+          "scheduled_at": "2026-09-08T23:19:22.295224",
+          "status": "pending"
+        },
+        {
+          "id": "8820baf0-58e1-43b3-972c-d59fa287f3b3",
+          "job_type": "runtime_recurring:briefing_cron",
+          "scheduled_at": "2026-09-08T23:19:25.832172",
+          "status": "pending"
+        },
+        {
+          "id": "7a8571d4-6bf9-4020-83df-19dec84a64aa",
+          "job_type": "runtime_recurring:brief_notifier",
+          "scheduled_at": "2026-09-08T23:19:32.572401",
+          "status": "pending"
+        },
+        {
+          "id": "e361bf76-c121-44bb-b691-5851e6084d68",
+          "job_type": "runtime_recurring:critical_todo_push",
+          "scheduled_at": "2026-09-08T23:23:04.411857",
+          "status": "pending"
+        },
+        {
+          "id": "61e640a0-568d-4f7a-8a57-ecb0c77095ef",
+          "job_type": "runtime_recurring:dogfood_digest",
+          "scheduled_at": "2026-09-09T11:30:00.000000",
+          "status": "pending"
+        },
+        {
+          "id": "42a58aa7-f7e9-409c-8ba5-8b9aa5a49111",
+          "job_type": "runtime_recurring:freshness_sweep",
+          "scheduled_at": "2026-09-08T23:55:25.636681",
+          "status": "pending"
+        },
+        {
+          "id": "ac8ab32a-f921-4660-b791-7dc27a95bf80",
+          "job_type": "runtime_recurring:insight_notifier",
+          "scheduled_at": "2026-09-08T23:19:33.729042",
+          "status": "pending"
+        },
+        {
+          "id": "0c2b364f-19a2-429c-85cd-5f55cc65c016",
+          "job_type": "runtime_recurring:nudge_sweep",
+          "scheduled_at": "2026-09-08T23:28:52.283446",
+          "status": "pending"
+        },
+        {
+          "id": "3d1a8274-db76-4036-b55c-525d719513ee",
+          "job_type": "runtime_recurring:people_network_discovery",
+          "scheduled_at": "2026-09-08T23:19:50.210813",
+          "status": "pending"
+        },
+        {
+          "id": "07a99591-7217-4767-868e-9c4eaf879be0",
+          "job_type": "runtime_recurring:privacy_erasure_discovery",
+          "scheduled_at": "2026-09-08T23:19:36.036256",
+          "status": "pending"
+        },
+        {
+          "id": "128022ef-dd80-469a-bd0c-48c76c1cdfea",
+          "job_type": "runtime_recurring:privacy_retention",
+          "scheduled_at": "2026-09-08T23:29:36.564913",
+          "status": "pending"
+        },
+        {
+          "id": "f432eefe-8b4e-4a97-8f3d-08084b122e43",
+          "job_type": "runtime_recurring:proactive_check_in",
+          "scheduled_at": "2026-09-08T23:19:42.919157",
+          "status": "pending"
+        },
+        {
+          "id": "66ccac5c-8344-4a55-b9ff-8d4aeefdb9e1",
+          "job_type": "runtime_recurring:source_account_discovery",
+          "scheduled_at": "2026-09-08T23:19:20.096341",
+          "status": "pending"
+        },
+        {
+          "id": "e734fb7f-ebbb-4012-b342-c480644dad9a",
+          "job_type": "runtime_recurring:staleness_triage_sweep",
+          "scheduled_at": "2026-09-09T14:59:21.353399",
+          "status": "pending"
+        },
+        {
+          "id": "a2a1283b-b79a-4893-b60e-952d82d4ab25",
+          "job_type": "runtime_recurring:telegram_run_reaper",
+          "scheduled_at": "2026-09-08T23:19:23.518931",
+          "status": "pending"
+        },
+        {
+          "id": "c61f959e-ad15-407d-9fd0-d83de00c895c",
+          "job_type": "runtime_recurring:todo_completion_sweep",
+          "scheduled_at": "2026-09-08T23:19:29.740600",
+          "status": "pending"
+        },
+        {
+          "id": "4c7dec31-d685-4370-bcbd-d6b12c08ba3f",
+          "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+          "scheduled_at": "2026-09-08T23:23:05.591332",
+          "status": "pending"
+        },
+        {
+          "id": "624e2249-7f31-4a9a-8532-848236e99ac0",
+          "job_type": "runtime_recurring:token_refresher",
+          "scheduled_at": "2026-09-08T23:23:10.032030",
+          "status": "pending"
+        },
+        {
+          "id": "59db46aa-13a5-48b3-acd8-63e08d69b30f",
+          "job_type": "runtime_recurring:watch_renewer",
+          "scheduled_at": "2026-09-08T23:28:54.525732",
+          "status": "pending"
+        }
+      ],
+      "partitions": [
+        {
+          "count": 64,
+          "state": "ready"
+        }
+      ],
+      "jobs": [
+        {
+          "count": 2,
+          "oldest_due_seconds": -0.069648,
+          "queue": "runtime_model_user",
+          "status": "pending"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": 12.52648,
+          "queue": "runtime_model_user",
+          "status": "running"
+        },
+        {
+          "count": 1,
+          "oldest_due_seconds": -135.167296,
+          "queue": "runtime_provider_account",
+          "status": "pending"
+        },
+        {
+          "count": 19,
+          "oldest_due_seconds": -43.888531,
+          "queue": "runtime_recurring",
+          "status": "pending"
+        }
+      ],
+      "activity": [
+        {
+          "count": 2,
+          "state": "active",
+          "wait_event_type": null
+        },
+        {
+          "count": 34,
+          "state": "idle",
+          "wait_event_type": "Client"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Aggregate statement time is not CPU utilisation. Nested statements and the collector are included.",
+    "Redacted query IDs are summed by role and category; duplicate visible IDs are also summed before differencing.",
+    "Single-user representative activity including a deployment, not a multi-tenant capacity or saturation test.",
+    "One-minute database snapshots cannot establish the maximum between samples."
+  ]
+}

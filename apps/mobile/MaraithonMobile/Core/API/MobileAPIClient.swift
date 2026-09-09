@@ -1,4 +1,5 @@
 import Foundation
+import AssistantProgressKit
 
 enum MobileAPIError: LocalizedError, Equatable, Sendable {
     case invalidRequest
@@ -284,6 +285,7 @@ struct MobileAPIClient: Sendable {
         let ownerLabel: String?
         let priority: Int?
         let status: String
+        let workflow: TodoWorkflow?
         let snoozedUntil: Date?
         let closedAt: Date?
         let resolutionNote: String?
@@ -309,6 +311,7 @@ struct MobileAPIClient: Sendable {
             case ownerLabel = "owner_label"
             case priority
             case status
+            case workflow
             case snoozedUntil = "snoozed_until"
             case closedAt = "closed_at"
             case metadata
@@ -335,6 +338,7 @@ struct MobileAPIClient: Sendable {
             ownerLabel = try container.decodeIfPresent(String.self, forKey: .ownerLabel)
             priority = try container.decodeIfPresent(Int.self, forKey: .priority)
             status = try container.decode(String.self, forKey: .status)
+            workflow = try container.decodeIfPresent(TodoWorkflow.self, forKey: .workflow)
             snoozedUntil = try container.decodeIfPresent(Date.self, forKey: .snoozedUntil)
             closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
             resolutionNote = try container.decodeIfPresent(ResolutionMetadata.self, forKey: .metadata)?.note
@@ -370,6 +374,7 @@ struct MobileAPIClient: Sendable {
             brief: RemoteTodoBrief? = nil,
             actionCard: RemoteActionCard? = nil,
             hasActionCardField: Bool = true,
+            workflow: TodoWorkflow? = nil,
             relatedPeople: [RemoteRelatedPerson] = []
         ) {
             self.id = id
@@ -395,6 +400,7 @@ struct MobileAPIClient: Sendable {
             self.actionCard = actionCard
             self.hasActionCardField = hasActionCardField
             self.relatedPeople = relatedPeople
+            self.workflow = workflow
         }
 
         private struct ResolutionMetadata: Decodable {
@@ -407,6 +413,12 @@ struct MobileAPIClient: Sendable {
     }
 
     struct RemoteTodoBrief: Decodable, Equatable, Sendable {
+        let summary: String?
+        let doneWhen: String?
+        let involvement: String?
+        let call: TodoCallAction?
+        let people: [TodoWorkspacePerson]?
+        let suggestedActions: [TodoWorkspaceAction]?
         let whyItMatters: String?
         let situation: String?
         let recommendation: String?
@@ -417,6 +429,9 @@ struct MobileAPIClient: Sendable {
         let model: String?
 
         enum CodingKeys: String, CodingKey {
+            case summary, involvement, call, people
+            case doneWhen = "done_when"
+            case suggestedActions = "suggested_actions"
             case whyItMatters = "why_it_matters"
             case situation
             case recommendation
@@ -429,6 +444,12 @@ struct MobileAPIClient: Sendable {
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
+            summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            doneWhen = try container.decodeIfPresent(String.self, forKey: .doneWhen)
+            involvement = try container.decodeIfPresent(String.self, forKey: .involvement)
+            call = try container.decodeIfPresent(TodoCallAction.self, forKey: .call)
+            people = try container.decodeIfPresent([TodoWorkspacePerson].self, forKey: .people)
+            suggestedActions = try container.decodeIfPresent([TodoWorkspaceAction].self, forKey: .suggestedActions)
             whyItMatters = try container.decodeIfPresent(String.self, forKey: .whyItMatters)
             situation = try container.decodeIfPresent(String.self, forKey: .situation)
             recommendation = try container.decodeIfPresent(String.self, forKey: .recommendation)
@@ -1325,12 +1346,29 @@ struct MobileAPIClient: Sendable {
         return response.todo
     }
 
+    func transitionTodo(sessionToken: String, id: UUID, change: TodoWorkflowChange) async throws -> RemoteTodo {
+        let payload = try JSONDecoder().decode(RequestBody.self, from: JSONEncoder().encode(change))
+        let response: TodoResponse = try await send(path: "/todos/\(id.uuidString.lowercased())/workflow", method: "POST",
+            sessionToken: sessionToken, body: payload, responseType: TodoResponse.self)
+        return response.todo
+    }
+
     func updateTodo(sessionToken: String, id: UUID, payload: RequestBody) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
             path: "/todos/\(id.uuidString.lowercased())?include_cards=true",
             method: "PATCH",
             sessionToken: sessionToken,
             body: ["todo": .object(payload)],
+            responseType: TodoResponse.self
+        )
+        return response.todo
+    }
+
+    func getTodo(sessionToken: String, id: UUID) async throws -> RemoteTodo {
+        let response: TodoResponse = try await send(
+            path: "/todos/\(id.uuidString.lowercased())?include_cards=true",
+            method: "GET",
+            sessionToken: sessionToken,
             responseType: TodoResponse.self
         )
         return response.todo

@@ -33,150 +33,162 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
              SourceCursors.get(account.id, "gmail_closure_watermark")
   end
 
-  test "non-empty closure delta stays sealed until account reasoning settles" do
-    account = closure_account("sealed")
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+  for timestamp_format <- [:integer, :string, :iso] do
+    @timestamp_format timestamp_format
+    test "non-empty closure delta stays sealed until account reasoning settles (#{timestamp_format})" do
+      account = closure_account("sealed")
+      # The source evidence must follow the todo capture boundary.
+      now = DateTime.utc_now() |> DateTime.add(60) |> DateTime.truncate(:second)
 
-    {:ok, [todo]} =
-      Todos.upsert_many(account.user_id, [
-        %{
-          "source" => "gmail",
-          "kind" => "gmail_triage",
-          "title" => "Reply to the account thread",
-          "summary" => "This stays open without exact completion evidence.",
-          "next_action" => "Reply to the thread.",
-          "priority" => 85,
-          "source_account_id" => account.id,
-          "source_item_id" => "closure-thread",
-          "dedupe_key" => "source-account-closure:sealed"
-        }
-      ])
+      {:ok, [todo]} =
+        Todos.upsert_many(account.user_id, [
+          %{
+            "source" => "gmail",
+            "kind" => "gmail_triage",
+            "title" => "Reply to the account thread",
+            "summary" => "This stays open without exact completion evidence.",
+            "next_action" => "Reply to the thread.",
+            "priority" => 85,
+            "source_account_id" => account.id,
+            "source_item_id" => "closure-thread",
+            "dedupe_key" => "source-account-closure:sealed"
+          }
+        ])
 
-    message = %{
-      "id" => "new-incoming-message",
-      "thread_id" => "other-thread",
-      "subject" => "Routine update",
-      "snippet" => "An update with no completion evidence.",
-      "body" => "An update with no completion evidence.",
-      "from" => "sender@example.com",
-      "to" => [account.user_id],
-      "label_ids" => ["INBOX"],
-      "internal_date" => DateTime.to_unix(now, :millisecond)
-    }
+      message = %{
+        "id" => "new-incoming-message",
+        "thread_id" => "other-thread",
+        "subject" => "Routine update",
+        "snippet" => "An update with no completion evidence.",
+        "body" => "An update with no completion evidence.",
+        "from" => "sender@example.com",
+        "to" => [account.user_id],
+        "label_ids" => ["INBOX"],
+        "internal_date" =>
+          case @timestamp_format do
+            :integer -> DateTime.to_unix(now, :millisecond)
+            :string -> now |> DateTime.to_unix(:millisecond) |> Integer.to_string()
+            :iso -> DateTime.to_iso8601(now)
+          end
+      }
 
-    bundle =
-      %{trigger: %{type: :wakeup}, timestamp: now}
-      |> SourceBundle.empty()
-      |> SourceBundle.put_gmail(%{
-        "messages" => [message],
-        "inbox_messages" => [message],
-        "sent_messages" => [],
-        "status" => "ready",
-        "fetched_at" => now
-      })
+      bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty()
+        |> SourceBundle.put_gmail(%{
+          "messages" => [message],
+          "inbox_messages" => [message],
+          "sent_messages" => [],
+          "status" => "ready",
+          "fetched_at" => now
+        })
 
-    assert {:ok,
-            %{
-              outcome: "fanout_ready",
-              handoffs: [handoff],
-              finalizer: finalizer,
-              source_items: 1,
-              fanout_count: 1
-            }} =
-             SourceAccountClosure.acquire(account,
-               source_bundle: bundle,
-               proposed_watermarks: [closure_watermark(account, "1700000300")],
-               acquisition_job_id: "closure-acquisition"
-             )
-
-    refute SourceCursors.get(account.id, "gmail_closure_watermark")
-    caller = self()
-
-    assert {:error, :cross_source_completion_incomplete_decisions} =
-             SourceAccountClosure.reason(account, handoff,
-               now: now,
-               llm_complete: fn _prompt ->
-                 {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
-               end
-             )
-
-    refute SourceCursors.get(account.id, "gmail_closure_watermark")
-
-    llm_complete = fn _prompt ->
-      send(caller, :model_called)
-
-      {:ok,
-       %{
-         content:
-           Jason.encode!(%{
-             "resolutions" => [
-               %{
-                 "todo_id" => todo.id,
-                 "completed" => false,
-                 "reasoning" => "No exact completion evidence is present."
-               }
-             ]
-           })
-       }}
-    end
-
-    assert {:ok,
-            child_result =
+      assert {:ok,
               %{
-                outcome: "evaluated",
-                account_id: account_id,
-                decision_count: 1,
-                fanout_index: 1,
-                fanout_count: 1,
-                result: %{coverage_complete?: true, model_calls: 1}
+                outcome: "fanout_ready",
+                handoffs: [handoff],
+                finalizer: finalizer,
+                source_items: 1,
+                fanout_count: 1
               }} =
-             SourceAccountClosure.reason(account, handoff,
-               now: now,
-               llm_complete: llm_complete
-             )
+               SourceAccountClosure.acquire(account,
+                 source_bundle: bundle,
+                 proposed_watermarks: [closure_watermark(account, "1700000300")],
+                 acquisition_job_id: "closure-acquisition"
+               )
 
-    assert account_id == account.id
-    assert_received :model_called
-    refute SourceCursors.get(account.id, "gmail_closure_watermark")
+      refute SourceCursors.get(account.id, "gmail_closure_watermark")
+      caller = self()
 
-    assert {:error, :source_closure_incomplete_decisions} =
-             SourceAccountClosure.finalize(account, finalizer, [
-               Map.put(child_result, :decision_refs, ["gmail:wrong-item"])
-             ])
+      assert {:error, :cross_source_completion_incomplete_decisions} =
+               SourceAccountClosure.reason(account, handoff,
+                 now: now,
+                 llm_complete: fn _prompt ->
+                   {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+                 end
+               )
 
-    tampered_manifest =
-      update_in(child_result.todo_decision_manifest, fn [entry] ->
-        [%{entry | action: "superseded"}]
-      end)
+      refute SourceCursors.get(account.id, "gmail_closure_watermark")
 
-    assert {:error, :source_closure_incomplete_decisions} =
-             SourceAccountClosure.finalize(
-               account,
-               finalizer,
-               [%{child_result | todo_decision_manifest: tampered_manifest}]
-             )
+      llm_complete = fn _prompt ->
+        send(caller, :model_called)
 
-    refute SourceCursors.get(account.id, "gmail_closure_watermark")
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "resolutions" => [
+                 %{
+                   "todo_id" => todo.id,
+                   "completed" => false,
+                   "reasoning" => "No exact completion evidence is present."
+                 }
+               ]
+             })
+         }}
+      end
 
-    assert {:ok,
-            %{
-              outcome: "finalized",
-              source_items: 1,
-              decision_count: 1,
-              fanout_count: 1,
-              model_calls: 1
-            }} = SourceAccountClosure.finalize(account, finalizer, [child_result])
+      assert {:ok,
+              child_result =
+                %{
+                  outcome: "evaluated",
+                  account_id: account_id,
+                  decision_count: 1,
+                  fanout_index: 1,
+                  fanout_count: 1,
+                  result: %{coverage_complete?: true, model_calls: 1}
+                }} =
+               SourceAccountClosure.reason(account, handoff,
+                 now: now,
+                 llm_complete: llm_complete
+               )
 
-    assert %{value: "1700000300"} =
-             SourceCursors.get(account.id, "gmail_closure_watermark")
+      assert account_id == account.id
+      assert_received :model_called
+      refute SourceCursors.get(account.id, "gmail_closure_watermark")
+
+      assert {:error, :source_closure_incomplete_decisions} =
+               SourceAccountClosure.finalize(account, finalizer, [
+                 Map.put(child_result, :decision_refs, ["gmail:wrong-item"])
+               ])
+
+      tampered_manifest =
+        update_in(child_result.todo_decision_manifest, fn [entry] ->
+          [%{entry | action: "superseded"}]
+        end)
+
+      assert {:error, :source_closure_incomplete_decisions} =
+               SourceAccountClosure.finalize(
+                 account,
+                 finalizer,
+                 [%{child_result | todo_decision_manifest: tampered_manifest}]
+               )
+
+      refute SourceCursors.get(account.id, "gmail_closure_watermark")
+
+      assert {:ok,
+              %{
+                outcome: "finalized",
+                source_items: 1,
+                decision_count: 1,
+                fanout_count: 1,
+                model_calls: 1
+              }} = SourceAccountClosure.finalize(account, finalizer, [child_result])
+
+      assert %{value: "1700000300"} =
+               SourceCursors.get(account.id, "gmail_closure_watermark")
+    end
   end
 
   test "fans out by todo batch once while every worker receives the complete source delta" do
     account = closure_account("efficient")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+    batch_size = Maraithon.Todos.CrossSourceCompletion.max_todos_per_request()
+    todo_count = batch_size * 2 + 1
+
     todo_attrs =
-      Enum.map(1..21, fn index ->
+      Enum.map(1..todo_count, fn index ->
         %{
           "source" => "gmail",
           "kind" => "gmail_triage",
@@ -190,7 +202,7 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
       end)
 
     assert {:ok, todos} = Todos.upsert_many(account.user_id, todo_attrs)
-    assert length(todos) == 21
+    assert length(todos) == todo_count
 
     messages =
       Enum.map(1..12, fn index ->
@@ -220,7 +232,7 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
     assert {:ok,
             %{
               source_items: 12,
-              todo_count: 21,
+              todo_count: ^todo_count,
               fanout_count: 3,
               handoffs: handoffs
             }} =
@@ -229,11 +241,11 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
                proposed_watermarks: [closure_watermark(account, "1700000400")]
              )
 
-    assert Enum.map(handoffs, & &1["todo_count"]) == [10, 10, 1]
+    assert Enum.map(handoffs, & &1["todo_count"]) == [batch_size, batch_size, 1]
     assert Enum.all?(handoffs, &(&1["source_items"] == 12))
     assert Enum.all?(handoffs, &(length(&1["source_item_refs"]) == 12))
 
-    old_source_partition_work = ceil(12 / 5) * ceil(21 / 10)
+    old_source_partition_work = ceil(12 / 5) * ceil(todo_count / batch_size)
     assert length(handoffs) == 3
     assert length(handoffs) < old_source_partition_work
   end

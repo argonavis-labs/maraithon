@@ -25,6 +25,18 @@ enum Tokens {
     }
 
     enum Layout {
+        static let todoConversationWidth: CGFloat = 840
+        static let todoActionsHorizontalMinWidth: CGFloat = 640
+        static let todoPeopleMinWidth: CGFloat = 240
+        static let todoPeopleWidth: CGFloat = 280
+        static let todoPeopleMaxWidth: CGFloat = 360
+        static let todoChatMinWidth: CGFloat = 420
+        static let todoActionShelfMaxHeight: CGFloat = 440
+        static let todoActionShelfHeadingHeight: CGFloat = 56
+        static let todoWorkReadHeight: CGFloat = 168
+        static let todoActionRowHeight: CGFloat = 72
+        static let todoDraftHeaderHeight: CGFloat = 32
+        static let todoDraftBodyHeight: CGFloat = 144
         static let onboardingMaxWidth: CGFloat = 480
         static let todoInspectorMinWidth: CGFloat = 280
         static let todoInspectorIdealWidth: CGFloat = 360

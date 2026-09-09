@@ -21,6 +21,7 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
 
   @default_ttl_ms :timer.minutes(5)
   @term_key {__MODULE__, :entries}
+  @max_entries 32
 
   @doc """
   Returns the cached value for `key` while it is fresh; otherwise runs
@@ -41,7 +42,11 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
   end
 
   @doc "Drops every cached verification. Called around protocol activation."
-  def invalidate, do: :persistent_term.put(@term_key, %{})
+  def invalidate do
+    publish(fn ->
+      :persistent_term.put(@term_key, %{generation: make_ref(), entries: %{}})
+    end)
+  end
 
   @doc false
   def ttl_ms do
@@ -52,7 +57,7 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
   end
 
   defp lookup(key, now) do
-    case Map.get(:persistent_term.get(@term_key, %{}), key) do
+    case Map.get(state().entries, key) do
       {value, expires_at} when expires_at > now -> {:ok, value}
       _missing_or_expired -> :miss
     end
@@ -63,7 +68,7 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
   # one caller performs the managed-PostgreSQL catalog proof. Each BEAM node
   # has its own persistent-term cache, so the lock is deliberately node-local.
   defp refresh_once(key, verify, success?, ttl_ms) do
-    lock_id = {{__MODULE__, key}, self()}
+    lock_id = {{__MODULE__, {:refresh, key}}, self()}
 
     case :global.trans(
            lock_id,
@@ -72,35 +77,74 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
 
              case lookup(key, now) do
                {:ok, value} -> value
-               :miss -> verify_and_store(key, verify, success?, ttl_ms, now)
+               :miss -> verify_and_store(key, verify, success?, ttl_ms)
              end
            end,
            [node()]
          ) do
       :aborted ->
-        # Failing open would bypass the proof. Re-verifying directly preserves
-        # the previous safe behavior if the local lock service is unavailable.
-        verify_and_store(
-          key,
-          verify,
-          success?,
-          ttl_ms,
-          System.monotonic_time(:millisecond)
-        )
+        raise "storage verification cache refresh unavailable"
 
       value ->
         value
     end
   end
 
-  defp verify_and_store(key, verify, success?, ttl_ms, now) do
+  defp verify_and_store(key, verify, success?, ttl_ms, retries \\ 2) do
+    generation = state().generation
     value = verify.()
-    if success?.(value), do: store(key, value, now + ttl_ms)
-    value
+
+    result =
+      publish(fn ->
+        current = state()
+
+        if current.generation == generation do
+          if success?.(value) do
+            now = System.monotonic_time(:millisecond)
+
+            entries =
+              current.entries
+              |> Enum.filter(fn {_key, {_value, expiry}} -> expiry > now end)
+              |> Enum.sort_by(fn {_key, {_value, expiry}} -> expiry end, :desc)
+              |> Enum.take(@max_entries - 1)
+              |> Map.new()
+              |> Map.put(key, {value, now + ttl_ms})
+
+            :persistent_term.put(@term_key, %{current | entries: entries})
+          end
+
+          {:verified, value}
+        else
+          :invalidated
+        end
+      end)
+
+    case result do
+      {:verified, value} ->
+        value
+
+      :invalidated when retries > 0 ->
+        verify_and_store(key, verify, success?, ttl_ms, retries - 1)
+
+      :invalidated ->
+        raise "storage verification repeatedly invalidated during verification"
+    end
   end
 
-  defp store(key, value, expires_at) do
-    entries = :persistent_term.get(@term_key, %{})
-    :persistent_term.put(@term_key, Map.put(entries, key, {value, expires_at}))
+  # Verification never holds this short publication lock. Different proof
+  # keys cannot overwrite each other's entries, and a proof that overlaps an
+  # activation must verify again in the new generation before it can return.
+  defp publish(fun) do
+    case :global.trans({{__MODULE__, :publication}, self()}, fun, [node()]) do
+      :aborted -> raise "storage verification cache publication unavailable"
+      value -> value
+    end
+  end
+
+  defp state do
+    case :persistent_term.get(@term_key, nil) do
+      %{generation: _, entries: _} = state -> state
+      _old_or_missing -> %{generation: :initial, entries: %{}}
+    end
   end
 end

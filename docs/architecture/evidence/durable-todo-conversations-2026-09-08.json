@@ -1,0 +1,324 @@
+{
+  "release": {
+    "commit": "00e039cf",
+    "revision": "maraithon-00283-zs9",
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-00e039cf4f57-20260908214756-1",
+    "cloud_build": "bdec07c1-9771-44c4-b70f-009ff0d808b7"
+  },
+  "live_http": {
+    "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+    "requests": [
+      {
+        "name": "first",
+        "http_status": 202,
+        "elapsed_seconds": 0.573,
+        "run": {
+          "error": null,
+          "id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+          "status": "queued",
+          "started_at": "2026-09-08T21:51:15.439410Z",
+          "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "message_class": null,
+          "finished_at": null,
+          "work_summary": {
+            "headline": "Waiting to start",
+            "status": "queued"
+          }
+        },
+        "error": null
+      },
+      {
+        "name": "second",
+        "http_status": 202,
+        "elapsed_seconds": 0.556,
+        "run": {
+          "error": null,
+          "id": "d842af94-0150-4783-9ec2-caf1af1269a9",
+          "status": "queued",
+          "started_at": "2026-09-08T21:51:15.977847Z",
+          "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "message_class": null,
+          "finished_at": null,
+          "work_summary": {
+            "headline": "Waiting to start",
+            "status": "queued"
+          }
+        },
+        "error": null
+      },
+      {
+        "name": "duplicate_first",
+        "http_status": 202,
+        "elapsed_seconds": 0.273,
+        "run": {
+          "error": null,
+          "id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+          "status": "queued",
+          "started_at": "2026-09-08T21:51:15.439410Z",
+          "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "message_class": null,
+          "finished_at": null,
+          "work_summary": {
+            "headline": "Waiting to start",
+            "status": "queued"
+          }
+        },
+        "error": null
+      },
+      {
+        "name": "changed_body",
+        "http_status": 409,
+        "elapsed_seconds": 0.259,
+        "run": null,
+        "error": "client_message_id_conflict"
+      },
+      {
+        "name": "model_reply",
+        "http_status": 202,
+        "elapsed_seconds": 3.008,
+        "run": {
+          "error": null,
+          "id": "c7ac671e-183e-4180-9c8f-4eb4187ed58d",
+          "status": "queued",
+          "started_at": "2026-09-08T21:53:10.022019Z",
+          "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "message_class": null,
+          "finished_at": null,
+          "work_summary": {
+            "headline": "Waiting to start",
+            "status": "queued"
+          }
+        },
+        "error": null
+      }
+    ],
+    "observed": {
+      "http_status": 200,
+      "elapsed_seconds": 0.225,
+      "pending_run": null,
+      "messages": [
+        {
+          "id": "8b1abcf7-b5cc-4d66-ab73-77ab0a1a2f30",
+          "role": "user",
+          "body": "7 + 5"
+        },
+        {
+          "id": "3e07c542-6b40-4bc0-94d9-f5954682ca94",
+          "role": "user",
+          "body": "9 * 3"
+        },
+        {
+          "id": "5897afa3-c9f6-460c-8ecd-ff7647d6622a",
+          "role": "assistant",
+          "body": "7 + 5 = 12."
+        },
+        {
+          "id": "f18aa1d6-ba1c-423f-a1a9-d54c1354cea7",
+          "role": "assistant",
+          "body": "9 * 3 = 27."
+        },
+        {
+          "id": "3495ceda-4f4b-44ea-8aac-d70ac0971fbc",
+          "role": "user",
+          "body": "Reply in one short sentence explaining why stable message IDs help after reconnecting. Do not use tools, create drafts, send messages, book events, or change any todos."
+        },
+        {
+          "id": "976e4c1c-ffe4-4598-83b2-b6c042a31b36",
+          "role": "assistant",
+          "body": "Stable message IDs let Maraithon recognize messages it already saw before a reconnect, so nothing gets double-processed, duplicated, or lost when syncing resumes."
+        }
+      ]
+    },
+    "runs": [
+      {
+        "error": null,
+        "id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+        "status": "completed",
+        "started_at": "2026-09-08T21:51:55.453286Z",
+        "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+        "message_class": "assistant_reply",
+        "finished_at": "2026-09-08T21:51:55.848055Z",
+        "work_summary": {
+          "headline": "Answered directly",
+          "status": "completed"
+        }
+      },
+      {
+        "error": null,
+        "id": "d842af94-0150-4783-9ec2-caf1af1269a9",
+        "status": "completed",
+        "started_at": "2026-09-08T21:51:57.800234Z",
+        "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+        "message_class": "assistant_reply",
+        "finished_at": "2026-09-08T21:51:58.203525Z",
+        "work_summary": {
+          "headline": "Answered directly",
+          "status": "completed"
+        }
+      },
+      {
+        "error": null,
+        "id": "c7ac671e-183e-4180-9c8f-4eb4187ed58d",
+        "status": "completed",
+        "started_at": "2026-09-08T21:53:10.643295Z",
+        "thread_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+        "message_class": "assistant_reply",
+        "finished_at": "2026-09-08T21:53:23.115692Z",
+        "work_summary": {
+          "headline": "Answered directly",
+          "status": "completed"
+        }
+      }
+    ]
+  },
+  "runtime_snapshot": {
+    "live_runtime_revisions": [
+      "maraithon-00283-zs9"
+    ],
+    "phase": "ready",
+    "node_incarnation_id": "acdf436d-9635-4471-8504-0877f54e419f",
+    "process_role": "combined",
+    "node_fenced": false,
+    "admitting_nodes": 1,
+    "admitting_partitions": 64,
+    "unready_partitions": 0,
+    "owned_partitions": 64,
+    "open_tasks": 2,
+    "unproven_tasks": 2,
+    "local_agent_leases": 1,
+    "agent_leases": 1
+  },
+  "verification_limits": [
+    "No application test suites were run under the manual-first policy.",
+    "No crash injection, cache race exercise, or external action replay was performed.",
+    "Runtime task counts include active work; this is not a complete runtime health audit.",
+    "The first two requests waited about 40 seconds while partitions transferred after deployment."
+  ],
+  "database_receipt": {
+    "execution": "maraithon-todo-validation-82g4r",
+    "at": "2026-09-08T21:56:12.608726Z",
+    "sources": [
+      {
+        "assistant_run_id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+        "id": "8b1abcf7-b5cc-4d66-ab73-77ab0a1a2f30",
+        "role": "user"
+      },
+      {
+        "assistant_run_id": "d842af94-0150-4783-9ec2-caf1af1269a9",
+        "id": "3e07c542-6b40-4bc0-94d9-f5954682ca94",
+        "role": "user"
+      },
+      {
+        "assistant_run_id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+        "id": "5897afa3-c9f6-460c-8ecd-ff7647d6622a",
+        "role": "assistant"
+      },
+      {
+        "assistant_run_id": "d842af94-0150-4783-9ec2-caf1af1269a9",
+        "id": "f18aa1d6-ba1c-423f-a1a9-d54c1354cea7",
+        "role": "assistant"
+      },
+      {
+        "assistant_run_id": "c7ac671e-183e-4180-9c8f-4eb4187ed58d",
+        "id": "3495ceda-4f4b-44ea-8aac-d70ac0971fbc",
+        "role": "user"
+      },
+      {
+        "assistant_run_id": "c7ac671e-183e-4180-9c8f-4eb4187ed58d",
+        "id": "976e4c1c-ffe4-4598-83b2-b6c042a31b36",
+        "role": "assistant"
+      }
+    ],
+    "jobs": [
+      {
+        "id": "ef0f930b-b2c5-47fb-9600-54dd0214eb9f",
+        "status": "completed",
+        "result": {
+          "run_id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+          "state": "completed"
+        },
+        "payload": {
+          "conversation_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "run_id": "b36b1652-85ae-44b9-a8bb-2cdd8b3494c5",
+          "user_turn_id": "8b1abcf7-b5cc-4d66-ab73-77ab0a1a2f30"
+        },
+        "attempts": 0,
+        "last_error": null,
+        "scheduled_at": "2026-09-08T21:51:15.649011Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T21:51:55.962754Z",
+        "assignments": [
+          {
+            "id": "40046834-6715-484c-ab2c-6dceee87767d",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "state": "settled"
+          }
+        ]
+      },
+      {
+        "id": "03ae1b0d-d344-4b9c-8ccf-7f5fee0d78ae",
+        "status": "completed",
+        "result": {
+          "run_id": "d842af94-0150-4783-9ec2-caf1af1269a9",
+          "state": "completed"
+        },
+        "payload": {
+          "conversation_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "run_id": "d842af94-0150-4783-9ec2-caf1af1269a9",
+          "user_turn_id": "3e07c542-6b40-4bc0-94d9-f5954682ca94"
+        },
+        "attempts": 0,
+        "last_error": null,
+        "scheduled_at": "2026-09-08T21:51:16.204433Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T21:51:58.300963Z",
+        "assignments": [
+          {
+            "id": "ffaf5513-3403-4a3d-954a-f2056fb7cc45",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "state": "settled"
+          }
+        ]
+      },
+      {
+        "id": "51886574-47d0-4f5f-bc6f-b12a9532b440",
+        "status": "completed",
+        "result": {
+          "run_id": "c7ac671e-183e-4180-9c8f-4eb4187ed58d",
+          "state": "completed"
+        },
+        "payload": {
+          "conversation_id": "9448d276-7de2-47a0-ac33-e31da9e1beeb",
+          "run_id": "c7ac671e-183e-4180-9c8f-4eb4187ed58d",
+          "user_turn_id": "3495ceda-4f4b-44ea-8aac-d70ac0971fbc"
+        },
+        "attempts": 0,
+        "last_error": null,
+        "scheduled_at": "2026-09-08T21:53:10.221648Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T21:53:23.249242Z",
+        "assignments": [
+          {
+            "id": "f9d74714-1900-4765-bddf-dda73ac4b108",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "state": "settled"
+          }
+        ]
+      }
+    ],
+    "workflow": [
+      {
+        "owner": "You",
+        "revision": "4",
+        "state": "working",
+        "status": "open"
+      }
+    ]
+  }
+}

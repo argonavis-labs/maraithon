@@ -94,9 +94,7 @@ defmodule Maraithon.Application do
       # concurrent messages within a chat.
       {Registry, keys: :unique, name: Maraithon.TelegramAssistant.ChatRegistry},
       {DynamicSupervisor,
-       strategy: :one_for_one, name: Maraithon.TelegramAssistant.ChatSupervisor},
-      {Registry, keys: :unique, name: Maraithon.AssistantChat.ThreadRegistry},
-      {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.AssistantChat.ThreadSupervisor}
+       strategy: :one_for_one, name: Maraithon.TelegramAssistant.ChatSupervisor}
     ]
   end
 

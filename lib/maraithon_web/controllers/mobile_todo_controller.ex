@@ -47,6 +47,8 @@ defmodule MaraithonWeb.MobileTodoController do
       related_people_by_todo_id =
         Crm.people_for_resources(user_id, "todo", Enum.map(todos, & &1.id), limit: 5)
 
+      if offset == 0, do: Brief.prepare_focus(todos)
+
       json_opts =
         json_opts
         |> Keyword.put(:open_cards_only, truthy?(Map.get(params, "open_cards_only")))
@@ -175,6 +177,32 @@ defmodule MaraithonWeb.MobileTodoController do
         conn
         |> put_status(:unprocessable_entity)
         |> json(MobileJSON.error(reason))
+    end
+  end
+
+  def workflow(conn, %{"id" => todo_id} = params) do
+    user_id = conn.assigns.current_user.id
+    attrs = Map.get(params, "workflow", params)
+
+    case Todos.transition_workflow(user_id, todo_id, attrs, user_actor_opts(user_id)) do
+      {:ok, todo} ->
+        json(conn, %{todo: MobileJSON.todo(todo, include_card: true)})
+
+      {:error, :not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "Work item not found."})
+
+      {:error, :stale_workflow} ->
+        conn
+        |> put_status(:conflict)
+        |> json(%{error: "This work item changed. Refresh before updating its owner or state."})
+
+      {:error, _} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{
+          error:
+            "Choose a state and owner, and describe the next action and reason for this change."
+        })
     end
   end
 

@@ -33,6 +33,7 @@ defmodule Maraithon.Todos.Todo do
     field :owner_label, :string
     field :priority, :integer, default: 50
     field :status, :string, default: "open"
+    field :workflow, :map, default: %{}
     field :snoozed_until, :utc_datetime_usec
     field :closed_at, :utc_datetime_usec
     field :model_selected_at, :utc_datetime_usec
@@ -92,6 +93,7 @@ defmodule Maraithon.Todos.Todo do
     :owner_label,
     :priority,
     :status,
+    :workflow,
     :snoozed_until,
     :closed_at,
     :model_selected_at,
@@ -115,9 +117,16 @@ defmodule Maraithon.Todos.Todo do
 
   @doc "The earliest instant after which new evidence may automatically close this todo."
   def completion_evidence_after(%__MODULE__{} = todo) do
-    [todo.source_occurred_at || todo.inserted_at, reopened_at(todo)]
+    [todo.source_occurred_at || todo.inserted_at, reopened_at(todo), workflow_changed_at(todo)]
     |> Enum.filter(&is_struct(&1, DateTime))
     |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  defp workflow_changed_at(todo) do
+    with value when is_binary(value) <- (todo.workflow || %{})["changed_at"],
+         {:ok, at, _} <- DateTime.from_iso8601(value),
+         do: at,
+         else: (_ -> nil)
   end
 
   def reopened_at(%__MODULE__{metadata: metadata}) do
@@ -132,8 +141,14 @@ defmodule Maraithon.Todos.Todo do
   def changeset(todo, attrs) do
     todo
     |> cast(attrs, @required_fields ++ @optional_fields)
+    |> Maraithon.Todos.Workflow.sync_status()
     |> default_owner_to_user()
     |> validate_required(@required_fields)
+    |> validate_change(:workflow, fn :workflow, value ->
+      if Maraithon.Todos.Workflow.valid?(value),
+        do: [],
+        else: [workflow: "must contain a valid state, owner, outcome and next action"]
+    end)
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:attention_mode, @attention_modes)
     |> validate_inclusion(:status, @statuses)

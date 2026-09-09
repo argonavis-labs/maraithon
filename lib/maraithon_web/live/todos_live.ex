@@ -1,18 +1,20 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
+  import MaraithonWeb.Components.Sidebar, only: [icon: 1]
 
   alias Maraithon.{BriefingSchedules, Projects, Repo, SourceLabels, Timezones}
   alias Maraithon.AssistantChat.TodoThreadPrimer
   alias Maraithon.Todos
   alias Maraithon.Todos.{Brief, BriefActions, DecisionSignals, SourceActions, Todo}
   alias MaraithonWeb.TodoActionCopy
+  alias MaraithonWeb.TodoWorkspace
+  alias MaraithonWeb.TodoWorkspaceComponents
 
   require Logger
 
   @page_limit 50
   @brief_poll_ms 3_000
-  @brief_max_polls 40
-  @generating_progress "Reading the source"
+  @brief_max_polls 120
   @default_filters %{
     "q" => "",
     "status" => "active",
@@ -129,6 +131,8 @@ defmodule MaraithonWeb.TodosLive do
        active_todo_id: nil,
        selected_todo_ids: MapSet.new(),
        selected_todo_id: nil,
+       detail_tab: "summary",
+       workspace: TodoWorkspace.empty(),
        selected_todo: nil,
        timezone_info: default_timezone_info(),
        brief: nil,
@@ -136,6 +140,8 @@ defmodule MaraithonWeb.TodosLive do
        brief_todo_id: nil,
        brief_progress: nil,
        brief_polls_left: 0,
+       brief_job_id: nil,
+       brief_refresh_after: nil,
        reply_target: nil,
        reply_target_state: :idle,
        reply_target_todo_id: nil,
@@ -167,6 +173,13 @@ defmodule MaraithonWeb.TodosLive do
       |> assign(:current_path, current_path_from_uri(uri))
       |> assign(:filters, filters)
       |> assign(:filter_form, to_form(filters, as: :filters))
+      |> assign(
+        :detail_tab,
+        if(socket.assigns.selected_todo_id == selected_todo_id,
+          do: socket.assigns.detail_tab,
+          else: "summary"
+        )
+      )
       |> assign(:selected_todo_id, selected_todo_id)
 
     socket =
@@ -198,12 +211,76 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   @impl true
+  def handle_event("workspace_" <> event, params, socket),
+    do: TodoWorkspace.event(event, params, socket)
+
+  def handle_event("detail_tab", %{"tab" => tab}, socket) when tab in ~w(summary details) do
+    {:noreply, assign(socket, :detail_tab, tab)}
+  end
+
   def handle_event("update_filters", %{"filters" => filters}, socket) do
     {:noreply, push_patch(socket, to: todos_path(normalize_filters(filters)))}
   end
 
   def handle_event("clear_filters", _params, socket) do
     {:noreply, push_patch(socket, to: ~p"/todos")}
+  end
+
+  def handle_event("transition_workflow", %{"workflow" => params}, socket) do
+    owner =
+      if params["owner"] == "user",
+        do: %{"kind" => "user"},
+        else: %{"kind" => "person", "id" => params["owner"]}
+
+    revision =
+      case Integer.parse(params["expected_revision"] || "") do
+        {value, ""} -> value
+        _ -> nil
+      end
+
+    waiting_until =
+      case parse_new_todo_due_at(params["waiting_until"], socket.assigns.timezone_info) do
+        {:ok, nil} -> nil
+        {:ok, date} -> DateTime.to_iso8601(date)
+        _ -> "invalid"
+      end
+
+    attrs =
+      params
+      |> Map.take(~w(state outcome next_action reason request_id))
+      |> Map.put("waiting_until", waiting_until)
+      |> Map.put("owner", owner)
+      |> Map.put("expected_revision", revision)
+      |> Map.put("outcome_confirmed", params["state"] == "done")
+
+    user_id = current_user_id(socket)
+
+    case Todos.transition_workflow(
+           user_id,
+           params["todo_id"],
+           attrs,
+           todo_action_opts(user_id, "State and owner changed from the todo workspace.")
+         ) do
+      {:ok, _} ->
+        {:noreply, socket |> refresh_todos() |> put_flash(:info, "State and owner updated.")}
+
+      {:error, :stale_workflow} ->
+        {:noreply,
+         socket
+         |> refresh_todos()
+         |> put_flash(
+           :error,
+           "This work item changed. Review its current owner before trying again."
+         )}
+
+      {:error, _} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Choose an owner and describe the outcome, next action and what changed. Reopen a finished item before starting work again."
+         )}
+    end
   end
 
   def handle_event("assign_todo_project", %{"assignment" => params}, socket) do
@@ -542,6 +619,20 @@ defmodule MaraithonWeb.TodosLive do
   def handle_event("send_reply", _params, socket), do: {:noreply, socket}
 
   @impl true
+  def handle_async(:prepare_focus, _result, socket), do: {:noreply, socket}
+
+  def handle_async({:workspace, todo_id, operation}, result, socket) do
+    {:noreply, socket} = TodoWorkspace.result(todo_id, operation, result, socket)
+    linked = get_in(socket.assigns.workspace, [:thread, :linked_todo])
+    selected = socket.assigns.selected_todo
+
+    changed? =
+      selected && is_map(linked) && linked["id"] == selected.id &&
+        linked["workflow"] != Maraithon.Todos.Workflow.current(selected)
+
+    {:noreply, if(changed?, do: refresh_todos(socket), else: socket)}
+  end
+
   def handle_async({:todo_brief, todo_id}, result, socket) do
     if todo_id == socket.assigns.brief_todo_id do
       handle_brief_result(result, todo_id, socket)
@@ -583,31 +674,64 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   @impl true
-  def handle_info({:todo_brief_progress, todo_id, label}, socket) do
-    if todo_id == socket.assigns.brief_todo_id and socket.assigns.brief_state == :generating do
-      {:noreply, assign(socket, :brief_progress, label)}
-    else
-      {:noreply, socket}
-    end
-  end
+  def handle_info({:assistant_progress, thread_id}, socket),
+    do: TodoWorkspace.progress(thread_id, socket)
+
+  def handle_info({:assistant_preview, thread_id, preview}, socket),
+    do: TodoWorkspace.preview(thread_id, preview, socket)
+
+  def handle_info({:workspace_poll, pulse}, socket), do: TodoWorkspace.poll(pulse, socket)
 
   def handle_info({:todo_brief_poll, todo_id}, socket) do
     with true <- todo_id == socket.assigns.brief_todo_id,
          :waiting <- socket.assigns.brief_state,
          %Todo{} = todo <- Todos.get_for_user(current_user_id(socket), todo_id) do
+      brief = Brief.current(todo)
+
+      job =
+        socket.assigns.brief_job_id &&
+          Repo.get(Maraithon.Runtime.BackgroundJob, socket.assigns.brief_job_id)
+
+      refreshed? = brief && brief["generated_at"] != socket.assigns.brief_refresh_after
+
       cond do
-        brief = Brief.current(todo) ->
+        refreshed? || (brief && job && job.status == "completed") ->
           {:noreply,
            socket
            |> assign(selected_todo: todo, brief: brief, brief_state: :ready, brief_progress: nil)
-           |> seed_reply_form(todo)}
+           |> seed_reply_form(todo)
+           |> TodoWorkspace.context_changed()}
 
-        Brief.generating?(todo) and socket.assigns.brief_polls_left > 0 ->
+        todo.status not in ~w(open snoozed) ->
+          {:noreply, assign(socket, brief_state: :idle, brief_progress: nil)}
+
+        is_nil(job) || job.status in ~w(failed cancelled) ->
+          {:noreply,
+           assign(socket,
+             brief_state: :failed,
+             brief_progress: "Could not finish preparing this todo. Try again."
+           )}
+
+        socket.assigns.brief_polls_left > 0 ->
           Process.send_after(self(), {:todo_brief_poll, todo_id}, @brief_poll_ms)
-          {:noreply, assign(socket, :brief_polls_left, socket.assigns.brief_polls_left - 1)}
+
+          progress =
+            if Brief.generating?(todo),
+              do: "Reading the source and preparing your next move…",
+              else: "Preparation is queued. You can leave this page."
+
+          {:noreply,
+           assign(socket,
+             brief_polls_left: socket.assigns.brief_polls_left - 1,
+             brief_progress: progress
+           )}
 
         true ->
-          {:noreply, start_brief_generation(socket, todo, force: true)}
+          {:noreply,
+           assign(socket,
+             brief_state: :deferred,
+             brief_progress: "Preparation is taking longer. Check again to see its progress."
+           )}
       end
     else
       _ -> {:noreply, socket}
@@ -658,57 +782,41 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp start_brief_generation(socket, %Todo{} = todo, opts) do
-    user_id = current_user_id(socket)
-    parent = self()
     force? = Keyword.get(opts, :force, false)
 
     socket
     |> assign(
-      brief: nil,
+      brief: Brief.current(todo),
       brief_state: :generating,
       brief_todo_id: todo.id,
-      brief_progress: @generating_progress,
-      brief_polls_left: @brief_max_polls
+      brief_progress: "Queuing preparation…",
+      brief_polls_left: @brief_max_polls,
+      brief_job_id: nil,
+      brief_refresh_after: if(force?, do: (Brief.stored(todo) || %{})["generated_at"])
     )
     |> reset_reply_target()
     |> start_async({:todo_brief, todo.id}, fn ->
-      Brief.generate_and_store(user_id, todo.id,
-        force: force?,
-        on_progress: fn label -> send(parent, {:todo_brief_progress, todo.id, label}) end
-      )
+      Brief.enqueue_generation(todo, refresh_expired: true, force: force?)
     end)
   end
 
-  defp handle_brief_result({:ok, {:ok, %Todo{} = todo}}, _todo_id, socket) do
-    {:noreply,
-     socket
-     |> refresh_todos()
-     |> assign(
-       brief: Brief.current(todo),
-       brief_state: :ready,
-       brief_progress: nil
-     )
-     |> seed_reply_form(todo)}
-  end
-
-  defp handle_brief_result({:ok, {:error, :in_progress}}, todo_id, socket) do
+  defp handle_brief_result({:ok, {:ok, job}}, todo_id, socket) do
     Process.send_after(self(), {:todo_brief_poll, todo_id}, @brief_poll_ms)
 
     {:noreply,
      assign(socket,
        brief_state: :waiting,
-       brief_progress: "Finishing a brief already in progress"
+       brief_job_id: job && job.id,
+       brief_progress: "Preparation is queued. You can leave this page."
      )}
   end
 
-  defp handle_brief_result({:ok, {:error, reason}}, todo_id, socket) do
-    Logger.warning("todo brief failed on detail page", todo_id: todo_id, reason: inspect(reason))
-    {:noreply, assign(socket, brief_state: :failed, brief_progress: nil)}
-  end
-
-  defp handle_brief_result({:exit, reason}, todo_id, socket) do
-    Logger.warning("todo brief crashed on detail page", todo_id: todo_id, reason: inspect(reason))
-    {:noreply, assign(socket, brief_state: :failed, brief_progress: nil)}
+  defp handle_brief_result(_result, _todo_id, socket) do
+    {:noreply,
+     assign(socket,
+       brief_state: :failed,
+       brief_progress: "Could not queue preparation. Try again."
+     )}
   end
 
   # Seeds the editable reply from the brief. Preparation of the connected
@@ -799,6 +907,9 @@ defmodule MaraithonWeb.TodosLive do
           <%= if @selected_todo do %>
             <.todo_detail_panel
               todo={@selected_todo}
+              detail_tab={@detail_tab}
+              workspace={@workspace}
+              user_id={@current_user.id}
               navigation_ids={@todo_navigation_ids}
               filters={@filters}
               project_options={@project_options}
@@ -1108,6 +1219,7 @@ defmodule MaraithonWeb.TodosLive do
                           <%= priority_label(todo.priority) %>
                         </.badge>
                       </div>
+                      <.todo_ownership workflow={Maraithon.Todos.Workflow.current(todo)} />
                       <p :if={present?(todo.next_action)} class="mt-1 line-clamp-1 text-sm/6 text-zinc-600">
                         <span class="font-medium text-zinc-800"><%= todo_next_action_label(todo) %>:</span>
                         <%= todo.next_action %>
@@ -1224,7 +1336,7 @@ defmodule MaraithonWeb.TodosLive do
                   return
                 }
 
-                if (typing) return
+                if (typing || target?.closest?.("#todo-conversation, [data-workspace-review], button, a, summary")) return
 
                 if (key === "?") {
                   event.preventDefault()
@@ -1451,6 +1563,11 @@ defmodule MaraithonWeb.TodosLive do
 
     filters = Map.put(socket.assigns.filters, "page", Integer.to_string(page))
 
+    socket =
+      if connected?(socket) && is_nil(selected_todo) && page == 1,
+        do: start_async(socket, :prepare_focus, fn -> Brief.prepare_focus(todos) end),
+        else: socket
+
     visible_ids =
       case selected_todo do
         %Todo{} ->
@@ -1485,6 +1602,8 @@ defmodule MaraithonWeb.TodosLive do
         selected_todo_id: selected_todo && selected_todo.id,
         selected_todo: selected_todo
       )
+
+    socket = TodoWorkspace.load(socket)
 
     if connected?(socket) and is_nil(selected_todo) and requested_page != page do
       push_patch(socket, to: todos_path(filters), replace: true)
@@ -1793,6 +1912,10 @@ defmodule MaraithonWeb.TodosLive do
   attr :reply_sending?, :boolean, default: false
   attr :reply_sent, :any, default: nil
 
+  attr :detail_tab, :string, default: "summary"
+  attr :workspace, :map, required: true
+  attr :user_id, :string, required: true
+
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
     source_action = SourceActions.for_todo(assigns.todo) || %{}
@@ -1800,6 +1923,20 @@ defmodule MaraithonWeb.TodosLive do
 
     assigns =
       assigns
+      |> assign(:workflow, Maraithon.Todos.Workflow.current(assigns.todo))
+      |> assign(
+        :workflow_people,
+        (((assigns.brief || %{})["people"] || []) ++
+           case Maraithon.Todos.Workflow.current(assigns.todo)["owner"] do
+             %{"kind" => "person", "id" => id, "label" => label} ->
+               [%{"id" => id, "name" => label}]
+
+             _ ->
+               []
+           end)
+        |> Enum.filter(fn person -> Ecto.UUID.cast(person["id"]) != :error end)
+        |> Enum.uniq_by(& &1["id"])
+      )
       |> assign(:can_edit_next_action, can_edit_next_action)
       |> assign(:previous_todo, previous_todo)
       |> assign(:next_todo, next_todo)
@@ -1809,6 +1946,20 @@ defmodule MaraithonWeb.TodosLive do
       |> assign(:facts, todo_fact_rows(assigns.todo, assigns.timezone_info))
       |> assign(:open_url, Map.get(source_action, "open_url"))
       |> assign(:open_label, Map.get(source_action, "open_label"))
+      |> assign(:call_url, source_action["call_url"])
+      |> assign(:call_label, source_action["call_label"])
+      |> assign(
+        :provider_label,
+        source_action["provider_label"] || String.capitalize(assigns.todo.source || "Todo")
+      )
+      |> assign(
+        :provider_logo,
+        todo_source_logo(source_action["provider"] || assigns.todo.source)
+      )
+      |> assign(
+        :summary,
+        (assigns.brief || %{})["summary"] || assigns.todo.summary || assigns.todo.next_action
+      )
       |> assign(:reply, if(is_map(assigns.brief), do: Brief.reply(assigns.todo)))
       |> assign(:source_history, source_history(assigns.brief, source_action))
       |> assign(:source_subject, source_subject(assigns.brief, source_action))
@@ -1818,7 +1969,7 @@ defmodule MaraithonWeb.TodosLive do
       )
 
     ~H"""
-    <div id="todo-detail" class="mx-auto max-w-5xl space-y-5">
+    <div id="todo-detail" class="mx-auto max-w-6xl space-y-5">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <.link
           patch={todos_path(@filters)}
@@ -1881,20 +2032,13 @@ defmodule MaraithonWeb.TodosLive do
       <header class="border-b border-zinc-950/10 pb-5">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <.badge color={status_color(@todo.status)}><%= todo_status_label(@todo.status) %></.badge>
-              <.badge color={attention_color(@todo.attention_mode)}>
-                <%= attention_mode_label(@todo.attention_mode) %>
-              </.badge>
-              <.badge :if={@decision_signal?} color="indigo">Decision</.badge>
-              <.badge :if={@todo.priority >= 75} color={priority_color(@todo.priority)}>
-                <%= priority_label(@todo.priority) %>
-              </.badge>
+            <div class="flex items-center gap-2 text-sm text-zinc-500">
+              <img :if={@provider_logo} src={@provider_logo} alt="" class="size-6 object-contain" />
+              <span><%= @provider_label %></span>
+              <.badge :if={@detail_tab == "details"} color={attention_color(@todo.attention_mode)}><%= attention_mode_label(@todo.attention_mode) %></.badge>
+              <span :if={@todo.status not in ~w(open snoozed)}>· <%= todo_status_label(@todo.status) %></span>
             </div>
             <h1 class="mt-3 text-2xl/8 font-semibold tracking-tight text-zinc-950"><%= @todo.title %></h1>
-            <p :if={present?(@todo.summary)} class="mt-2 max-w-3xl text-sm/6 text-zinc-600">
-              <%= @todo.summary %>
-            </p>
           </div>
 
           <div id="todo-primary-actions" class="flex shrink-0 flex-wrap items-center gap-2">
@@ -1908,9 +2052,7 @@ defmodule MaraithonWeb.TodosLive do
             >
               Mark done
             </.button>
-            <.button navigate={~p"/todos/#{@todo.id}/chat"} variant="outline">
-              Ask Maraithon
-            </.button>
+
             <.button
               :if={@can_edit_next_action}
               type="button"
@@ -1935,10 +2077,72 @@ defmodule MaraithonWeb.TodosLive do
             </.button>
           </div>
         </div>
+        <div id="todo-workflow" class="mt-4 space-y-2 text-sm">
+          <.todo_ownership workflow={@workflow} />
+          <p class="text-zinc-700"><span class="font-medium">Outcome:</span> <%= @workflow["outcome"] %></p>
+          <details id="todo-workflow-editor" class="group">
+            <summary class="cursor-pointer font-medium text-zinc-600">Change state or owner</summary>
+            <.form for={to_form(%{}, as: :workflow)} phx-submit="transition_workflow" class="mt-3 max-w-xl space-y-3">
+              <input type="hidden" name="workflow[todo_id]" value={@todo.id} />
+              <input type="hidden" name="workflow[expected_revision]" value={@workflow["revision"]} />
+              <input type="hidden" name="workflow[request_id]" value={Ecto.UUID.generate()} />
+              <.field label="State" for="workflow-state">
+                <.c_select id="workflow-state" name="workflow[state]">
+                  <option :for={state <- Maraithon.Todos.Workflow.states()} value={state} selected={state == @workflow["state"]}><%= Maraithon.Todos.Workflow.label(state) %></option>
+                </.c_select>
+              </.field>
+              <.field label="Owner" for="workflow-owner">
+                <.c_select id="workflow-owner" name="workflow[owner]">
+                  <option value="user" selected={@workflow["owner"]["kind"] == "user"}>You</option>
+                  <option :for={person <- @workflow_people} value={person["id"]} selected={person["id"] == @workflow["owner"]["id"]}><%= person["name"] %></option>
+                </.c_select>
+              </.field>
+              <.field label="Outcome" for="workflow-outcome">
+                <.c_textarea id="workflow-outcome" name="workflow[outcome]" value={@workflow["outcome"]} required maxlength="2000" />
+              </.field>
+              <.field label="Owner's next action" for="workflow-next">
+                <.c_textarea id="workflow-next" name="workflow[next_action]" value={@todo.next_action} required maxlength="1000" />
+              </.field>
+              <.field label="What changed?" for="workflow-reason">
+                <.c_input id="workflow-reason" name="workflow[reason]" value="" required maxlength="2000" />
+              </.field>
+              <.field label="Review waiting state on (optional)" for="workflow-wait">
+                <.c_input type="datetime-local" id="workflow-wait" name="workflow[waiting_until]" value={workflow_review_value(@workflow, @timezone_info)} />
+              </.field>
+              <p class="text-xs text-zinc-500">A review date returns waiting work to you. Choosing Done confirms that the outcome happened.</p>
+              <.button type="submit" phx-disable-with="Saving…">Save state and owner</.button>
+            </.form>
+          </details>
+        </div>
       </header>
 
-      <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
+      <nav aria-label="Todo sections" class="flex gap-2 border-b border-zinc-950/10 pb-2">
+        <.button :for={{tab, label} <- [{"summary", "Workspace"}, {"details", "Details"}]}
+          id={"todo-tab-#{tab}"} variant={if(@detail_tab == tab, do: "outline", else: "plain")}
+          type="button" phx-click="detail_tab" phx-value-tab={tab}
+          aria-current={if(@detail_tab == tab, do: "page")} aria-controls="todo-section">
+          <%= label %>
+        </.button>
+      </nav>
+
+      <section :if={@detail_tab == "summary"} id="todo-section" aria-labelledby="todo-tab-summary">
+        <TodoWorkspaceComponents.workspace todo={@todo} brief={@brief} state={@workspace} user_id={@user_id}
+          brief_state={@brief_state} brief_progress={@brief_progress}>
+          <:summary>
+            <p :if={@summary} id="todo-action-summary" class="whitespace-pre-line text-base/7 text-zinc-800"><%= @summary %></p>
+            <p :if={@brief_state in [:generating, :waiting]} role="status" class="text-sm text-zinc-500"><%= @brief_progress || "Preparing your summary…" %></p>
+            <div class="flex flex-wrap gap-2">
+              <.button :if={is_binary(@open_url)} href={@open_url} target="_blank" rel="noopener" variant="outline"><%= @open_label %></.button>
+              <.button :if={@call_url} href={@call_url} variant="outline"><%= @call_label %></.button>
+              <.button :if={@brief_state not in [:generating, :waiting] and is_nil(@brief)} phx-click="regenerate_brief" variant="outline">Prepare summary</.button>
+            </div>
+          </:summary>
+        </TodoWorkspaceComponents.workspace>
+      </section>
+
+      <div :if={@detail_tab == "details"} id="todo-section" aria-labelledby="todo-tab-details" class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
         <div class="space-y-5">
+          <p :if={@brief && @brief["source_freshness"]} class="text-sm/6 text-zinc-500"><%= @brief["source_freshness"] %></p>
           <.reply_panel
             :if={@reply || @source_history != []}
             todo={@todo}
@@ -2160,7 +2364,13 @@ defmodule MaraithonWeb.TodosLive do
       )
       |> assign(:provider_label, reply_provider_label(reply))
       |> assign(:gmail?, reply["channel"] == "gmail" or assigns.todo.source == "gmail")
-      |> assign(:send_label, BriefActions.send_label(reply["channel"]))
+      |> assign(
+        :send_label,
+        if(reply["channel"] == "gmail",
+          do: "Approve and send",
+          else: BriefActions.send_label(reply["channel"])
+        )
+      )
 
     ~H"""
     <.panel id="todo-reply" body_class="p-0">
@@ -2170,7 +2380,7 @@ defmodule MaraithonWeb.TodosLive do
             <h2 class="text-sm/6 font-semibold text-zinc-950"><%= @heading %></h2>
             <p :if={@subheading} class="text-sm/6 text-zinc-500"><%= @subheading %></p>
           </div>
-          <.badge :if={@reply_target_state == :ready} color="emerald">Ready to send</.badge>
+          <.badge :if={@reply && @reply_target_state == :ready} color="zinc">Review draft</.badge>
           <.badge :if={@reply_target_state == :sent} color="blue">Sent</.badge>
         </div>
       </:header>
@@ -2252,8 +2462,9 @@ defmodule MaraithonWeb.TodosLive do
             id="todo-reply-copy"
             phx-hook=".CopyReply"
             data-copy-target="todo-reply-body"
+            data-open-url={if(@todo.source == "slack", do: @open_url)}
           >
-            Copy
+            <%= if @todo.source == "slack" and @open_url, do: "Copy reply and open Slack", else: "Copy reply" %>
           </.button>
           <.button :if={@open_url} href={@open_url} target="_blank" rel="noopener" variant="outline">
             <%= @open_label || "Open source" %>
@@ -2272,22 +2483,31 @@ defmodule MaraithonWeb.TodosLive do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyReply">
         export default {
           mounted() {
-            this.el.addEventListener("click", () => {
+            this.el.addEventListener("click", async () => {
               const target = document.getElementById(this.el.dataset.copyTarget)
               if (!target) return
-              const text = target.value || target.textContent || ""
-              const done = () => {
-                const original = this.el.textContent
+              const original = this.el.textContent
+              const url = this.el.dataset.openUrl
+              // Reserve a tab during the user gesture. Navigate only after copy succeeds.
+              const popup = url && /^https?:/.test(url) ? window.open("about:blank", "_blank") : null
+              if (popup) popup.opener = null
+              try {
+                const text = target.value || target.textContent || ""
+                if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+                else {
+                  target.select()
+                  if (!document.execCommand("copy")) throw new Error("copy failed")
+                }
                 this.el.textContent = "Copied"
-                setTimeout(() => { this.el.textContent = original }, 1500)
+                if (url) {
+                  if (popup) popup.location.replace(url)
+                  else window.location.assign(url)
+                }
+              } catch (_) {
+                if (popup) popup.close()
+                this.el.textContent = "Copy failed — select the reply and copy"
               }
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(done).catch(() => {})
-              } else {
-                target.select()
-                document.execCommand("copy")
-                done()
-              }
+              setTimeout(() => { this.el.textContent = original }, 3000)
             })
           }
         }
@@ -2295,6 +2515,16 @@ defmodule MaraithonWeb.TodosLive do
     </.panel>
     """
   end
+
+  defp todo_source_logo("gmail"), do: "/images/connector-logos/gmail.png"
+  defp todo_source_logo("slack"), do: "/images/connector-logos/slack.svg"
+  defp todo_source_logo("imessage"), do: "/images/connector-logos/messages.png"
+  defp todo_source_logo("telegram"), do: "/images/connector-logos/telegram.png"
+
+  defp todo_source_logo(provider) when provider in ~w(calendar google_calendar),
+    do: "/images/connector-logos/google.svg"
+
+  defp todo_source_logo(_), do: nil
 
   defp source_history(%{"source_history" => history}, _source_action)
        when is_list(history) and history != [],
@@ -2606,6 +2836,35 @@ defmodule MaraithonWeb.TodosLive do
 
   defp normalize_new_todo_priority(value) when value in ~w(50 75 90), do: value
   defp normalize_new_todo_priority(_value), do: "50"
+
+  attr :workflow, :map, required: true
+
+  defp todo_ownership(assigns) do
+    assigns = assign(assigns, :ball_label, Maraithon.Todos.Workflow.ball_label(assigns.workflow))
+
+    ~H"""
+    <div class="mt-1 flex flex-wrap items-center gap-2" aria-label={"#{@ball_label}. State: #{@workflow["label"]}"}>
+      <span class="inline-flex items-center gap-1.5 text-sm font-semibold text-zinc-950">
+        <.icon name={:people} class="size-4 shrink-0" />
+        <%= @ball_label %>
+      </span>
+      <.badge color="zinc"><%= @workflow["label"] %></.badge>
+    </div>
+    """
+  end
+
+  defp workflow_review_value(workflow, timezone_info) do
+    with value when is_binary(value) <- workflow["waiting_until"],
+         {:ok, date, _} <- DateTime.from_iso8601(value) do
+      info = normalize_timezone_info(timezone_info)
+
+      date
+      |> DateTime.add(Timezones.offset_at(info.name, date, info.offset_hours), :hour)
+      |> Calendar.strftime("%Y-%m-%dT%H:%M")
+    else
+      _ -> ""
+    end
+  end
 
   defp parse_new_todo_due_at(nil, _timezone_info), do: {:ok, nil}
   defp parse_new_todo_due_at("", _timezone_info), do: {:ok, nil}

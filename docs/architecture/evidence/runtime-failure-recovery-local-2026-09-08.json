@@ -1,0 +1,44 @@
+{
+  "kind": "local_failure_recovery_and_outcome_verification",
+  "date": "2026-09-08",
+  "tests": 112,
+  "failures": 0,
+  "duration_seconds": 23.6,
+  "files": [
+    "test/maraithon/llm/openrouter_usage_test.exs",
+    "test/maraithon/llm/openrouter_provider_test.exs",
+    "test/maraithon/assistant_chat/acceptance_routing_test.exs",
+    "test/maraithon/todos/outcome_workflow_test.exs",
+    "test/maraithon/runtime/coordination/authority_test.exs",
+    "test/maraithon/telegram_assistant/action_reconciliation_test.exs",
+    "test/maraithon/telegram_assistant/prepared_action_state_test.exs",
+    "test/maraithon/telegram_assistant/continuation_test.exs",
+    "test/maraithon/telegram_assistant/runner_test.exs"
+  ],
+  "fixes": [
+    "Explicit integer quota parameter before bigint microunit arithmetic",
+    "Keep expected attestation rollback outside a nested test transaction",
+    "Refresh local partition guard from the checked-in migration; production already matches"
+  ],
+  "production_partition_guard": {
+    "execution": "maraithon-todo-validation-h7q27",
+    "preparing_drain_fenced": true,
+    "ready_catalog_items": 120
+  },
+  "outcome_scenarios": [
+    "normal handoffs",
+    "lost provider response then worker killed and restarted; mailbox reauthentication failure then exact Sent receipt",
+    "expired waiting review returns ownership without closing outcome",
+    "late approval superseded; wrong-user person rejected; duplicate and conflicting transitions"
+  ],
+  "limits": [
+    "Controlled people and provider responses, not a real meeting.",
+    "Production deployment-crossing and load evidence are recorded in runtime-workload-receipts-2026-09-08.json."
+  ],
+  "additional_final_checks": {
+    "cache_tests": 6,
+    "continuation_tests": 12,
+    "failures": 0,
+    "oversized_decision_preserves_checkpoint": true
+  }
+}

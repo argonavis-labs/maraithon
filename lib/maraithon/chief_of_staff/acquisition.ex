@@ -3724,7 +3724,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> List.flatten()
         |> sort_events()
 
-      status = if events == [], do: "partial", else: "ready"
+      # An empty calendar can be a successful read. Conversely, one working
+      # account must not conceal a failed account and make partial evidence
+      # look safe to reuse for the next half hour.
+      failed? = Enum.any?(fetches, &(&1["source"] == "calendar" and &1["status"] == "error"))
+      status = if failed?, do: "partial", else: "ready"
 
       bundle =
         SourceBundle.put_calendar(bundle, %{
@@ -3825,7 +3829,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           service_required?(requirements, "google", "gmail") and
           event_allows_source?(event_source, "gmail"),
       calendar:
-        service_required?(requirements, "google", "calendar") and
+        not truthy?(Map.get(context, :skip_calendar_sources)) and
+          service_required?(requirements, "google", "calendar") and
           event_allows_source?(event_source, "google_calendar"),
       slack: account_message_sources?,
       account_message_sources: account_message_sources?,
@@ -4886,6 +4891,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "notes" => truncate_string(event.notes, 2_000),
       "start" => timestamp(event.start_at),
       "end" => timestamp(event.end_at),
+      "updated" => timestamp(event.modified_at),
+      "created" => timestamp(event.created_at),
       "location" => event.location,
       "attendees" => event.attendee_emails || [],
       "organizer" => event.organizer_email,

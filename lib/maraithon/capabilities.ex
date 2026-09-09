@@ -10,6 +10,8 @@ defmodule Maraithon.Capabilities do
   alias Maraithon.Tools.InputSchemas
 
   @tool_modules %{
+    "browser_read" => Maraithon.Tools.BrowserRead,
+    "browser_interact" => Maraithon.Tools.BrowserInteract,
     "time" => Maraithon.Tools.Time,
     "http_get" => Maraithon.Tools.HttpGet,
     "read_file" => Maraithon.Tools.ReadFile,
@@ -112,6 +114,8 @@ defmodule Maraithon.Capabilities do
   }
 
   @tool_descriptions %{
+    "browser_read" => "Read or open a todo page in background Chrome on the paired Mac.",
+    "browser_interact" => "Execute an explicitly reviewed browser interaction on the paired Mac.",
     "time" => "Return the current UTC time.",
     "http_get" => "Fetch a URL with an HTTP GET request.",
     "read_file" => "Read a local file within the allowed tool roots.",
@@ -264,6 +268,7 @@ defmodule Maraithon.Capabilities do
   }
 
   @read_only_tools MapSet.new(~w(
+    browser_read
     time http_get read_file list_files file_tree search_files
     gmail_list_recent gmail_search gmail_get_message
     google_contacts_search google_calendar_list_events
@@ -294,6 +299,7 @@ defmodule Maraithon.Capabilities do
   ))
 
   @external_send_tools MapSet.new(~w(
+    browser_interact
     gmail_send_message github_create_issue_comment slack_post_message
     linear_create_comment linear_create_issue linear_update_issue linear_update_issue_state
     linear_update_issue notion_create_page

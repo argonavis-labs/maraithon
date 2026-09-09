@@ -18,7 +18,7 @@ defmodule MaraithonWeb.OAuthController do
 
   @oauth_state_salt "oauth_state"
   @oauth_state_max_age_seconds 600
-  @google_supported_services ["calendar", "calendar_write", "gmail", "contacts"]
+  @google_supported_services ["calendar", "calendar_write", "gmail", "gmail_compose", "contacts"]
 
   @doc """
   Initiates Google OAuth flow.
@@ -31,6 +31,15 @@ defmodule MaraithonWeb.OAuthController do
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_google_state(user_id, services, return_to)
       auth_url = Google.authorize_url(google_authorize_scopes(services), state)
+
+      auth_url =
+        case params["login_hint"] do
+          hint when is_binary(hint) ->
+            auth_url <> "&" <> URI.encode_query(%{"login_hint" => hint})
+
+          _ ->
+            auth_url
+        end
 
       redirect(conn, external: auth_url)
     else
@@ -823,6 +832,9 @@ defmodule MaraithonWeb.OAuthController do
           # scope always ships alongside the readonly scope, so
           # `google_services_from_scopes/1` adds `"calendar"` too).
           "calendar_write" ->
+            %{status: "connected"}
+
+          "gmail_compose" ->
             %{status: "connected"}
 
           _ ->

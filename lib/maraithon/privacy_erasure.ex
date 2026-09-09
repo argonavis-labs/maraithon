@@ -104,6 +104,9 @@ defmodule Maraithon.PrivacyErasure do
   # Child-first, fixed deletion plan for user/domain copies. Agent execution
   # authority is deliberately excluded and is proven absent below.
   @user_copy_specs [
+    {:delete, "people_network_snapshots", "user_id"},
+    {:delete, "people_network_profiles", "user_id"},
+    {:delete, "people_network_generations", "user_id"},
     {:update_null, "project_repo_grants", "granted_by_user_id"},
     {:update_null, "todos", "owner_user_id"},
     {:delete, "action_ledger_actions", "user_id"},
@@ -136,6 +139,8 @@ defmodule Maraithon.PrivacyErasure do
     {:delete, "insight_preference_rules", "user_id"},
     {:delete, "insight_threshold_profiles", "user_id"},
     {:delete, "insights", "user_id"},
+    {:delete, "todo_browser_commands", "user_id"},
+    {:delete, "todo_browser_hosts", "user_id"},
     {:delete, "local_browser_visits", "user_id"},
     {:delete, "local_calendar_events", "user_id"},
     {:delete, "local_files", "user_id"},

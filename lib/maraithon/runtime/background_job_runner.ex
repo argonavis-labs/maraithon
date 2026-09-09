@@ -465,14 +465,26 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp coordinated_reservations(session, partitions, limit, ttl_ms, state) do
     Enum.reduce_while(1..limit, {:ok, []}, fn _, {:ok, acc} ->
-      case FairScheduler.reserve_next(session, partitions,
-             task_ttl_ms: ttl_ms,
-             queues: state.queues,
-             exclude_queues: state.exclude_queues
-           ) do
+      result =
+        case DbResilience.with_database("background job reservation", fn ->
+               FairScheduler.reserve_next(session, partitions,
+                 task_ttl_ms: ttl_ms,
+                 queues: state.queues,
+                 exclude_queues: state.exclude_queues
+               )
+             end) do
+          {:ok, result} -> result
+          {:error, reason} -> {:error, reason}
+        end
+
+      case result do
         {:ok, nil} -> {:halt, {:ok, Enum.reverse(acc)}}
         {:ok, reservation} -> {:cont, {:ok, [reservation | acc]}}
-        error -> {:halt, error}
+        error when acc == [] -> {:halt, error}
+        # Each reservation already committed independently. A busy scheduler
+        # or database failure on the next claim must not drop earlier claims:
+        # their physical owner is still alive, so DOWN recovery cannot help.
+        _error -> {:halt, {:ok, Enum.reverse(acc)}}
       end
     end)
   end

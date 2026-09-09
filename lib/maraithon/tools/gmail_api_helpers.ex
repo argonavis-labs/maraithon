@@ -83,6 +83,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
       maybe_header("Cc", Keyword.get(opts, :cc)),
       maybe_header("Bcc", Keyword.get(opts, :bcc)),
       "Subject: #{subject}",
+      message_id_header(Keyword.get(opts, :message_id_header)),
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=UTF-8",
       maybe_header("In-Reply-To", Keyword.get(opts, :in_reply_to)),
@@ -94,6 +95,15 @@ defmodule Maraithon.Tools.GmailApiHelpers do
     |> Enum.join("\r\n")
     |> Base.url_encode64(padding: false)
   end
+
+  @doc false
+  def message_id_header(id) when is_binary(id) do
+    if byte_size(id) <= 255 and
+         Regex.match?(~r/^<[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9.-]+>$/, id),
+       do: "Message-ID: " <> id
+  end
+
+  def message_id_header(_), do: nil
 
   def normalize_error(:no_token), do: {:error, "google_account_not_connected"}
   def normalize_error(:reauth_required), do: {:error, "google_account_reauth_required"}

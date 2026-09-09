@@ -1,8 +1,17 @@
 /// Todo requests fetch every page before replacing the visible collection.
 /// Mutations stay scoped to the paired device's authenticated user.
 import Foundation
+import AssistantProgressKit
 
 extension MaraithonClient {
+    func transitionTodo(id: String, change: TodoWorkflowChange) async throws -> CompanionTodoDetailsResponse {
+        let request = try await makeRequest(method: "POST", path: "/api/v1/companion/todos/\(id)/workflow",
+            body: try JSONEncoder().encode(change), extraHeaders: ["Content-Type": "application/json"])
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(CompanionTodoDetailsResponse.self, from: data)
+    }
+
     func createTodo(_ draft: CompanionTodoDraft) async throws -> CompanionTodoDetailsResponse {
         let request = try await makeRequest(
             method: "POST",
@@ -112,6 +121,22 @@ extension MaraithonClient {
             delay = max(0, date.timeIntervalSinceNow)
         }
         return delay <= 30 ? max(1, delay) : nil
+    }
+
+    /// Sends only after the user reviews and confirms the exact message.
+    func sendTodoReply(id: String, body: String, subject: String) async throws -> CompanionTodoDetailsResponse {
+        let request = try await makeRequest(method: "POST", path: "/api/v1/companion/todos/\(id)/reply",
+            body: try JSONEncoder().encode(["body": body, "subject": subject]),
+            extraHeaders: ["Content-Type": "application/json"])
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(CompanionTodoDetailsResponse.self, from: data)
+    }
+
+    func markTodoOpened(id: String) async throws {
+        let request = try await makeRequest(method: "POST", path: "/api/v1/companion/todos/\(id)/opened", body: nil)
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
     }
 
     /// Fetches richer source context only for the item being inspected.

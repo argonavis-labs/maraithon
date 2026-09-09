@@ -70,6 +70,7 @@ final class TodosStore {
     }
 
     func load() async {
+        guard !Task.isCancelled else { return }
         loadGeneration += 1
         let generation = loadGeneration
         let requestedFilter = filter
@@ -106,6 +107,11 @@ final class TodosStore {
             rejectToken()
         } catch {
             guard generation == loadGeneration else { return }
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                phase = todos.isEmpty ? .idle : .loaded
+                eventLog.debug("todos.load_cancelled", source: .cloud)
+                return
+            }
             let message = CompanionErrorCopy.message(for: error)
             phase = .failed(message: message)
             eventLog.warning(
@@ -116,8 +122,25 @@ final class TodosStore {
         }
     }
 
+    func sendReply(for todo: CompanionTodo, body: String, subject: String) async throws {
+        let generation = accountGeneration
+        eventLog.debug("todos.reply_started", source: .cloud, payload: ["todo_id": todo.id])
+        do {
+            let response = try await client.sendTodoReply(id: todo.id, body: body, subject: subject)
+            guard generation == accountGeneration else { throw CancellationError() }
+            apply(response.todo)
+            eventLog.info("todos.reply_sent", source: .cloud, payload: ["todo_id": todo.id])
+        } catch MaraithonClientError.unauthorized {
+            if generation == accountGeneration { rejectToken() }
+            throw MaraithonClientError.unauthorized
+        } catch {
+            eventLog.warning("todos.reply_failed", source: .cloud, payload: ["todo_id": todo.id])
+            throw error
+        }
+    }
+
     func loadDetails(for todo: CompanionTodo) async {
-        guard todo.actionCard == nil else { return }
+        guard todo.actionCard == nil || todo.brief == nil else { return }
         let generation = loadGeneration
         let requestToken = UUID()
         detailRequestTokens[todo.id] = requestToken
@@ -133,7 +156,12 @@ final class TodosStore {
         }
 
         do {
-            let response = try await client.todoDetails(id: todo.id)
+            try await client.markTodoOpened(id: todo.id)
+            var response = try await client.todoDetails(id: todo.id)
+            for _ in 0..<6 where response.todo.brief == nil && response.todo.canMarkDone {
+                try await Task.sleep(for: .seconds(5))
+                response = try await client.todoDetails(id: todo.id)
+            }
             try Task.checkCancellation()
             guard generation == loadGeneration,
                   detailRequestTokens[todo.id] == requestToken,

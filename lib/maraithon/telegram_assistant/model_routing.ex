@@ -539,9 +539,9 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:request_focus, :linked_item_context)
     |> Keyword.put(:context_scope, :linked_item_context)
     |> Keyword.put(:tool_scope, :linked_item_context)
-    |> Keyword.put(:max_wall_clock_ms, 75_000)
-    |> Keyword.put(:max_llm_turns, 5)
-    |> Keyword.put(:max_tool_steps, 8)
+    |> Keyword.put(:max_wall_clock_ms, 120_000)
+    |> Keyword.put(:max_llm_turns, 8)
+    |> Keyword.put(:max_tool_steps, 12)
     |> Keyword.put(:model_busy_max_retries, 20)
     |> Keyword.put(:model_retry_max_delay_ms, 1_500)
   end

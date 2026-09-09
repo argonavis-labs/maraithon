@@ -21,7 +21,7 @@ defmodule Maraithon.Todos.Brief do
 
   require Logger
 
-  @version 3
+  @version 9
   @sentinel "TODO_BRIEF_JSON_V1"
   @metadata_key "brief"
   @lease_key "brief_generation"
@@ -35,8 +35,10 @@ defmodule Maraithon.Todos.Brief do
   @max_open_questions 3
   @max_prompt_bytes 100_000
   @max_age_seconds 6 * 60 * 60
+  @queue "runtime_todo_preparation"
 
   def version, do: @version
+  def queue, do: @queue
   def sentinel, do: @sentinel
   def metadata_key, do: @metadata_key
 
@@ -167,35 +169,55 @@ defmodule Maraithon.Todos.Brief do
   def enqueue_generation(todo, opts \\ [])
 
   def enqueue_generation(%Todo{} = todo, opts) do
+    force? = Keyword.get(opts, :force, false)
+
     cond do
       todo.status not in ~w(open snoozed) ->
         {:ok, nil}
 
-      current(todo) ->
+      current(todo) && not force? ->
         {:ok, nil}
 
-      content_current(todo) && not Keyword.get(opts, :refresh_expired, false) ->
+      content_current(todo) && not Keyword.get(opts, :refresh_expired, false) && not force? ->
         {:ok, nil}
 
       true ->
         refresh_key =
-          if Keyword.get(opts, :refresh_expired, false),
+          if Keyword.get(opts, :refresh_expired, false) || force?,
             do: ":refresh:#{(stored(todo) || %{})["generated_at"] || "missing"}",
             else: ""
 
         BackgroundJobs.enqueue("todo_brief_generation", %{
           user_id: todo.user_id,
-          queue: "runtime_model_user",
+          queue: @queue,
           partition_key: tenant_partition(todo.user_id),
           rate_limit_key: "model",
-          dedupe_key: "todo-brief:#{todo.id}:#{fingerprint(todo)}#{refresh_key}",
+          dedupe_key:
+            "todo-preparation:v#{@version}:#{todo.id}:#{fingerprint(todo)}#{refresh_key}",
           max_attempts: 3,
-          payload: %{"todo_id" => todo.id}
+          payload: %{
+            "todo_id" => todo.id,
+            "refresh" => force?,
+            "refresh_after" => (stored(todo) || %{})["generated_at"]
+          }
         })
     end
   end
 
   def enqueue_generation(_todo, _opts), do: {:error, :invalid_todo}
+
+  @doc "Prepare the first three actionable items in a visible list without running a model in the request."
+  def prepare_focus(todos) when is_list(todos) do
+    todos
+    |> Enum.filter(&(&1.status == "open" && &1.attention_mode != "monitor"))
+    |> Enum.take(3)
+    |> Enum.each(fn todo ->
+      case enqueue_generation(todo, refresh_expired: true) do
+        {:ok, _} -> :ok
+        {:error, reason} -> log_generation_failure(todo.id, reason)
+      end
+    end)
+  end
 
   @doc """
   Generates the brief for a todo and stores it on the todo.
@@ -313,7 +335,10 @@ defmodule Maraithon.Todos.Brief do
       {:ok,
        brief
        |> maybe_put("source_history", Context.source_history(context))
-       |> maybe_put("source_subject", Context.source_subject(context)), response_model(response)}
+       |> maybe_put("source_subject", Context.source_subject(context))
+       |> maybe_put("source_url", context.source["permalink"])
+       |> maybe_put("source_freshness", context.source["freshness_note"]),
+       response_model(response)}
     else
       {:error, reason} -> {:error, reason}
       other -> {:error, {:invalid_brief_response, other}}
@@ -327,6 +352,7 @@ defmodule Maraithon.Todos.Brief do
     metadata = todo.metadata || %{}
 
     [
+      Jason.encode!(Maraithon.Todos.Workflow.current(todo)),
       todo.title,
       todo.summary,
       todo.next_action,
@@ -371,7 +397,7 @@ defmodule Maraithon.Todos.Brief do
   # Lease
   # ---------------------------------------------------------------------------
 
-  defp ensure_generation_needed(%Todo{status: status}, false)
+  defp ensure_generation_needed(%Todo{status: status}, _force?)
        when status not in ~w(open snoozed),
        do: {:error, :not_actionable}
 
@@ -381,8 +407,8 @@ defmodule Maraithon.Todos.Brief do
 
   defp ensure_generation_needed(_todo, true), do: :ok
 
-  defp claim_lease(user_id, %Todo{} = todo, force?) do
-    if generating?(todo) and not force? do
+  defp claim_lease(user_id, %Todo{} = todo, _force?) do
+    if generating?(todo) do
       {:error, :in_progress}
     else
       lease = %{
@@ -414,19 +440,38 @@ defmodule Maraithon.Todos.Brief do
 
     Your bar:
     - Be specific. Use names, dates, numbers, and facts from the sources. Never invent facts; if something is unknown, name exactly what to check.
+    - A URL alone is not evidence of the page's current contents. Do not invent link/button labels, page text, or a website's current workflow from memory. If the supplied source does not contain a live page observation, recommend opening and inspecting that exact URL; the browser conversation will resolve the actual controls. Never present that proposed inspection as already performed.
     - Anchor timing to NOW. Use explicit calendar dates for deadlines and proposed commitments, not relative countdowns such as "in 3 hours", "today", or "tomorrow". A past deadline is overdue; do not recommend meeting it or carry an old proposed date into a new reply.
     - No preamble, no hedging, no filler, no praise. Every sentence must earn its place.
+    - First decide whether this work involves the user directly, implicitly, or not at all. Match Slack participant IDs to OPERATOR IDENTITY. Channel membership and a previous generated todo are not evidence of ownership. Implicit responsibility requires a concrete source or explicit user instruction linking the user to the outcome; it does not require an @mention.
+    - Treat the saved title, summary, People relationship labels, previous draft and previous brief as claims to check against the actual source. They can be wrong. Never use their repetition as corroboration.
+    - If the user is a bystander, say so clearly in the summary, explain who is being asked when known, and return no reply or steps. If the source is unavailable and ownership cannot be established, say what is unverified and return no invented commitment or promised deadline.
+    - A prior AI draft is not evidence of availability, agreement, progress or a promise. Never invent meeting slots, claim the user or another person is free, promise an unapproved deadline, or claim work has started. If the needed fact is missing, draft an honest clarification or acknowledgment without fabricating it.
+    - Source status cached or excerpt_only means partial synced coverage, not a live check. Never claim there were no later replies, edits, completion or acknowledgment from that partial view. Explain the remaining action from the evidence and ask the user to check the linked conversation for updates.
+    - Omit parts of a request already fulfilled. Do not reshare supplied contact information or redo completed steps unless the source explicitly asks again.
+    - The summary must lead with the smallest real next action, including any missing decision. Do not describe the draft or narrate how the UI works. Use 40-80 words, and stop once the user has enough context to act.
     - Think about what the other person actually needs and what the user is on the hook for. Point out anything the user already did that resolves or partly resolves this.
     - Plain hyphens only. Never use em dashes or en dashes anywhere in the output.
 
     Field rules:
+    - summary: the main thing the user will see. Write one compact paragraph, usually 2-4 sentences and at most 100 words, that lets them act without piecing together separate sections. Synthesize the actual request, the few facts/links/names/deadline needed to finish, and your recommended action. Include a missing decision only if it blocks completion. Do not restate the title or repeat every detail. Supporting history belongs in the other fields, which live in a Details tab.
+    - involvement: direct, implicit, bystander, or uncertain, based on the source and verified operator identity. Never convert someone else's deliverable into a promise by the user.
     - why_it_matters: 1-2 sentences on the concrete stakes and timing (who is waiting, what is blocked, when it is due).
     - situation: 2-4 sentences on what is actually being asked, grounded in the source thread, including any relevant history with the person.
     - recommendation: one sentence. The single best move.
+    - done_when: one observable outcome that would satisfy the original obligation, grounded in the source. Sending a supporting message, making a plan, or creating a calendar block is not completion of the larger obligation. Return null if the outcome cannot be established or the user is a bystander.
     - steps: only actions the user must do themselves (settings to open, files to gather, decisions to make). Imperative, specific to the platform mentioned (macOS System Settings paths, Gmail, Slack). Leave empty when the reply is the whole job. Max 6.
-    - reply: the finished message, or null when no message is warranted (a personal task with no counterpart, or the user already answered). Write it AS the user in the first person, in their voice from the voice profile. Match the channel: Slack and messages are short and casual, no subject, no sign-off; email has a subject, a greeting, a brief body, and signs with the user's first name. No placeholders like [insert link] unless the user truly must fill something in. If a fact is missing, either ask for it in the reply or set expectations with a specific time. Set resolves_todo to true only if sending this message fully completes the work item.
+    - The workflow outcome is the goal. Its state, owner and next_action describe the current step. Keep done_when aligned with that outcome. Meeting coordination and a calendar booking are intermediate progress when the outcome is the meeting actually happening. Keep resolves_todo false for intermediate messages, including sending proposed times or confirming a booking.
+    - reply: the finished message, or null when no message is warranted (a personal task with no counterpart, or the user already answered). Write it AS the user in the first person, in their voice from the voice profile. Match the channel: Slack and messages are short and casual, no subject, no sign-off; email has a subject, a greeting, a brief body, and signs with the user's first name. No placeholders like [insert link] unless the user truly must fill something in. If a fact is missing, ask for it or acknowledge the request without inventing that fact or promising a specific time. Set resolves_todo to true only if sending this message fully completes the work item.
     - reply.to: for email, copy the intended recipient's complete email address from source or contact evidence. Never invent an address or substitute a digest sender for a person mentioned inside it. If the address is unavailable, keep the person's name and make finding their address a step; the draft will remain copyable without direct send. A digest is indirect evidence, not the original conversation.
-    - open_questions: only decisions the user alone can make, phrased so a one-word answer works. Max 2. Usually empty.
+    - required_inputs: facts or decisions still needed to finish (for example, times that actually work for the user and their partner). List only genuinely missing inputs. If any remain, sending an acknowledgment cannot resolve the todo.
+    - open_questions: only decisions the user alone can make, phrased as a direct, easy-to-answer question. Max 2. Usually empty. Do not ask the user to look up a message, a contact, a document, or their calendar when Maraithon can read the connected source. Those are research steps for Maraithon, not human decisions.
+    - call: when a phone call is the useful next action and a phone number is present in the source or contact details, include {"number": "exact phone number", "label": "person to call"}; otherwise null. Never invent a number.
+    - people: the actual people involved in THIS obligation, including a partner or colleague whose input is needed before replying. Include a concise source-grounded explanation of who each is and their part in the todo. Match person_id to PEOPLE INVOLVED when available; otherwise null. Exclude the operator and unrelated thread participants. Never invent a relationship or infer an identity from a first-name match alone.
+    - For suggested actions, label Gmail actions "Email <name>" and iMessage/Slack actions "Message <name>" so the label matches the actual provider. Prefer imessage for a short coordination message to a partner/family member when People provides a phone or Messages contact; inspect their preferred_channel and contact_details. Do not assume every supporting message belongs in Gmail just because the original obligation came by email.
+    - "Add to calendar" should offer a short work block to advance this obligation now, such as coordinating availability and replying. Do not make it depend on a future reply or silently promise an invitation. Put it first when a work block would help; the conversation can prepare a meeting separately if requested.
+    - Website work can use background Chrome on the paired Mac through the todo conversation, including from mobile and web. Suggest provider browser with the exact source URL when the todo involves a portal, website research, or a web form. Maraithon can inspect the page and prepare clicks or text entry for review. Sign-in, CAPTCHA, unsupported controls, and final decisions may require the user. Do not say all website work must be done manually.
+    - suggested_actions: 2-4 concrete agent-assisted moves in the order they help finish this todo. Short labels name the action and person: "Add to calendar", "Message Christina", "Email Michael". These examples are illustrative; use only the actual people and work in the source. provider is calendar, gmail, imessage, slack, or browser; person_name matches a person above or null. purpose says exactly what to prepare or investigate, grounded in source facts. A calendar action schedules time to do the work unless the source actually asks for a meeting. Include a supporting message when another person's input is needed. Do not turn all actions into replies to the original sender. Return [] for bystander/uncertain involvement.
     - effort: under_2_min, under_15_min, or longer.
 
     Return STRICT JSON only. No markdown, no code fences, no commentary. Marker: #{@sentinel}
@@ -439,6 +484,8 @@ defmodule Maraithon.Todos.Brief do
       [
         {"NOW", context.now},
         {"USER IDENTITY", context.identity},
+        {"OPERATOR IDENTITY (JSON)", encode(context.operator_identity)},
+        {"EXPLICIT TODO INSTRUCTIONS (JSON)", encode(context.todo_instructions)},
         {"WORK ITEM (JSON)", encode(context.todo)},
         {"CHIEF OF STAFF READ (JSON)", encode(context.card)},
         {"SOURCE THREAD (JSON)", encode(context.source)},
@@ -454,7 +501,7 @@ defmodule Maraithon.Todos.Brief do
          [
            """
            Return JSON with exactly this shape:
-           {"why_it_matters": "string", "situation": "string", "recommendation": "string", "steps": ["string"], "reply": {"channel": "gmail|slack|imessage|whatsapp", "to": "string or null", "subject": "string or null", "body": "string", "resolves_todo": true} or null, "open_questions": ["string"], "effort": "under_2_min|under_15_min|longer"}
+           {"summary": "concise action brief", "involvement": "direct|implicit|bystander|uncertain", "why_it_matters": "string", "situation": "string", "recommendation": "string", "done_when": "observable completion outcome or null", "steps": ["string"], "reply": {"channel": "gmail|slack|imessage|whatsapp", "to": "string or null", "subject": "string or null", "body": "string", "resolves_todo": true} or null, "required_inputs": ["missing fact or decision"], "call": {"number": "exact source phone", "label": "person"} or null, "open_questions": ["string"], "effort": "under_2_min|under_15_min|longer", "people": [{"person_id": "id from supplied people or null", "name": "actual name", "context": "who they are and why involved"}], "suggested_actions": [{"label": "short action label", "provider": "calendar|gmail|imessage|slack|browser", "person_name": "actual name or null", "purpose": "concrete next step to prepare"}]}
            #{@sentinel}
            """
            |> String.trim()
@@ -537,20 +584,57 @@ defmodule Maraithon.Todos.Brief do
   end
 
   defp normalize(parsed, context) when is_map(parsed) do
+    summary = clean(parsed["summary"])
+
+    has_evidence? =
+      context.source["status"] in ["available", "cached"] or
+        (context.source["status"] == "excerpt_only" and
+           (context.source["conversation"] || []) != []) or
+        get_in(context.todo, ["personal_involvement", "version"]) == 1 or
+        context.todo["source"] in ~w(manual user mobile mcp assistant)
+
+    involvement =
+      if has_evidence? or parsed["involvement"] == "bystander",
+        do: parsed["involvement"],
+        else: "uncertain"
+
+    summary =
+      if not has_evidence? and involvement != "bystander",
+        do:
+          "I couldn’t verify the original source or your responsibility for this item. Open the source to check who needs to act before making a commitment.",
+        else: summary
+
+    actionable? = involvement in ["direct", "implicit"]
+    people = Maraithon.Todos.Workspace.normalize_people(parsed["people"], context)
+
+    actions =
+      if actionable?,
+        do: Maraithon.Todos.Workspace.normalize_actions(parsed["suggested_actions"], people),
+        else: []
+
+    required_inputs = string_list(parsed["required_inputs"], @max_open_questions)
     why = clean(parsed["why_it_matters"])
     situation = clean(parsed["situation"])
     recommendation = clean(parsed["recommendation"])
 
-    if is_nil(why) and is_nil(recommendation) do
+    if is_nil(summary) or involvement not in ~w(direct implicit bystander uncertain) do
       {:error, :empty_brief}
     else
       {:ok,
        %{
+         "summary" => summary,
+         "people" => people,
+         "suggested_actions" => actions,
+         "involvement" => involvement,
          "why_it_matters" => why,
          "situation" => situation,
          "recommendation" => recommendation,
-         "steps" => string_list(parsed["steps"], @max_steps),
-         "reply" => normalize_reply(parsed["reply"], context),
+         "done_when" => if(actionable?, do: clean(parsed["done_when"])),
+         "steps" => if(actionable?, do: string_list(parsed["steps"], @max_steps), else: []),
+         "required_inputs" => required_inputs,
+         "reply" =>
+           if(actionable?, do: normalize_reply(parsed["reply"], context, required_inputs)),
+         "call" => if(actionable?, do: normalize_call(parsed["call"], context)),
          "open_questions" => string_list(parsed["open_questions"], @max_open_questions),
          "effort" => normalize_effort(parsed["effort"])
        }}
@@ -559,7 +643,26 @@ defmodule Maraithon.Todos.Brief do
 
   defp normalize(_parsed, _context), do: {:error, :invalid_brief_shape}
 
-  defp normalize_reply(%{} = reply, context) do
+  defp normalize_call(%{"number" => number, "label" => label}, context)
+       when is_binary(number) and is_binary(label) do
+    # A call target must occur verbatim (ignoring phone punctuation) in source
+    # or contact evidence. Never turn arbitrary generated digits into a dialer.
+    digits = String.replace(number, ~r/[^0-9+]/, "")
+    evidence = encode(%{source: context.source, people: context.people})
+
+    known_numbers =
+      Regex.scan(~r/\+?\d[\d ().-]{5,}\d/, evidence)
+      |> List.flatten()
+      |> Enum.map(&String.replace(&1, ~r/[^0-9+]/, ""))
+
+    if String.match?(digits, ~r/^\+?\d{7,15}$/) and digits in known_numbers do
+      %{"number" => digits, "label" => truncate(label, 100)}
+    end
+  end
+
+  defp normalize_call(_, _), do: nil
+
+  defp normalize_reply(%{} = reply, context, required_inputs) do
     body = clean_multiline(reply["body"] || reply["text"])
 
     if is_nil(body) do
@@ -577,14 +680,14 @@ defmodule Maraithon.Todos.Brief do
         "to" => clean(reply["to"]),
         "subject" => if(channel == "gmail", do: clean(reply["subject"]), else: nil),
         "body" => body,
-        "resolves_todo" => reply["resolves_todo"] == true
+        "resolves_todo" => reply["resolves_todo"] == true and required_inputs == []
       }
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Map.new()
     end
   end
 
-  defp normalize_reply(_reply, _context), do: nil
+  defp normalize_reply(_reply, _context, _required_inputs), do: nil
 
   defp normalize_effort(value) when value in @efforts, do: value
   defp normalize_effort(_value), do: nil

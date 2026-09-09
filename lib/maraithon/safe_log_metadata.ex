@@ -12,7 +12,7 @@ defmodule Maraithon.SafeLogMetadata do
   @identifier_fields ~w(userid chatid telegramchatid accountid owneruserid)
 
   @numeric_fields ~w(
-    durationms retryafterms inputtokens outputtokens reasoningtokens costusd
+    durationms retryafterms inputtokens outputtokens reasoningtokens costusd estimatedcostusd
     cachereadtokens cachewritetokens
     choicecount detailfailurecount promptbytes promptbytecap basepromptbytes
     availablecandidates includedcandidates users usercount planned interruptnow
@@ -29,7 +29,7 @@ defmodule Maraithon.SafeLogMetadata do
     requestid agentid effectid jobid jobtype provider useridhash userfingerprint
     agentreference devicereference candidatereference effectreference cyclereference
     providerreference targetreference
-    model reasoningeffort finishreason failurecode responseshape errorclass
+    model reasoningeffort finishreason failurecode responseshape errorclass costsource
     transportclass callbackclass promptkind effecttype eventtype table
   )
 
@@ -63,6 +63,8 @@ defmodule Maraithon.SafeLogMetadata do
     :cache_read_tokens,
     :cache_write_tokens,
     :cost_usd,
+    :estimated_cost_usd,
+    :cost_source,
     :finish_reason,
     :choice_count,
     :detail_failure_count,

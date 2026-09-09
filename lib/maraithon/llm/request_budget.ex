@@ -5,7 +5,10 @@ defmodule Maraithon.LLM.RequestBudget do
 
   @max_request_bytes 128_000
   @max_messages 64
-  @max_tools 64
+  # The existing focused todo catalog has 64 actions before the final-response
+  # function and model escalation. Keep its permissions intact; total request
+  # bytes and loop execution limits still bound the work.
+  @max_tools 128
   @allowed_keys ~w(
     messages model max_tokens max_output_tokens temperature reasoning_effort timeout_ms
     tools tool_choice response_format reasoning stream top_p seed presence_penalty frequency_penalty

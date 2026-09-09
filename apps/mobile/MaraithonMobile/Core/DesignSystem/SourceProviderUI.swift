@@ -32,6 +32,8 @@ struct ProviderMark: View {
 
     private var assetName: String? {
         switch provider {
+        case "browser":
+            return "ProviderChromeLogo"
         case "gmail":
             return "ProviderGmailLogo"
         case "slack":
@@ -56,7 +58,7 @@ struct ProviderMark: View {
 
     private var background: Color {
         switch provider {
-        case "gmail", "slack", "imessage":
+        case "gmail", "slack", "imessage", "browser":
             return Color.white
         case "whatsapp":
             return Color(red: 0.15, green: 0.72, blue: 0.36)
@@ -67,7 +69,7 @@ struct ProviderMark: View {
 
     private var borderColor: Color {
         switch provider {
-        case "gmail", "slack", "imessage":
+        case "gmail", "slack", "imessage", "browser":
             return Color(uiColor: .separator).opacity(0.35)
         default:
             return .clear

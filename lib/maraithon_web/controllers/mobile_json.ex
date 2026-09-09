@@ -41,6 +41,7 @@ defmodule MaraithonWeb.MobileJSON do
       source: todo.source,
       kind: todo.kind,
       attention_mode: todo.attention_mode,
+      workflow: Maraithon.Todos.Workflow.current(todo),
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,

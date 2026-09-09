@@ -34,6 +34,18 @@ cache_image="${image_repository}:build-cache"
 connection="${project}:${region}:${database_instance}"
 socket_dir="/cloudsql/${connection}"
 
+# Capture the migration digest from the source being uploaded, before the build waits.
+migrations_digest="$(
+  find "${ROOT_DIR}/priv/repo/migrations" -type f -name '*.exs' -print |
+    LC_ALL=C sort |
+    while IFS= read -r migration; do
+      relative_path="${migration#"${ROOT_DIR}"/}"
+      printf '%s ' "${relative_path}"
+      git -C "${ROOT_DIR}" hash-object "${relative_path}"
+    done |
+    git -C "${ROOT_DIR}" hash-object --stdin
+)"
+
 echo "Building ${image} with the shared Docker layer cache"
 run_in "${ROOT_DIR}" gcloud builds submit \
   --project "${project}" \
@@ -91,17 +103,6 @@ if [[ -z "${deployment_generation}" ]]; then
     ' <<<"${runtime_service_json}"
   )"
 fi
-
-migrations_digest="$(
-  find "${ROOT_DIR}/priv/repo/migrations" -type f -name '*.exs' -print |
-    LC_ALL=C sort |
-    while IFS= read -r migration; do
-      relative_path="${migration#"${ROOT_DIR}"/}"
-      printf '%s ' "${relative_path}"
-      git -C "${ROOT_DIR}" hash-object "${relative_path}"
-    done |
-    git -C "${ROOT_DIR}" hash-object --stdin
-)"
 
 gmail_pubsub_project="${MARAITHON_GMAIL_PUBSUB_PROJECT:-orchestrator-483621}"
 gmail_topic_id="${MARAITHON_GMAIL_PUBSUB_TOPIC_ID:-maraithon-gmail-push}"
@@ -193,6 +194,7 @@ source_revision="$(
 )"
 source_service_url="$(jq -r '.status.url // ""' <<<"${service_json}")"
 source_drain_requested=false
+retired_revisions="$(jq -cn --arg revision "${source_revision}" '[$revision] | map(select(. != ""))')"
 
 restore_drained_source_on_exit() {
   local exit_status=$?
@@ -238,15 +240,31 @@ if [[ "${current_role}" == "combined" && -n "${source_revision}" && -n "${source
       --project "${project}" 2>/dev/null
   )" || [[ -z "${fast_api_token}" ]]; then
     echo "Skipping best-effort runtime drain: API bearer token unavailable" >&2
-  elif curl --silent --show-error --fail --max-time 15 \
-    --request POST \
-    --header "Authorization: Bearer ${fast_api_token}" \
-    "${source_service_url}/api/v1/runtime/drain" >/dev/null; then
-    source_drain_requested=true
-    trap restore_drained_source_on_exit EXIT
-    echo "Requested graceful shutdown of ${source_revision}; continuing rolling deploy"
   else
-    echo "Best-effort runtime drain unavailable; continuing rolling deploy" >&2
+    # Capture physical revisions before replacement. A service URL addresses
+    # one instance; a WebSocket can keep another, older instance alive at 0%
+    # traffic. The replacement will retire every node in this bounded snapshot.
+    source_runtime_status="$(curl --silent --show-error --fail --max-time 15 \
+      --header "Authorization: Bearer ${fast_api_token}" \
+      "${source_service_url}/api/v1/runtime/status" || printf '{}')"
+    if candidate_revisions="$(jq -ce --arg revision "${source_revision}" '
+      ((.live_runtime_revisions // []) + [$revision]) | unique |
+      map(select(type == "string" and . != "")) |
+      select(length <= 64)
+    ' <<<"${source_runtime_status}")"; then
+      retired_revisions="${candidate_revisions}"
+    fi
+
+    if curl --silent --show-error --fail --max-time 15 \
+      --request POST \
+      --header "Authorization: Bearer ${fast_api_token}" \
+      "${source_service_url}/api/v1/runtime/drain" >/dev/null; then
+      source_drain_requested=true
+      trap restore_drained_source_on_exit EXIT
+      echo "Requested graceful shutdown of ${source_revision}; continuing rolling deploy"
+    else
+      echo "Best-effort runtime drain unavailable; continuing rolling deploy" >&2
+    fi
   fi
 fi
 
@@ -308,6 +326,28 @@ health_payload="$(
 if ! jq -e '.status == "ok" and .process_role == "combined"' <<<"${health_payload}" >/dev/null; then
   echo "Combined service health check failed: ${health_payload}" >&2
   exit 1
+fi
+
+# Retirement is a best-effort command, not a drain-proof deployment gate. The
+# receiving revision must match the replacement, and only the pre-deploy
+# revision snapshot may be fenced. Ordinary Sessions retain proof ownership.
+if [[ -n "${fast_api_token:-}" && "${retired_revisions}" != "[]" ]]; then
+  replacement_revision="$(jq -er '.status.latestReadyRevisionName' <<<"${deployed_service_json}")"
+  retirement_payload="$(jq -cn \
+    --arg serving "${replacement_revision}" \
+    --argjson retired "${retired_revisions}" \
+    '{serving_revision: $serving, retired_revisions: $retired}')"
+  if retirement_result="$(curl --silent --show-error --fail --max-time 30 \
+    --request POST \
+    --header "Authorization: Bearer ${fast_api_token}" \
+    --header 'Content-Type: application/json' \
+    --data "${retirement_payload}" \
+    "${service_url}/api/v1/runtime/retire")" &&
+      jq -e '.failed == 0' <<<"${retirement_result}" >/dev/null; then
+    echo "Requested retirement of old runtime instances"
+  else
+    echo "WARNING: some old runtime instances still need retirement; inspect /api/v1/runtime/status" >&2
+  fi
 fi
 
 # After the one-time cutover, let the old private runtime service scale to zero.

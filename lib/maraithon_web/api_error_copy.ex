@@ -12,6 +12,8 @@ defmodule MaraithonWeb.ApiErrorCopy do
   @mobile_chat_code_errors ~w(
     not_found
     assistant_run_in_progress
+    assistant_queue_full
+    client_message_id_conflict
     message_too_long
     missing_client_message_id
     empty_message
@@ -314,6 +316,12 @@ defmodule MaraithonWeb.ApiErrorCopy do
   defp mobile_chat_message(:assistant_run_in_progress) do
     "Maraithon is still working on your last request. Wait for that answer before sending another message."
   end
+
+  defp mobile_chat_message(:assistant_queue_full),
+    do: "Your earlier requests are still being handled. Try sending this message again shortly."
+
+  defp mobile_chat_message(:client_message_id_conflict),
+    do: "This message identifier was already used. Send the edited message as a new message."
 
   defp mobile_chat_message(:message_too_long), do: "Message is too long. Send a shorter note."
 

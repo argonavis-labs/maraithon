@@ -9,7 +9,7 @@ defmodule Maraithon.Todos.ActivityEvent do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @event_types ~w(created deleted marked_done)
+  @event_types ~w(created deleted marked_done workflow_changed)
   @actor_types ~w(agent user)
 
   schema "todo_activity_events" do

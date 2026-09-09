@@ -7,6 +7,8 @@ defmodule Maraithon.VaultCiphertextRegistry do
   """
 
   @extra [
+    %{module: Maraithon.TodoBrowser.Command, table: "todo_browser_commands", field: :payload, column: "payload", type: :map, max_bytes: 65_536},
+    %{module: Maraithon.TodoBrowser.Command, table: "todo_browser_commands", field: :result, column: "result", type: :map, max_bytes: 131_072},
     %{
       module: Maraithon.Accounts.ConnectedAccount,
       table: "connected_accounts",

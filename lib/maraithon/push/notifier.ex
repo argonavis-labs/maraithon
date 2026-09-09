@@ -14,14 +14,29 @@ defmodule Maraithon.Push.Notifier do
   require Logger
 
   @doc """
-  True when this user's proactive delivery should go to their phone instead
-  of Telegram: the global switch is on, APNs is configured, and the user has
-  at least one active registered device. The per-user device gate is what
-  makes the hard cutover safe — a user with no phone registered keeps
-  Telegram until the day they sign in on the app.
+  True when mobile push is enabled, APNs is configured, and the user has an
+  active registered device. Telegram is no longer a fallback transport.
   """
   def enabled_for_user?(user_id) do
-    enabled?() and APNS.configured?() and Devices.any_active?(user_id)
+    availability(user_id) == :ok
+  end
+
+  @doc "Transport readiness without looking up a user or exposing credentials."
+  def configuration_status do
+    cond do
+      not enabled?() -> :disabled
+      not APNS.configured?() -> :not_configured
+      true -> :ready
+    end
+  end
+
+  @doc "Distinguishes an operator configuration problem from a missing phone."
+  def availability(user_id) do
+    case configuration_status() do
+      :disabled -> {:error, :push_disabled}
+      :not_configured -> {:error, :push_not_configured}
+      :ready -> if Devices.any_active?(user_id), do: :ok, else: {:error, :no_push_device}
+    end
   end
 
   @doc """

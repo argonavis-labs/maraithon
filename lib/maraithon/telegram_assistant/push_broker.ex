@@ -33,15 +33,12 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   def urgency_exempt_threshold, do: @urgency_exempt_threshold
 
   def deliver_insight(%Delivery{} = delivery) do
-    cond do
-      not TelegramAssistant.unified_push_enabled?() ->
-        {:fallback, :disabled}
-
-      TelegramAssistant.proactive_delivery_planner_enabled?() ->
+    with :ok <- delivery_admission() do
+      if TelegramAssistant.proactive_delivery_planner_enabled?() do
         enqueue_insight_candidate(delivery)
-
-      true ->
+      else
         deliver_insight_now(delivery)
+      end
     end
   end
 
@@ -130,15 +127,12 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   def deliver_brief(%Brief{} = brief) do
-    cond do
-      not TelegramAssistant.unified_push_enabled?() ->
-        {:fallback, :disabled}
-
-      TelegramAssistant.proactive_delivery_planner_enabled?() ->
+    with :ok <- delivery_admission() do
+      if TelegramAssistant.proactive_delivery_planner_enabled?() do
         enqueue_brief_candidate(brief)
-
-      true ->
+      else
         deliver_brief_now(brief)
+      end
     end
   end
 
@@ -153,7 +147,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   def deliver(candidate) when is_map(candidate) do
-    if TelegramAssistant.unified_push_enabled?() do
+    with :ok <- delivery_admission() do
       candidate = normalize_candidate(candidate)
 
       case reserve_delivery(candidate) do
@@ -172,8 +166,19 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         {:error, reason} ->
           {:error, reason}
       end
-    else
-      {:fallback, :disabled}
+    end
+  end
+
+  # Missing credentials are an operational fault, not an intentional pause.
+  # An explicit enable flag does not prove transport readiness. Check before
+  # queueing model work as well as before reserving an external send.
+  defp delivery_admission do
+    case {TelegramAssistant.unified_push_explicitly_disabled?(),
+          MobilePush.configuration_status()} do
+      {true, _status} -> {:fallback, :disabled}
+      {false, :disabled} -> {:fallback, :disabled}
+      {false, :not_configured} -> {:error, :push_not_configured}
+      {false, :ready} -> :ok
     end
   end
 
@@ -400,11 +405,13 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   # pending and the producer's cycle retries once a device registers (briefs
   # additionally reach the inbox by email regardless).
   defp send_candidate(candidate, receipt) do
-    if MobilePush.enabled_for_user?(candidate.user_id) do
-      send_candidate_mobile(candidate, receipt)
-    else
-      release_reservation(receipt)
-      {:error, :no_push_device}
+    case MobilePush.availability(candidate.user_id) do
+      :ok ->
+        send_candidate_mobile(candidate, receipt)
+
+      {:error, _reason} = error ->
+        release_reservation(receipt)
+        error
     end
   end
 

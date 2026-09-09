@@ -1,0 +1,2229 @@
+{
+  "kind": "sustained_workload_and_rollout_receipts",
+  "execution": "maraithon-todo-validation-rf5hb",
+  "started_at": "2026-09-08T23:04:30.286244+00:00",
+  "finished_at": "2026-09-08T23:17:41.935182+00:00",
+  "elapsed_seconds": 791.607,
+  "accepted": 18,
+  "completed": 18,
+  "duplicate_requests_same_run": 18,
+  "one_assignment_and_final_response_per_run": true,
+  "acceptance_before_routing_fix_seconds": {
+    "n": 4,
+    "median": 3.1384,
+    "p95": 4.55,
+    "maximum": 4.55
+  },
+  "acceptance_after_routing_fix_seconds": {
+    "n": 14,
+    "median": 0.6229,
+    "p95": 0.8485,
+    "maximum": 0.8485
+  },
+  "duplicate_before_routing_fix_seconds": {
+    "n": 4,
+    "median": 2.8383,
+    "p95": 3.1085,
+    "maximum": 3.1085
+  },
+  "duplicate_after_routing_fix_seconds": {
+    "n": 14,
+    "median": 0.40974999999999995,
+    "p95": 0.5826,
+    "maximum": 0.5826
+  },
+  "steady_queue_seconds": {
+    "n": 11,
+    "median": 1.170447,
+    "p95": 3.422142,
+    "maximum": 3.422142
+  },
+  "steady_execution_seconds": {
+    "n": 11,
+    "median": 13.915477,
+    "p95": 22.018353,
+    "maximum": 22.018353
+  },
+  "rollout_request": {
+    "index": 3,
+    "category": "meeting_preparation",
+    "acceptance_seconds": 4.55,
+    "duplicate_seconds": 0.3355,
+    "duplicate_same_run": true,
+    "queue_seconds": 87.952757,
+    "execution_seconds": 20.867399,
+    "accepted_to_finished_seconds": 108.820156,
+    "status": "completed",
+    "started_at": "2026-09-08T23:08:19.790835Z",
+    "model": "moonshotai/kimi-k3",
+    "job": {
+      "id": "9d2cf135-7414-470b-8daa-9f502dce9267",
+      "status": "completed",
+      "assignments": [
+        {
+          "id": "7b42db1f-c665-42c8-bec9-a8db4ea76118",
+          "inserted_at": "2026-09-08T23:08:18.783092",
+          "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+          "outcome": "completed",
+          "outcome_evidence": true,
+          "provider_boundary": "outcome_known",
+          "ready_at": "2026-09-08T23:08:19.201558",
+          "revision": "maraithon-00286-wq4",
+          "settled_at": "2026-09-08T23:08:40.770743",
+          "state": "settled",
+          "termination_evidence": false,
+          "termination_requested_at": null
+        }
+      ],
+      "attempts": 0,
+      "scheduled_at": "2026-09-08T23:06:51.996866Z",
+      "claimed_at": null,
+      "completed_at": "2026-09-08T23:08:40.778214Z"
+    },
+    "steps": [
+      {
+        "status": "completed",
+        "type": "context_fetch",
+        "started_at": "2026-09-08T23:08:23.304402Z",
+        "sequence": 1,
+        "finished_at": "2026-09-08T23:08:23.304402Z",
+        "request_bytes": 95938,
+        "response_bytes": 23
+      },
+      {
+        "status": "completed",
+        "type": "llm_request",
+        "started_at": "2026-09-08T23:08:24.332911Z",
+        "sequence": 2,
+        "finished_at": "2026-09-08T23:08:31.264214Z",
+        "request_bytes": 57496,
+        "response_bytes": 11
+      },
+      {
+        "status": "completed",
+        "type": "llm_response",
+        "started_at": "2026-09-08T23:08:31.441764Z",
+        "sequence": 3,
+        "finished_at": "2026-09-08T23:08:31.441764Z",
+        "request_bytes": 2,
+        "response_bytes": 297
+      },
+      {
+        "status": "completed",
+        "type": "tool_call",
+        "started_at": "2026-09-08T23:08:32.027753Z",
+        "sequence": 4,
+        "finished_at": "2026-09-08T23:08:32.157449Z",
+        "request_bytes": 108,
+        "response_bytes": 959
+      },
+      {
+        "status": "completed",
+        "type": "llm_request",
+        "started_at": "2026-09-08T23:08:32.623384Z",
+        "sequence": 5,
+        "finished_at": "2026-09-08T23:08:39.468588Z",
+        "request_bytes": 58522,
+        "response_bytes": 11
+      },
+      {
+        "status": "completed",
+        "type": "llm_response",
+        "started_at": "2026-09-08T23:08:39.626622Z",
+        "sequence": 6,
+        "finished_at": "2026-09-08T23:08:39.626622Z",
+        "request_bytes": 2,
+        "response_bytes": 274
+      }
+    ],
+    "run_id": "38e02fbc-ec60-4494-9b85-836c4ba1d510",
+    "turns": [
+      {
+        "count": 1,
+        "role": "assistant",
+        "terminal_response": true,
+        "turn_kind": "assistant_reply"
+      },
+      {
+        "count": 1,
+        "role": "user",
+        "terminal_response": true,
+        "turn_kind": "user_message"
+      }
+    ],
+    "accepted_at": "2026-09-08T23:06:51.838078Z",
+    "finished_at": "2026-09-08T23:08:40.658234Z",
+    "checkpoint_bytes": 0,
+    "checkpoint_phase": null
+  },
+  "records": [
+    {
+      "index": 0,
+      "category": "todos",
+      "acceptance_seconds": 3.1599,
+      "duplicate_seconds": 3.1085,
+      "duplicate_same_run": true,
+      "queue_seconds": 0.708756,
+      "execution_seconds": 19.253273,
+      "accepted_to_finished_seconds": 19.962029,
+      "status": "completed",
+      "started_at": "2026-09-08T23:04:33.867056Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "e749dc7c-7a95-4299-b3a2-21f977418e56",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "70823531-c836-480a-9e9b-ad267822d32b",
+            "inserted_at": "2026-09-08T23:04:33.543749",
+            "node_incarnation_id": "35ca7342-8c63-4a43-a9d2-cf32708ed317",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:04:33.690958",
+            "revision": "maraithon-00285-t2f",
+            "settled_at": "2026-09-08T23:04:53.233460",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:04:33.395651Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:04:53.238287Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:04:39.796755Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:04:39.796755Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:04:41.314574Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:04:45.430828Z",
+          "request_bytes": 57453,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:04:45.588740Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:04:45.588740Z",
+          "request_bytes": 2,
+          "response_bytes": 298
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:04:46.298885Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:04:46.413882Z",
+          "request_bytes": 96,
+          "response_bytes": 15353
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:04:47.109488Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:04:51.725359Z",
+          "request_bytes": 55451,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:04:51.854405Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:04:51.854405Z",
+          "request_bytes": 2,
+          "response_bytes": 268
+        }
+      ],
+      "run_id": "10063e84-fe1c-4863-b0f6-8966d21ae962",
+      "turns": [
+        {
+          "count": 2,
+          "role": "assistant",
+          "terminal_response": false,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:04:33.158300Z",
+      "finished_at": "2026-09-08T23:04:53.120329Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 1,
+      "category": "calendar",
+      "acceptance_seconds": 3.0887,
+      "duplicate_seconds": 2.8326,
+      "duplicate_same_run": true,
+      "queue_seconds": 0.771831,
+      "execution_seconds": 17.801332,
+      "accepted_to_finished_seconds": 18.573163,
+      "status": "completed",
+      "started_at": "2026-09-08T23:05:21.895950Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "911c3a21-6329-4f8c-a843-01435296c3b9",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "dff52734-b8aa-49f1-9bc0-a762b128e889",
+            "inserted_at": "2026-09-08T23:05:21.515814",
+            "node_incarnation_id": "35ca7342-8c63-4a43-a9d2-cf32708ed317",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:05:21.708895",
+            "revision": "maraithon-00285-t2f",
+            "settled_at": "2026-09-08T23:05:40.099733",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:05:21.327385Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:05:40.105654Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:05:27.613777Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:05:27.613777Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:05:28.607693Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:05:33.805896Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:05:33.941258Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:05:33.941258Z",
+          "request_bytes": 2,
+          "response_bytes": 309
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:05:34.434185Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:05:34.535952Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:05:35.075293Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:05:38.339569Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:05:38.508091Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:05:38.508091Z",
+          "request_bytes": 2,
+          "response_bytes": 266
+        }
+      ],
+      "run_id": "a2db116c-4848-46a0-add8-4ce197250399",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:05:21.124119Z",
+      "finished_at": "2026-09-08T23:05:39.697282Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 2,
+      "category": "people",
+      "acceptance_seconds": 3.1169,
+      "duplicate_seconds": 2.844,
+      "duplicate_same_run": true,
+      "queue_seconds": 1.320054,
+      "execution_seconds": 22.918568,
+      "accepted_to_finished_seconds": 24.238622,
+      "status": "completed",
+      "started_at": "2026-09-08T23:06:09.442956Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "3ae2cc49-001c-4f98-bf45-49609fda8d1d",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "495ba9fd-5da5-4112-84ab-a7c6f102d6fd",
+            "inserted_at": "2026-09-08T23:06:09.078483",
+            "node_incarnation_id": "35ca7342-8c63-4a43-a9d2-cf32708ed317",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:06:09.263921",
+            "revision": "maraithon-00285-t2f",
+            "settled_at": "2026-09-08T23:06:32.481262",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:06:08.296041Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:06:32.486562Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:06:15.129817Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:06:15.129817Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:06:16.132887Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:06:22.878814Z",
+          "request_bytes": 57487,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:06:23.018653Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:06:23.018653Z",
+          "request_bytes": 2,
+          "response_bytes": 276
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:06:23.564017Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:06:23.733176Z",
+          "request_bytes": 107,
+          "response_bytes": 15499
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:06:24.650545Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:06:31.502480Z",
+          "request_bytes": 55485,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:06:31.638701Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:06:31.638701Z",
+          "request_bytes": 2,
+          "response_bytes": 259
+        }
+      ],
+      "run_id": "89e9a254-7bfa-46bc-a076-abc41fd371e7",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:06:08.122902Z",
+      "finished_at": "2026-09-08T23:06:32.361524Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 3,
+      "category": "meeting_preparation",
+      "acceptance_seconds": 4.55,
+      "duplicate_seconds": 0.3355,
+      "duplicate_same_run": true,
+      "queue_seconds": 87.952757,
+      "execution_seconds": 20.867399,
+      "accepted_to_finished_seconds": 108.820156,
+      "status": "completed",
+      "started_at": "2026-09-08T23:08:19.790835Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "9d2cf135-7414-470b-8daa-9f502dce9267",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "7b42db1f-c665-42c8-bec9-a8db4ea76118",
+            "inserted_at": "2026-09-08T23:08:18.783092",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:08:19.201558",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:08:40.770743",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:06:51.996866Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:08:40.778214Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:08:23.304402Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:08:23.304402Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:08:24.332911Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:08:31.264214Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:08:31.441764Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:08:31.441764Z",
+          "request_bytes": 2,
+          "response_bytes": 297
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:08:32.027753Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:08:32.157449Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:08:32.623384Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:08:39.468588Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:08:39.626622Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:08:39.626622Z",
+          "request_bytes": 2,
+          "response_bytes": 274
+        }
+      ],
+      "run_id": "38e02fbc-ec60-4494-9b85-836c4ba1d510",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:06:51.838078Z",
+      "finished_at": "2026-09-08T23:08:40.658234Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 4,
+      "category": "todos",
+      "acceptance_seconds": 0.6609,
+      "duplicate_seconds": 0.3738,
+      "duplicate_same_run": true,
+      "queue_seconds": 66.950725,
+      "execution_seconds": 14.109508,
+      "accepted_to_finished_seconds": 81.060233,
+      "status": "completed",
+      "started_at": "2026-09-08T23:08:41.499160Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "f27bdb85-09f1-4d8b-8b0b-fbed3a6acca5",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "4e7d3aa8-4145-4170-a212-72c012140c89",
+            "inserted_at": "2026-09-08T23:08:41.041331",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:08:41.304242",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:08:55.728584",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:07:34.772919Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:08:55.735729Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:08:47.231451Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:08:47.231451Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:08:48.114040Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:08:50.994861Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:08:51.152744Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:08:51.152744Z",
+          "request_bytes": 2,
+          "response_bytes": 319
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:08:51.629646Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:08:51.738091Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:08:52.195090Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:08:54.559313Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:08:54.697595Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:08:54.697595Z",
+          "request_bytes": 2,
+          "response_bytes": 243
+        }
+      ],
+      "run_id": "4792973c-6c0b-4067-82e3-47186e5ec974",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:07:34.548435Z",
+      "finished_at": "2026-09-08T23:08:55.608668Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 5,
+      "category": "calendar",
+      "acceptance_seconds": 0.6859,
+      "duplicate_seconds": 0.5826,
+      "duplicate_same_run": true,
+      "queue_seconds": 37.769516,
+      "execution_seconds": 15.555997,
+      "accepted_to_finished_seconds": 53.325513,
+      "status": "completed",
+      "started_at": "2026-09-08T23:08:56.910043Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "03f82282-43fa-49e1-b1a9-2f32f75099ca",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "dec6fdbb-51e7-4268-b884-fc1ca1ccce21",
+            "inserted_at": "2026-09-08T23:08:56.536110",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:08:56.732446",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:09:12.590327",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:08:19.384807Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:09:12.598469Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:09:02.567383Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:09:02.567383Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:09:03.498706Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:09:05.969009Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:09:06.367943Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:09:06.367943Z",
+          "request_bytes": 2,
+          "response_bytes": 322
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:09:06.937699Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:09:07.037555Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:09:07.494172Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:09:11.151567Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:09:11.290575Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:09:11.290575Z",
+          "request_bytes": 2,
+          "response_bytes": 273
+        }
+      ],
+      "run_id": "82623974-6288-4721-8980-301cbb20f161",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:08:19.140527Z",
+      "finished_at": "2026-09-08T23:09:12.466040Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 6,
+      "category": "people",
+      "acceptance_seconds": 0.5857,
+      "duplicate_seconds": 0.5118,
+      "duplicate_same_run": true,
+      "queue_seconds": 11.263851,
+      "execution_seconds": 14.360133,
+      "accepted_to_finished_seconds": 25.623984,
+      "status": "completed",
+      "started_at": "2026-09-08T23:09:17.255507Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "cf1db80c-de76-4370-b704-4e74320a1c80",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "7dc4fb53-d049-4966-808c-f1080b875143",
+            "inserted_at": "2026-09-08T23:09:16.574934",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:09:16.964141",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:09:31.762472",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:09:06.181451Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:09:31.767447Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:09:22.971965Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:09:22.971965Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:09:24.248798Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:09:26.740079Z",
+          "request_bytes": 57487,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:09:26.882901Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:09:26.882901Z",
+          "request_bytes": 2,
+          "response_bytes": 282
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:09:27.340662Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:09:27.457534Z",
+          "request_bytes": 107,
+          "response_bytes": 15499
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:09:28.128586Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:09:30.646802Z",
+          "request_bytes": 55485,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:09:30.795513Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:09:30.795513Z",
+          "request_bytes": 2,
+          "response_bytes": 259
+        }
+      ],
+      "run_id": "895afe4e-f2c8-4865-9269-e0ca812cb04c",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:09:05.991656Z",
+      "finished_at": "2026-09-08T23:09:31.615640Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 7,
+      "category": "meeting_preparation",
+      "acceptance_seconds": 0.8485,
+      "duplicate_seconds": 0.413,
+      "duplicate_same_run": true,
+      "queue_seconds": 2.460011,
+      "execution_seconds": 12.384671,
+      "accepted_to_finished_seconds": 14.844682,
+      "status": "completed",
+      "started_at": "2026-09-08T23:09:51.555438Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "14367c23-ee01-4ee4-b4fa-d89a7c47e789",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "b9995da5-5f18-4511-90ec-8d247e12f35d",
+            "inserted_at": "2026-09-08T23:09:51.147190",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:09:51.323223",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:10:04.052065",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:09:49.408718Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:10:04.058026Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:09:54.679085Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:09:54.679085Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:09:55.534369Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:09:58.336927Z",
+          "request_bytes": 57546,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:09:58.455652Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:09:58.455652Z",
+          "request_bytes": 2,
+          "response_bytes": 390
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:09:58.936460Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:09:59.041837Z",
+          "request_bytes": 171,
+          "response_bytes": 5011
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:09:59.568749Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:10:02.980151Z",
+          "request_bytes": 62687,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:10:03.108858Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:10:03.108858Z",
+          "request_bytes": 2,
+          "response_bytes": 747
+        }
+      ],
+      "run_id": "0425b95c-d26c-4b49-9813-e3bb170a15a3",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:09:49.095427Z",
+      "finished_at": "2026-09-08T23:10:03.940109Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 8,
+      "category": "todos",
+      "acceptance_seconds": 0.6241,
+      "duplicate_seconds": 0.3685,
+      "duplicate_same_run": true,
+      "queue_seconds": 1.57113,
+      "execution_seconds": 14.550501,
+      "accepted_to_finished_seconds": 16.121631,
+      "status": "completed",
+      "started_at": "2026-09-08T23:10:32.834964Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "253b3eef-0e51-48ac-a90b-2e349abcc4c3",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "fcd58e53-d022-4886-91cd-3323a1fee3b5",
+            "inserted_at": "2026-09-08T23:10:32.435056",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:10:32.605309",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:10:47.502246",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:10:31.459656Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:10:47.507979Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:10:38.495027Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:10:38.495027Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:10:39.346446Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:10:41.944226Z",
+          "request_bytes": 57453,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:10:42.145415Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:10:42.145415Z",
+          "request_bytes": 2,
+          "response_bytes": 327
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:10:42.658627Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:10:42.778838Z",
+          "request_bytes": 96,
+          "response_bytes": 15353
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:10:43.436853Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:10:45.955224Z",
+          "request_bytes": 55451,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:10:46.085239Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:10:46.085239Z",
+          "request_bytes": 2,
+          "response_bytes": 233
+        }
+      ],
+      "run_id": "1086a8c6-18c6-4c84-b51d-5bf0c7700ae7",
+      "turns": [
+        {
+          "count": 2,
+          "role": "assistant",
+          "terminal_response": false,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:10:31.263834Z",
+      "finished_at": "2026-09-08T23:10:47.385465Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 9,
+      "category": "calendar",
+      "acceptance_seconds": 0.6399,
+      "duplicate_seconds": 0.4384,
+      "duplicate_same_run": true,
+      "queue_seconds": 3.327078,
+      "execution_seconds": 13.333672,
+      "accepted_to_finished_seconds": 16.66075,
+      "status": "completed",
+      "started_at": "2026-09-08T23:11:21.561573Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "f2d32cff-bea8-43b5-9b1f-66134d8e19d9",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "3e411c2b-632f-4aa7-8a22-65888a3e0d13",
+            "inserted_at": "2026-09-08T23:11:21.198062",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:11:21.367816",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:11:35.007702",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:11:18.446554Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:11:35.012875Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:11:27.229710Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:11:27.229710Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:11:28.052349Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:11:30.658926Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:11:30.822865Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:11:30.822865Z",
+          "request_bytes": 2,
+          "response_bytes": 326
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:11:31.402189Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:11:31.536432Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:11:32.038456Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:11:34.044985Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:11:34.178591Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:11:34.178591Z",
+          "request_bytes": 2,
+          "response_bytes": 262
+        }
+      ],
+      "run_id": "e430c085-352c-4f14-93ad-6f15cf0faf01",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:11:18.234495Z",
+      "finished_at": "2026-09-08T23:11:34.895245Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 10,
+      "category": "people",
+      "acceptance_seconds": 0.5904,
+      "duplicate_seconds": 0.3596,
+      "duplicate_same_run": true,
+      "queue_seconds": 3.422142,
+      "execution_seconds": 12.748051,
+      "accepted_to_finished_seconds": 16.170193,
+      "status": "completed",
+      "started_at": "2026-09-08T23:12:08.728541Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "e7e9e838-67de-4ab9-8f13-46e65b483cb0",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "088a8a12-8929-44bc-b6c7-b0ac9d0fc732",
+            "inserted_at": "2026-09-08T23:12:08.371257",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:12:08.538233",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:12:21.625447",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:12:05.493646Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:12:21.630760Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:12:13.142006Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:12:13.142006Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:12:13.976366Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:12:16.526264Z",
+          "request_bytes": 57487,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:12:16.660942Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:12:16.660942Z",
+          "request_bytes": 2,
+          "response_bytes": 319
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:12:17.119202Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:12:17.238333Z",
+          "request_bytes": 118,
+          "response_bytes": 15499
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:12:17.841756Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:12:20.413221Z",
+          "request_bytes": 55485,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:12:20.544429Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:12:20.544429Z",
+          "request_bytes": 2,
+          "response_bytes": 264
+        }
+      ],
+      "run_id": "5aef8d11-2804-4ab0-abed-8e1e5b4e1f2c",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:12:05.306399Z",
+      "finished_at": "2026-09-08T23:12:21.476592Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 11,
+      "category": "meeting_preparation",
+      "acceptance_seconds": 0.6088,
+      "duplicate_seconds": 0.4065,
+      "duplicate_same_run": true,
+      "queue_seconds": 0.862083,
+      "execution_seconds": 12.511781,
+      "accepted_to_finished_seconds": 13.373864,
+      "status": "completed",
+      "started_at": "2026-09-08T23:12:48.161686Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "c28ba9aa-4c1e-4498-8283-8885b21a3349",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "db004b99-cb62-4c76-ac46-64ccafb11a65",
+            "inserted_at": "2026-09-08T23:12:47.838136",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:12:47.996147",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:13:00.776019",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:12:47.465523Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:13:00.781243Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:12:51.309763Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:12:51.309763Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:12:52.168348Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:12:55.015863Z",
+          "request_bytes": 57546,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:12:55.141504Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:12:55.141504Z",
+          "request_bytes": 2,
+          "response_bytes": 390
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:12:55.563248Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:12:55.703157Z",
+          "request_bytes": 171,
+          "response_bytes": 5011
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:12:56.194320Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:12:59.761247Z",
+          "request_bytes": 62687,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:12:59.878626Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:12:59.878626Z",
+          "request_bytes": 2,
+          "response_bytes": 702
+        }
+      ],
+      "run_id": "e06a72b6-056b-46f7-8900-83a5f8f0ced8",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:12:47.299603Z",
+      "finished_at": "2026-09-08T23:13:00.673467Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 12,
+      "category": "todos",
+      "acceptance_seconds": 0.651,
+      "duplicate_seconds": 0.3716,
+      "duplicate_same_run": true,
+      "queue_seconds": 0.846891,
+      "execution_seconds": 14.483235,
+      "accepted_to_finished_seconds": 15.330126,
+      "status": "completed",
+      "started_at": "2026-09-08T23:13:35.159761Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "200eca8d-ae41-4458-a7d7-b541c6ad9912",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "76157fd3-dad8-435d-b0d8-8d35d9ac9657",
+            "inserted_at": "2026-09-08T23:13:34.719049",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:13:34.884926",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:13:49.756569",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:13:34.472372Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:13:49.761540Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:13:40.781085Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:13:40.781085Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:13:41.552161Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:13:44.181125Z",
+          "request_bytes": 57453,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:13:44.308170Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:13:44.308170Z",
+          "request_bytes": 2,
+          "response_bytes": 338
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:13:44.828709Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:13:44.942404Z",
+          "request_bytes": 96,
+          "response_bytes": 15353
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:13:45.517240Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:13:48.298789Z",
+          "request_bytes": 55451,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:13:48.424801Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:13:48.424801Z",
+          "request_bytes": 2,
+          "response_bytes": 233
+        }
+      ],
+      "run_id": "8e63ae5b-ba2b-4c5d-bc95-c2c35fe70881",
+      "turns": [
+        {
+          "count": 2,
+          "role": "assistant",
+          "terminal_response": false,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:13:34.312870Z",
+      "finished_at": "2026-09-08T23:13:49.642996Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 13,
+      "category": "calendar",
+      "acceptance_seconds": 0.6201,
+      "duplicate_seconds": 0.3638,
+      "duplicate_same_run": true,
+      "queue_seconds": 1.170447,
+      "execution_seconds": 13.915477,
+      "accepted_to_finished_seconds": 15.085924,
+      "status": "completed",
+      "started_at": "2026-09-08T23:14:17.570090Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "d97b6814-317c-418a-b45f-4918efbafcba",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "2f016982-9a08-452c-8633-2e29a20a5bfd",
+            "inserted_at": "2026-09-08T23:14:17.235714",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:14:17.375213",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:14:31.616180",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:14:16.563321Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:14:31.622236Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:14:23.284363Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:14:23.284363Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:14:24.455288Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:14:27.270240Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:14:27.451402Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:14:27.451402Z",
+          "request_bytes": 2,
+          "response_bytes": 348
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:14:28.078475Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:14:28.197624Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:14:28.681749Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:14:30.587087Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:14:30.720265Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:14:30.720265Z",
+          "request_bytes": 2,
+          "response_bytes": 267
+        }
+      ],
+      "run_id": "a7964eec-4990-4087-9629-8076979ad2d9",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:14:16.399643Z",
+      "finished_at": "2026-09-08T23:14:31.485567Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 14,
+      "category": "people",
+      "acceptance_seconds": 0.6113,
+      "duplicate_seconds": 0.4672,
+      "duplicate_same_run": true,
+      "queue_seconds": 2.443087,
+      "execution_seconds": 13.796036,
+      "accepted_to_finished_seconds": 16.239123,
+      "status": "completed",
+      "started_at": "2026-09-08T23:15:05.747925Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "4efd206c-ab15-4a86-aba6-d98571e88097",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "65335628-62b1-4072-a823-0e3e8e7f5a81",
+            "inserted_at": "2026-09-08T23:15:05.370014",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:15:05.526332",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:15:19.674705",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:15:03.507697Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:15:19.680077Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:15:10.937004Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:15:10.937004Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:15:11.826159Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:15:14.810781Z",
+          "request_bytes": 57487,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:15:14.943881Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:15:14.943881Z",
+          "request_bytes": 2,
+          "response_bytes": 255
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:15:15.443211Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:15:15.566540Z",
+          "request_bytes": 107,
+          "response_bytes": 15499
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:15:16.141110Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:15:18.645826Z",
+          "request_bytes": 55485,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:15:18.765560Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:15:18.765560Z",
+          "request_bytes": 2,
+          "response_bytes": 260
+        }
+      ],
+      "run_id": "2871df70-0e43-4381-807d-f881a5c7876f",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:15:03.304838Z",
+      "finished_at": "2026-09-08T23:15:19.543961Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 15,
+      "category": "meeting_preparation",
+      "acceptance_seconds": 0.6065,
+      "duplicate_seconds": 0.3948,
+      "duplicate_same_run": true,
+      "queue_seconds": 1.025163,
+      "execution_seconds": 22.018353,
+      "accepted_to_finished_seconds": 23.043516,
+      "status": "completed",
+      "started_at": "2026-09-08T23:15:51.395200Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "2a180686-03f3-4f35-a8d4-c7715740f487",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "223568f9-674b-4c93-a8f6-f2705ec5a7f3",
+            "inserted_at": "2026-09-08T23:15:51.032684",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:15:51.198311",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:16:13.530920",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:15:50.544406Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:16:13.538209Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:15:54.510044Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:15:54.510044Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:15:55.340840Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:15:58.220094Z",
+          "request_bytes": 57546,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:15:58.351491Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:15:58.351491Z",
+          "request_bytes": 2,
+          "response_bytes": 470
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:15:58.797618Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:15:58.904791Z",
+          "request_bytes": 171,
+          "response_bytes": 5011
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:15:59.334994Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:16:12.545126Z",
+          "request_bytes": 62687,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:16:12.679483Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:16:12.679483Z",
+          "request_bytes": 2,
+          "response_bytes": 710
+        }
+      ],
+      "run_id": "db83c414-d12e-4fe1-b460-f2dfec2973e5",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:15:50.370037Z",
+      "finished_at": "2026-09-08T23:16:13.413553Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 16,
+      "category": "todos",
+      "acceptance_seconds": 0.6987,
+      "duplicate_seconds": 0.4442,
+      "duplicate_same_run": true,
+      "queue_seconds": 0.806873,
+      "execution_seconds": 14.264788,
+      "accepted_to_finished_seconds": 15.071661,
+      "status": "completed",
+      "started_at": "2026-09-08T23:16:33.635088Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "a6385bbc-870c-48f1-a99a-07338940aff1",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "3bae4d9b-2d54-4d58-a6c3-aa3bb64f80a9",
+            "inserted_at": "2026-09-08T23:16:33.251806",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:16:33.440730",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:16:48.004750",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:16:33.033149Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:16:48.010161Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:16:39.282260Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:16:39.282260Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:16:40.142524Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:16:42.749282Z",
+          "request_bytes": 57453,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:16:42.874491Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:16:42.874491Z",
+          "request_bytes": 2,
+          "response_bytes": 320
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:16:43.342365Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:16:43.469082Z",
+          "request_bytes": 96,
+          "response_bytes": 15353
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:16:44.103818Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:16:46.544102Z",
+          "request_bytes": 55451,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:16:46.675779Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:16:46.675779Z",
+          "request_bytes": 2,
+          "response_bytes": 266
+        }
+      ],
+      "run_id": "7a534ad6-dadb-49e8-9d23-39f580a6510d",
+      "turns": [
+        {
+          "count": 2,
+          "role": "assistant",
+          "terminal_response": false,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:16:32.828215Z",
+      "finished_at": "2026-09-08T23:16:47.899876Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    },
+    {
+      "index": 17,
+      "category": "calendar",
+      "acceptance_seconds": 0.6217,
+      "duplicate_seconds": 0.4455,
+      "duplicate_same_run": true,
+      "queue_seconds": 1.116156,
+      "execution_seconds": 14.383186,
+      "accepted_to_finished_seconds": 15.499342,
+      "status": "completed",
+      "started_at": "2026-09-08T23:17:21.061061Z",
+      "model": "moonshotai/kimi-k3",
+      "job": {
+        "id": "d69525de-4e9f-48f0-808a-213e653a7bc2",
+        "status": "completed",
+        "assignments": [
+          {
+            "id": "a322a6ec-ac06-4942-a425-8cbf55f89944",
+            "inserted_at": "2026-09-08T23:17:20.593902",
+            "node_incarnation_id": "f13b4fff-7ea8-4845-a7f5-5184074ce450",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "ready_at": "2026-09-08T23:17:20.899921",
+            "revision": "maraithon-00286-wq4",
+            "settled_at": "2026-09-08T23:17:35.552097",
+            "state": "settled",
+            "termination_evidence": false,
+            "termination_requested_at": null
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T23:17:20.122745Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T23:17:35.558121Z"
+      },
+      "steps": [
+        {
+          "status": "completed",
+          "type": "context_fetch",
+          "started_at": "2026-09-08T23:17:26.667406Z",
+          "sequence": 1,
+          "finished_at": "2026-09-08T23:17:26.667406Z",
+          "request_bytes": 95938,
+          "response_bytes": 23
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:17:27.592177Z",
+          "sequence": 2,
+          "finished_at": "2026-09-08T23:17:30.406248Z",
+          "request_bytes": 57496,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:17:30.565406Z",
+          "sequence": 3,
+          "finished_at": "2026-09-08T23:17:30.565406Z",
+          "request_bytes": 2,
+          "response_bytes": 322
+        },
+        {
+          "status": "completed",
+          "type": "tool_call",
+          "started_at": "2026-09-08T23:17:31.443541Z",
+          "sequence": 4,
+          "finished_at": "2026-09-08T23:17:31.643182Z",
+          "request_bytes": 108,
+          "response_bytes": 959
+        },
+        {
+          "status": "completed",
+          "type": "llm_request",
+          "started_at": "2026-09-08T23:17:32.365278Z",
+          "sequence": 5,
+          "finished_at": "2026-09-08T23:17:34.574825Z",
+          "request_bytes": 58522,
+          "response_bytes": 11
+        },
+        {
+          "status": "completed",
+          "type": "llm_response",
+          "started_at": "2026-09-08T23:17:34.704557Z",
+          "sequence": 6,
+          "finished_at": "2026-09-08T23:17:34.704557Z",
+          "request_bytes": 2,
+          "response_bytes": 274
+        }
+      ],
+      "run_id": "08a09785-64e3-47f1-9d1d-9dd9757df430",
+      "turns": [
+        {
+          "count": 1,
+          "role": "assistant",
+          "terminal_response": true,
+          "turn_kind": "assistant_reply"
+        },
+        {
+          "count": 1,
+          "role": "user",
+          "terminal_response": true,
+          "turn_kind": "user_message"
+        }
+      ],
+      "accepted_at": "2026-09-08T23:17:19.944905Z",
+      "finished_at": "2026-09-08T23:17:35.444247Z",
+      "checkpoint_bytes": 0,
+      "checkpoint_phase": null
+    }
+  ],
+  "checkpoint_observation": {
+    "completed_continuations_retained": 0,
+    "agent_snapshots": [
+      {
+        "count": 7,
+        "max_ciphertext_bytes": 80368,
+        "newest": "2026-09-08T23:20:41.276972"
+      }
+    ],
+    "events": [
+      {
+        "count": 1,
+        "event_type": "checkpoint_created",
+        "newest": "2026-09-08T23:18:19.505468"
+      },
+      {
+        "count": 4,
+        "event_type": "effect_completed",
+        "newest": "2026-09-08T23:18:52.558312"
+      }
+    ]
+  },
+  "limits": [
+    "The rollout request was accepted before the old revision drained and executed on the replacement; it was not deliberately killed after provider entry. Mid-tool crashes are covered by controlled tests.",
+    "Terminal runs discard their execution checkpoint; zero retained bytes is not a peak-size measurement. The 64,000-byte continuation bound is enforced and tested.",
+    "One user, 18 read-only requests over roughly 13 minutes; this does not establish multi-tenant capacity.",
+    "Todo digests may contain nonterminal item replies before the single terminal reply."
+  ]
+}

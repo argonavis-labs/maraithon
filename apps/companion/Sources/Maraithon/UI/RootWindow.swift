@@ -15,6 +15,7 @@ struct RootWindow: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
     @State private var selection: SidebarItem? = .todos
+    @State private var requestedTodoID: String?
 
     var body: some View {
         Group {
@@ -97,7 +98,14 @@ struct RootWindow: View {
     private func detailView(for selection: SidebarItem?) -> some View {
         switch selection {
         case .todos:
-            TodosView()
+            TodosView(initialTodoID: requestedTodoID)
+        case .people:
+            PeopleView { id in
+                requestedTodoID = id
+                env.todos.filter = .active
+                env.todos.query = ""
+                self.selection = .todos
+            }
         case .recall:
             RecallView()
         case .source(let id) where id == "imessage":
@@ -134,6 +142,7 @@ struct RootWindow: View {
 
 enum SidebarItem: Hashable {
     case todos
+    case people
     case recall
     case source(id: String)
     case logs

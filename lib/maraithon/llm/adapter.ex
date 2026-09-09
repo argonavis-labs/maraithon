@@ -3,14 +3,15 @@ defmodule Maraithon.LLM.Adapter do
   Behaviour for LLM providers.
   """
 
-  @type message :: %{String.t() => String.t()}
+  @type message :: %{String.t() => term()}
   @type params :: %{
           optional(String.t()) => any(),
           required(String.t()) => any()
         }
 
   @type response :: %{
-          content: String.t(),
+          optional(:message) => message(),
+          required(:content) => String.t(),
           model: String.t(),
           tokens_in: integer(),
           tokens_out: integer(),

@@ -48,7 +48,17 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
       end
 
     _ = ProactiveQueue.rotate_pending_user(user_id)
-    result
+
+    case result do
+      {:error, reason} when reason in [:push_not_configured, :push_disabled, :no_push_device] ->
+        # Retrying the same job three times cannot provision credentials or a
+        # phone. Keep the candidates durable; discovery resumes automatically
+        # when delivery becomes available.
+        {:ok, %{user_id: user_id, planned: 0, delivered: 0, held: 0, failed: 0, deferred: reason}}
+
+      result ->
+        result
+    end
   end
 
   def run_for_user(_user_id, _opts), do: {:error, :invalid_user}

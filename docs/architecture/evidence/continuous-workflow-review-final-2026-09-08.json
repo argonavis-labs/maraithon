@@ -1,0 +1,91 @@
+{
+  "at": "2026-09-08T21:36:25.073626Z",
+  "jobs": [
+    {
+      "id": "8aa5d20c-7785-4b7f-bc4f-e2b960e47937",
+      "status": "completed",
+      "inserted_at": "2026-09-08T21:35:35.243163Z",
+      "scheduled_at": "2026-09-08T21:35:34.760706Z",
+      "completed_at": "2026-09-08T21:35:46.487787Z",
+      "attempts": 0,
+      "last_error": null,
+      "partition_role": "backstop",
+      "summary": {
+        "checked": 33,
+        "completed": 0,
+        "degraded_sources": [],
+        "model_calls": 1,
+        "no_new_evidence": 0,
+        "outcome": "reviewed",
+        "pending_reviews": 0,
+        "unchanged": 0
+      },
+      "result_bytes": 60484,
+      "memo_todos": 33,
+      "calendar_items": 121,
+      "calendar_reused": true,
+      "calendar_refreshed_at": "2026-09-08T21:32:03.481065Z"
+    },
+    {
+      "id": "a1b003ca-c0c0-4419-8751-a202322500d0",
+      "status": "completed",
+      "inserted_at": "2026-09-08T21:34:30.504641Z",
+      "scheduled_at": "2026-09-08T21:34:30.116201Z",
+      "completed_at": "2026-09-08T21:34:39.007736Z",
+      "attempts": 0,
+      "last_error": null,
+      "partition_role": "backstop",
+      "summary": {
+        "checked": 0,
+        "completed": 0,
+        "degraded_sources": [],
+        "model_calls": 0,
+        "no_new_evidence": 0,
+        "outcome": "unchanged_context",
+        "pending_reviews": 0,
+        "unchanged": 33
+      },
+      "result_bytes": 59207,
+      "memo_todos": 33,
+      "calendar_items": 121,
+      "calendar_reused": true,
+      "calendar_refreshed_at": "2026-09-08T21:32:03.481065Z"
+    }
+  ],
+  "workflow": [
+    {
+      "owner": "You",
+      "revision": "4",
+      "state": "working",
+      "status": "open"
+    }
+  ],
+  "recurring": [
+    {
+      "job_type": "runtime_recurring:todo_completion_sweep",
+      "last_error": null,
+      "scheduled_at": "2026-09-08T21:36:35.320838",
+      "status": "pending"
+    }
+  ],
+  "source_revision": "maraithon-00282-km8",
+  "execution": "maraithon-todo-validation-wg86v",
+  "scope": "Final bounded-cache review receipt, not a full runtime health audit.",
+  "runtime_status": {
+    "live_runtime_revisions": [
+      "maraithon-00282-km8"
+    ],
+    "phase": "ready",
+    "node_incarnation_id": "103b61d9-1885-4c3b-a120-ff88ad30ed42",
+    "process_role": "combined",
+    "node_fenced": false,
+    "admitting_nodes": 1,
+    "admitting_partitions": 64,
+    "unready_partitions": 0,
+    "owned_partitions": 64,
+    "open_tasks": 2,
+    "unproven_tasks": 2,
+    "local_agent_leases": 1,
+    "agent_leases": 1
+  }
+}

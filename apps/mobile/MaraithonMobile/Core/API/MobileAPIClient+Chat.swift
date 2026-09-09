@@ -1,6 +1,10 @@
+import AssistantProgressKit
 import Foundation
 
 protocol MobileChatAPI: Sendable {
+    func observeChatProgress(sessionToken: String, id: UUID, cursor: String?,
+        onEvent: @escaping @MainActor @Sendable (AssistantProgress<MobileAPIClient.RemoteChatThread>) async throws -> Void
+    ) async throws
     func listChatThreads(sessionToken: String) async throws -> [MobileAPIClient.RemoteChatThread]
     /// Conditional variant: when `conditional` is true and a stored ETag
     /// matches, throws `MobileAPIError.notModified` instead of returning the
@@ -111,6 +115,7 @@ extension MobileAPIClient: MobileChatAPI {
         let latestMessage: RemoteChatMessage?
         let pendingRun: RemoteChatRun?
         let messages: [RemoteChatMessage]
+        let linkedTodo: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -122,6 +127,7 @@ extension MobileAPIClient: MobileChatAPI {
             case latestMessage = "latest_message"
             case pendingRun = "pending_run"
             case messages
+            case linkedTodo = "linked_todo"
         }
 
         init(
@@ -133,7 +139,8 @@ extension MobileAPIClient: MobileChatAPI {
             messageCount: Int? = nil,
             latestMessage: RemoteChatMessage? = nil,
             pendingRun: RemoteChatRun? = nil,
-            messages: [RemoteChatMessage] = []
+            messages: [RemoteChatMessage] = [],
+            linkedTodo: JSONValue? = nil
         ) {
             self.id = id
             self.title = title
@@ -144,6 +151,7 @@ extension MobileAPIClient: MobileChatAPI {
             self.latestMessage = latestMessage
             self.pendingRun = pendingRun
             self.messages = messages
+            self.linkedTodo = linkedTodo
         }
 
         init(from decoder: Decoder) throws {
@@ -157,6 +165,7 @@ extension MobileAPIClient: MobileChatAPI {
             latestMessage = try container.decodeIfPresent(RemoteChatMessage.self, forKey: .latestMessage)
             pendingRun = try container.decodeIfPresent(RemoteChatRun.self, forKey: .pendingRun)
             messages = try container.decodeIfPresent([RemoteChatMessage].self, forKey: .messages) ?? []
+            linkedTodo = try container.decodeIfPresent(JSONValue.self, forKey: .linkedTodo)
         }
     }
 

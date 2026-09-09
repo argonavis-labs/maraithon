@@ -40,6 +40,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
       redact: true
 
     field :legacy_preview_text, :string, source: :preview_text, redact: true
+    field :workflow_handoff_state, :string
     field :payload_todo_id, :string
     field :payload_surviving_person_id, :string
     field :payload_merged_person_id, :string
@@ -166,12 +167,20 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
     case get_field(changeset, :payload) do
       payload when is_map(payload) ->
         changeset
+        |> put_change(:workflow_handoff_state, handoff_state(payload))
         |> put_change(:payload_todo_id, promoted_id(payload, "todo_id"))
         |> put_change(:payload_surviving_person_id, promoted_id(payload, "surviving_person_id"))
         |> put_change(:payload_merged_person_id, promoted_id(payload, "merged_person_id"))
 
       _invalid ->
         changeset
+    end
+  end
+
+  defp handoff_state(payload) do
+    case get_in(payload, ["_maraithon_workflow_handoff", "state"]) do
+      state when state in ~w(pending applied superseded needs_review) -> state
+      _ -> nil
     end
   end
 
@@ -222,9 +231,10 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   end
 
   defp put_payload_encryption_version(changeset) do
-    if Map.has_key?(changeset.changes, :payload) or Map.has_key?(changeset.changes, :preview_text),
-      do: put_change(changeset, :payload_encryption_version, 1),
-      else: changeset
+    if Map.has_key?(changeset.changes, :payload) or
+         Map.has_key?(changeset.changes, :preview_text),
+       do: put_change(changeset, :payload_encryption_version, 1),
+       else: changeset
   end
 
   defp reactivate_payload(changeset) do

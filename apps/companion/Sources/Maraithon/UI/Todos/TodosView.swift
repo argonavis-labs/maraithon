@@ -6,14 +6,21 @@ import SwiftUI
 struct TodosView: View {
     @Environment(AppEnvironment.self) private var env
 
+    var initialTodoID: String? = nil
+    @State private var workspace: TodoConversationStore?
+    @State private var conversations: [String: TodoConversationStore] = [:]
     @State private var activeTodoID: String?
     @State private var markedTodoIDs: Set<String> = []
-    @State private var inspectorShown = false
+    @State private var workspaceShown = false
     @State private var shortcutHelpShown = false
     @State private var newTodoShown = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        NavigationStack { todoList }
+    }
+
+    @ViewBuilder private var todoList: some View {
         @Bindable var store = env.todos
 
         VStack(alignment: .leading, spacing: 0) {
@@ -28,48 +35,45 @@ struct TodosView: View {
             content(store: store)
         }
         .navigationTitle("Todos")
-        .focusedSceneValue(\.todoShortcutActions, newTodoShown ? nil : focusedShortcutActions(store: store))
-        .inspector(isPresented: $inspectorShown) {
-            TodoDetailView(
-                todo: activeTodo,
-                isWorking: activeTodo.map { store.pendingActionIDs.contains($0.id) } ?? false,
-                isLoadingDetails: activeTodo.map { store.loadingDetailIDs.contains($0.id) } ?? false,
-                detailError: activeTodoID.flatMap { store.detailErrors[$0] },
-                primaryAction: { performPrimaryAction(store: store) },
-                dismissAction: { perform(.dismiss, store: store) },
-                retryDetails: {
-                    if let todo = activeTodo { Task { await store.loadDetails(for: todo) } }
-                }
-            )
-            .inspectorColumnWidth(
-                min: Tokens.Layout.todoInspectorMinWidth,
-                ideal: Tokens.Layout.todoInspectorIdealWidth,
-                max: Tokens.Layout.todoInspectorMaxWidth
-            )
+        .focusedSceneValue(\.todoShortcutActions, (newTodoShown || workspaceShown) ? nil : focusedShortcutActions(store: store))
+        .navigationDestination(isPresented: $workspaceShown) {
+            if let workspace { TodoWorkspaceView(store: workspace) }
+        }
+        .onChange(of: env.deviceAuth.currentToken) { _, _ in
+            workspaceShown = false
+            workspace = nil
+            conversations = [:]
         }
         .sheet(isPresented: $shortcutHelpShown) {
             TodoShortcutHelpView()
         }
         .sheet(isPresented: $newTodoShown) {
             NewTodoView(store: store) { todo in
-                activeTodoID = todo.id
-                inspectorShown = true
+                openTodo(todo)
                 Task { await store.load() }
             }
         }
         .task {
-            if store.phase == .idle {
-                await store.load()
-            }
+            if store.phase == .idle || store.phase == .loading || initialTodoID != nil { await store.load() }
+            if let initialTodoID, let todo = store.todos.first(where: { $0.id == initialTodoID }) { openTodo(todo) }
             reconcileSelection(store.todos)
         }
         .onChange(of: store.todos.map(\.id)) { _, _ in
             reconcileSelection(store.todos)
         }
-        .task(id: inspectorShown ? "\(activeTodoID ?? ""):\(store.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0)" : nil) {
-            guard inspectorShown, let todo = activeTodo else { return }
-            await store.loadDetails(for: todo)
-        }
+    }
+
+    private func openTodo(_ todo: CompanionTodo) {
+        activeTodoID = todo.id
+        let existing = conversations[todo.id]
+        let session = existing ?? TodoConversationStore(todo: todo, client: MaraithonClient(
+            tokenProvider: { [weak auth = env.deviceAuth] in
+                await MainActor.run { [auth] in auth?.currentToken }
+            }
+        ))
+        conversations[todo.id] = session
+        workspace = session
+        workspaceShown = true
     }
 
     private var activeTodo: CompanionTodo? {
@@ -117,6 +121,7 @@ struct TodosView: View {
                             todo: todo,
                             isMarked: markedTodoIDs.contains(todo.id),
                             isWorking: store.pendingActionIDs.contains(todo.id),
+                            openAction: { openTodo(todo) },
                             action: {
                                 Task {
                                     await store.performPrimaryAction(on: todo)
@@ -136,7 +141,7 @@ struct TodosView: View {
                     return .handled
                 }
                 .onKeyPress(.escape) {
-                    let wasShown = inspectorShown
+                    let wasShown = workspaceShown
                     handle(.back, store: store)
                     return wasShown ? .handled : .ignored
                 }
@@ -158,9 +163,9 @@ struct TodosView: View {
         case .previous:
             moveActiveTodo(by: -1, in: store.todos)
         case .open:
-            inspectorShown = activeTodo != nil
+            if let todo = activeTodo { openTodo(todo) }
         case .back:
-            inspectorShown = false
+            workspaceShown = false
         case .select:
             toggleActiveTodoMark()
         case .complete:
@@ -239,7 +244,7 @@ struct TodosView: View {
 
         activeTodoID = todos.first?.id
         if activeTodoID == nil {
-            inspectorShown = false
+            workspaceShown = false
         }
     }
 }

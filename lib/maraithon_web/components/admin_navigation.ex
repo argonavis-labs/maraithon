@@ -21,12 +21,12 @@ defmodule MaraithonWeb.AdminNavigation do
     ~H"""
     <div class="min-h-svh bg-zinc-50">
       <header class="border-b border-zinc-950/10 bg-white">
-        <div class="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-          <div class="flex min-w-0 items-center gap-5">
+        <div class="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 px-4 py-2 sm:flex sm:h-14 sm:justify-between sm:px-6 sm:py-0 lg:px-8">
+          <div class="contents sm:flex sm:min-w-0 sm:items-center sm:gap-5">
             <.link navigate={~p"/todos"} class="text-sm/5 font-semibold tracking-tight text-zinc-950">
               Maraithon
             </.link>
-            <nav class="flex items-center gap-1" aria-label="Workspace">
+            <nav class="col-span-2 row-start-2 flex items-center gap-1" aria-label="Workspace">
               <.link
                 navigate={~p"/todos"}
                 class={nav_link_class(@normalized_path, "/todos")}
@@ -51,7 +51,7 @@ defmodule MaraithonWeb.AdminNavigation do
             </nav>
           </div>
 
-          <div :if={@current_user} class="min-w-0 max-w-xs">
+          <div :if={@current_user} class="col-start-2 row-start-1 min-w-0 max-w-[12rem] sm:max-w-xs">
             <.sidebar_account
               email={@current_user.email}
               name={Map.get(@current_user, :name)}

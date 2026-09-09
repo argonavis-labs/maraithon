@@ -69,6 +69,8 @@ defmodule Maraithon.OAuth.Google do
 
   defp scope_for("gmail"), do: [@scope_gmail_readonly]
 
+  defp scope_for("gmail_compose"), do: [@scope_gmail_readonly, @scope_gmail_compose]
+
   defp scope_for("gmail_full") do
     [
       @scope_gmail_readonly,
@@ -98,6 +100,7 @@ defmodule Maraithon.OAuth.Google do
         scope: Enum.join(scopes, " "),
         state: state,
         access_type: "offline",
+        include_granted_scopes: "true",
         prompt: "consent"
       })
 

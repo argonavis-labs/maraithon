@@ -19,6 +19,21 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
   end
 
+  @doc "Associates ephemeral text with its authorized conversation."
+  def bind(%{id: run_id, user_id: user_id, conversation_id: thread_id})
+      when is_binary(user_id) and is_binary(thread_id) do
+    :ets.insert(
+      @table,
+      {{:scope, run_id}, user_id, thread_id, System.monotonic_time(:millisecond)}
+    )
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  def bind(_), do: :ok
+
   @doc "Clears the preview for a run; called when a model turn starts streaming."
   def reset(run_id) when is_binary(run_id) do
     safe_insert(run_id, "", "")
@@ -29,7 +44,9 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
   @doc "Appends streamed reply text to a run's preview."
   def append(run_id, delta) when is_binary(run_id) and is_binary(delta) and delta != "" do
     {reply, thinking} = current(run_id)
-    safe_insert(run_id, tail_text(reply <> delta), thinking)
+    preview = tail_text(reply <> delta)
+    safe_insert(run_id, preview, thinking)
+    broadcast_preview(run_id, preview)
   end
 
   def append(_run_id, _delta), do: :ok
@@ -52,6 +69,23 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
   end
 
   def snapshot(_run_id), do: nil
+
+  defp broadcast_preview(run_id, reply) do
+    case :ets.lookup(@table, {:scope, run_id}) do
+      [{_, user_id, thread_id, sent_at}] ->
+        now = System.monotonic_time(:millisecond)
+
+        if now - sent_at >= 300 do
+          :ets.update_element(@table, {:scope, run_id}, {4, now})
+          Maraithon.AssistantChat.Progress.preview(user_id, thread_id, run_id, reply)
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    ArgumentError -> :ok
+  end
 
   defp current(run_id) do
     case safe_lookup(run_id) do

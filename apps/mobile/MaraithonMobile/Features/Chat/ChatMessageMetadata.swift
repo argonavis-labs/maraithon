@@ -32,6 +32,16 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
     var sendLabel: String?
     var openLabel: String?
     var openURL: URL?
+    var recipientName: String?
+    var startAt: String?
+    var endAt: String?
+    var timezone: String?
+    var actionType: String?
+    var editable: Bool?
+    var connectionRequired: Bool?
+    var connectionLabel: String?
+    var connectionNotice: String?
+    var connectionURL: URL?
     var participants: [CardParticipant] = []
     var conversation: [CardConversationMessage] = []
 
@@ -51,6 +61,13 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
         case sendLabel = "send_label"
         case openLabel = "open_label"
         case openURL = "open_url"
+        case recipientName = "recipient_name"
+        case startAt = "start_at", endAt = "end_at", timezone, editable
+        case actionType = "action_type"
+        case connectionRequired = "connection_required"
+        case connectionLabel = "connection_label"
+        case connectionNotice = "connection_notice"
+        case connectionURL = "connection_url"
         case participants
         case conversation
     }
@@ -65,6 +82,18 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
 
         self.provider = provider
         self.title = title
+        recipientName = Self.clean(object["recipient_name"]?.string)
+        startAt = Self.clean(object["start_at"]?.string)
+        endAt = Self.clean(object["end_at"]?.string)
+        timezone = Self.clean(object["timezone"]?.string)
+        actionType = Self.clean(object["action_type"]?.string)
+        if case .bool(let value) = object["editable"] { editable = value }
+        if case .bool(let value) = object["connection_required"] { connectionRequired = value }
+        connectionLabel = Self.clean(object["connection_label"]?.string)
+        connectionNotice = Self.clean(object["connection_notice"]?.string)
+        if let raw = object["connection_url"]?.string, let url = URL(string: raw), url.scheme == "https" {
+            connectionURL = url
+        }
         status = Self.clean(object["status"]?.string)
         from = Self.displayClean(object["from"]?.string)
         recipient = Self.displayClean(object["recipient"]?.string)
@@ -128,7 +157,7 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
     }
 
     var primaryAction: ChatMessageAction? {
-        guard let preparedActionID else { return nil }
+        guard let preparedActionID, !isTerminal else { return nil }
         return ChatMessageAction(
             actionID: preparedActionID,
             kind: "prepared_action_decision",
@@ -153,7 +182,7 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
     }
 
     var isTerminal: Bool {
-        ["sent", "cancelled", "expired", "could not send"].contains(normalizedStatus)
+        ["completed", "running", "could not complete", "check before retrying", "sent", "saved to calendar", "cancelled", "expired", "could not send"].contains(normalizedStatus)
     }
 
     private static func clean(_ value: String?) -> String? {

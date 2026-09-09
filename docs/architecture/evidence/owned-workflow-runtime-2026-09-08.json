@@ -1,0 +1,210 @@
+{
+  "execution": "maraithon-todo-validation-ww4dj",
+  "note": "Sampled the workflow release before the final ownership-label UI rollout. Statement load is cumulative, not a steady-state benchmark.",
+  "receipt": {
+    "events": [
+      {
+        "count": 4,
+        "event_type": "effect_completed",
+        "latest": "2026-09-08 19:56:19.699667"
+      }
+    ],
+    "readiness": [
+      {
+        "durable": true,
+        "privacy": true,
+        "runtime_checks": 120
+      }
+    ],
+    "partitions": [
+      {
+        "count": 64,
+        "lease_live": true,
+        "state": "ready"
+      }
+    ],
+    "termination": [
+      {
+        "awaiting_termination": 0
+      }
+    ],
+    "recurring": [
+      {
+        "job_type": "runtime_recurring:assistant_run_recovery",
+        "scheduled_at": "2026-09-08 19:57:09.472551",
+        "seconds_until_due": 31,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:09.472551"
+      },
+      {
+        "job_type": "runtime_recurring:briefing_cron",
+        "scheduled_at": "2026-09-08 19:57:13.003504",
+        "seconds_until_due": 35,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:13.003504"
+      },
+      {
+        "job_type": "runtime_recurring:brief_notifier",
+        "scheduled_at": "2026-09-08 19:57:02.547001",
+        "seconds_until_due": 25,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:02.547001"
+      },
+      {
+        "job_type": "runtime_recurring:critical_todo_push",
+        "scheduled_at": "2026-09-08 19:59:31.736842",
+        "seconds_until_due": 174,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:54:31.736842"
+      },
+      {
+        "job_type": "runtime_recurring:dogfood_digest",
+        "scheduled_at": "2026-09-09 11:30:00",
+        "seconds_until_due": 56002,
+        "status": "pending",
+        "updated_at": "2026-09-08 11:30:01.029382"
+      },
+      {
+        "job_type": "runtime_recurring:freshness_sweep",
+        "scheduled_at": "2026-09-08 20:55:22.128924",
+        "seconds_until_due": 3524,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:55:22.128924"
+      },
+      {
+        "job_type": "runtime_recurring:insight_notifier",
+        "scheduled_at": "2026-09-08 19:57:04.736545",
+        "seconds_until_due": 27,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:04.736545"
+      },
+      {
+        "job_type": "runtime_recurring:nudge_sweep",
+        "scheduled_at": "2026-09-08 19:57:37.238012",
+        "seconds_until_due": 59,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:27:37.238012"
+      },
+      {
+        "job_type": "runtime_recurring:people_network_discovery",
+        "scheduled_at": "2026-09-08 19:58:34.625824",
+        "seconds_until_due": 117,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:48:34.625824"
+      },
+      {
+        "job_type": "runtime_recurring:privacy_erasure_discovery",
+        "scheduled_at": "2026-09-08 19:57:05.928567",
+        "seconds_until_due": 28,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:05.928567"
+      },
+      {
+        "job_type": "runtime_recurring:privacy_retention",
+        "scheduled_at": "2026-09-08 19:58:31.419496",
+        "seconds_until_due": 113,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:43:31.419496"
+      },
+      {
+        "job_type": "runtime_recurring:proactive_check_in",
+        "scheduled_at": "2026-09-08 19:58:26.909138",
+        "seconds_until_due": 109,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:48:26.909138"
+      },
+      {
+        "job_type": "runtime_recurring:source_account_discovery",
+        "scheduled_at": "2026-09-08 19:57:08.474334",
+        "seconds_until_due": 30,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:08.474334"
+      },
+      {
+        "job_type": "runtime_recurring:staleness_triage_sweep",
+        "scheduled_at": "2026-09-09 14:59:21.353399",
+        "seconds_until_due": 68563,
+        "status": "pending",
+        "updated_at": "2026-09-08 14:59:21.353399"
+      },
+      {
+        "job_type": "runtime_recurring:telegram_run_reaper",
+        "scheduled_at": "2026-09-08 19:57:10.663446",
+        "seconds_until_due": 33,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:10.663446"
+      },
+      {
+        "job_type": "runtime_recurring:todo_completion_sweep",
+        "scheduled_at": "2026-09-08 19:57:14.818421",
+        "seconds_until_due": 37,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:56:14.818421"
+      },
+      {
+        "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+        "scheduled_at": "2026-09-08 19:59:36.557356",
+        "seconds_until_due": 179,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:54:36.557356"
+      },
+      {
+        "job_type": "runtime_recurring:token_refresher",
+        "scheduled_at": "2026-09-08 19:59:37.782723",
+        "seconds_until_due": 180,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:54:37.782723"
+      },
+      {
+        "job_type": "runtime_recurring:watch_renewer",
+        "scheduled_at": "2026-09-08 19:57:42.104371",
+        "seconds_until_due": 64,
+        "status": "pending",
+        "updated_at": "2026-09-08 19:27:42.104371"
+      }
+    ],
+    "outcomes": [
+      {
+        "count": 287,
+        "latest": "2026-09-08 19:56:17.120748",
+        "outcome": "completed",
+        "work_kind": "background_job"
+      },
+      {
+        "count": 3,
+        "latest": "2026-09-08 19:54:27.602059",
+        "outcome": "failed",
+        "work_kind": "background_job"
+      },
+      {
+        "count": 270,
+        "latest": "2026-09-08 19:56:37.665076",
+        "outcome": "retry_scheduled",
+        "work_kind": "background_job"
+      },
+      {
+        "count": 4,
+        "latest": "2026-09-08 19:56:19.244246",
+        "outcome": "completed",
+        "work_kind": "effect"
+      }
+    ],
+    "statement_load": [
+      {
+        "calls": "133764687",
+        "category": "other",
+        "total_ms": "70292024.54"
+      },
+      {
+        "calls": "65861",
+        "category": "verification",
+        "total_ms": "36438739.20"
+      },
+      {
+        "calls": "631590",
+        "category": "renewal",
+        "total_ms": "83182.97"
+      }
+    ]
+  }
+}

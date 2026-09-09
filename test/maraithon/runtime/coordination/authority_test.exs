@@ -1299,7 +1299,9 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     }
 
     # The deliberate-action interlock, an inexact identity, and the ordinary
-    # runtime role are each refused without writing a proof.
+    # runtime role are each refused without writing a proof. Use the session
+    # role wrapper so record/4 owns its transaction and an expected rollback
+    # does not poison a surrounding role-scoped transaction.
     assert {:error, :task_termination_attestation_confirmation_required} =
              TaskTerminationAttestations.record(
                operator_identity,
@@ -1309,7 +1311,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
              )
 
     assert {:error, :task_termination_attestation_identity_mismatch} =
-             in_role!("maraithon_incident_operator", fn ->
+             with_session_role!("maraithon_incident_operator", fn ->
                TaskTerminationAttestations.record(
                  %{operator_identity | claim_token: Ecto.UUID.generate()},
                  evidence_id,
@@ -1329,7 +1331,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert TaskClaims.get(requested.id).state == "termination_requested"
 
     assert {:ok, %{task_assignment: proven}} =
-             in_role!("maraithon_incident_operator", fn ->
+             with_session_role!("maraithon_incident_operator", fn ->
                TaskTerminationAttestations.record(
                  operator_identity,
                  evidence_id,
@@ -1342,7 +1344,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
 
     # Lost-response replay accepts only the identical attestation.
     assert {:ok, %{task_assignment: %{id: replayed_id}}} =
-             in_role!("maraithon_incident_operator", fn ->
+             with_session_role!("maraithon_incident_operator", fn ->
                TaskTerminationAttestations.record(
                  operator_identity,
                  evidence_id,
@@ -1354,7 +1356,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert replayed_id == proven.id
 
     assert {:error, :task_external_proof_mismatch} =
-             in_role!("maraithon_incident_operator", fn ->
+             with_session_role!("maraithon_incident_operator", fn ->
                TaskTerminationAttestations.record(
                  operator_identity,
                  "gcp-cloud-run-revision-delete:other-revision",

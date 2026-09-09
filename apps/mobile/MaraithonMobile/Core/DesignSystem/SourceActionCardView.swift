@@ -6,6 +6,7 @@ import UIKit
 /// wording with copy support and a one-tap path back into the source app.
 struct SourceActionCardView: View {
     let action: TodoSourceAction
+    let showsContext: Bool
     let onSend: ((String, String?) async throws -> Void)?
 
     @Environment(\.openURL) private var openURL
@@ -20,9 +21,11 @@ struct SourceActionCardView: View {
 
     init(
         action: TodoSourceAction,
+        showsContext: Bool = true,
         onSend: ((String, String?) async throws -> Void)? = nil
     ) {
         self.action = action
+        self.showsContext = showsContext
         self.onSend = onSend
         _draftText = State(initialValue: action.draftText ?? "")
         _subject = State(initialValue: action.subject ?? "")
@@ -50,16 +53,16 @@ struct SourceActionCardView: View {
                 Spacer(minLength: 8)
             }
 
-            if !action.participants.isEmpty {
+            if showsContext && !action.participants.isEmpty {
                 CardParticipantsSection(participants: action.participants)
             }
 
-            if !action.conversation.isEmpty {
+            if showsContext && !action.conversation.isEmpty {
                 CardConversationSection(messages: action.conversation, maxMessages: 12)
             }
 
             if action.hasDraft {
-                if !action.conversation.isEmpty {
+                if showsContext && !action.conversation.isEmpty {
                     Text(SourceActionCopy.draftSectionTitle)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -90,7 +93,7 @@ struct SourceActionCardView: View {
             }
 
             HStack(spacing: 8) {
-                if action.hasDraft {
+                if action.hasDraft && action.provider != "slack" {
                     Button {
                         copyDraft()
                     } label: {
@@ -126,7 +129,7 @@ struct SourceActionCardView: View {
                         openSource()
                     } label: {
                         Label(
-                            action.openLabel ?? SourceActionCopy.openFallbackTitle,
+                            action.provider == "slack" && action.hasDraft ? "Copy reply and open Slack" : (action.openLabel ?? SourceActionCopy.openFallbackTitle),
                             systemImage: "arrow.up.forward.app.fill"
                         )
                         .font(.caption.weight(.semibold))
@@ -183,10 +186,11 @@ struct SourceActionCardView: View {
     }
 
     private func openSource() {
+        if action.provider == "slack" && action.hasDraft { copyDraft() }
         if canComposeMessage, let handle = action.recipientHandle {
             messageComposeDraft = MessageComposeDraft(
                 recipients: [handle],
-                body: action.draftText ?? ""
+                body: draftText
             )
         } else if let url = action.openURL {
             openURL(url)
@@ -225,7 +229,7 @@ enum SourceActionCopy {
     static let openFallbackTitle = "Open source"
     static let draftSectionTitle = "Suggested reply"
     static let subjectTitle = "Subject"
-    static let sendEmailTitle = "Send email"
+    static let sendEmailTitle = "Approve and send"
     static let postTitle = "Post"
     static let sentTitle = "Sent"
     static let confirmEmailTitle = "Send this email?"

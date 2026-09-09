@@ -1,4 +1,5 @@
 import SwiftUI
+import AssistantProgressKit
 
 /// Compact, keyboard-selectable Todo row with visible marked state and one
 /// quiet primary action.
@@ -6,6 +7,7 @@ struct TodoRow: View {
     let todo: CompanionTodo
     let isMarked: Bool
     let isWorking: Bool
+    let openAction: () -> Void
     let action: () -> Void
 
     var body: some View {
@@ -16,9 +18,12 @@ struct TodoRow: View {
 
             VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
                 HStack(spacing: Tokens.Spacing.small) {
-                    Text(todo.title)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(2)
+                    Button(action: openAction) {
+                        Text(todo.title).font(.callout.weight(.medium)).lineLimit(2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open this todo and work on it with Maraithon")
+                    .accessibilityHint("Opens the todo conversation")
                     if todo.status == "snoozed" {
                         Label("Snoozed", systemImage: "clock")
                             .font(.caption)
@@ -31,6 +36,9 @@ struct TodoRow: View {
                     }
                 }
 
+                if let workflow = todo.workflow {
+                    TodoOwnershipLabel(workflow: workflow, showsState: false).font(.caption)
+                }
                 if todo.canMarkDone, let move = todo.recommendedMove {
                     Text("Next: \(move)")
                         .font(.caption)
@@ -49,7 +57,7 @@ struct TodoRow: View {
                 Text(TodosCopy.sourceLabel(todo.source))
                     .font(.callout)
                 if todo.canMarkDone {
-                    Text(TodosCopy.attentionLabel(todo.attentionMode))
+                    Text(todo.workflow?.label ?? TodosCopy.attentionLabel(todo.attentionMode))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
