@@ -25,15 +25,18 @@ function openExternal(value) {
     if (['https:', 'http:', 'mailto:', 'sms:'].includes(url.protocol) && !/[\r\n]/.test(value)) shell.openExternal(value).catch(report);
   } catch {}
 }
+const navigationInterrupted = error => error.code === 'ERR_ABORTED' || error.errno === -3;
 async function showLocal(name) {
-  if (window && !window.isDestroyed()) await window.loadFile(path.join(__dirname, `../pages/${name}.html`));
+  try {
+    if (window && !window.isDestroyed()) await window.loadFile(path.join(__dirname, `../pages/${name}.html`));
+  } catch (error) { if (!navigationInterrupted(error)) throw error; }
 }
 async function loadWorkspace(route = lastPath) {
   if (!window || window.isDestroyed()) createWindow();
   window.show();
   window.focus();
   try { await window.loadURL(`${origin}${route}`); }
-  catch (error) { if (error.code !== 'ERR_ABORTED') await showLocal('offline'); }
+  catch (error) { if (!navigationInterrupted(error)) await showLocal('offline'); }
 }
 function navigation(event, url) {
   if (localPages.has(url)) return;
