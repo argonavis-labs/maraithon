@@ -374,11 +374,11 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def oauth_logo(assigns) do
     ~H"""
-    <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-zinc-950/10 bg-white p-1.5 shadow-sm">
+    <div class={["flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-950/10 bg-white p-1.5", @provider == :notaui && "connector-logo-notaui"]}>
       <img
         src={connector_logo_src(@provider)}
         alt={connector_logo_alt(@provider)}
-        class="h-full w-full object-contain"
+        class={["h-full w-full object-contain", @provider in [:github, :linear] && "connector-logo-monochrome"]}
       />
     </div>
     """
@@ -390,8 +390,8 @@ defmodule MaraithonWeb.ConnectorsHTML do
   defp connector_logo_src(:linear), do: "/images/connector-logos/linear.svg"
   defp connector_logo_src(:notion), do: "/images/connector-logos/notion.png"
   defp connector_logo_src(:notaui), do: "/images/connector-logos/notaui.png"
-  defp connector_logo_src(:desktop), do: "/favicon.ico"
-  defp connector_logo_src(_provider), do: "/favicon.ico"
+  defp connector_logo_src(:desktop), do: "/images/app-icon.svg"
+  defp connector_logo_src(_provider), do: "/images/app-icon.svg"
 
   defp connector_logo_alt(provider) when is_atom(provider) do
     provider

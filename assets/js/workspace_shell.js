@@ -20,9 +20,15 @@ export const WorkspaceShell = {
     this.el.addEventListener('click', event => {
       if (event.target.closest('[data-sidebar-toggle]')) this.toggleNavigation(!this.el.classList.contains('navigation-open'));
       if (event.target.closest('[data-sidebar-close], .workspace-nav a')) this.toggleNavigation(false);
-      if (event.target.closest('[data-task-search]')) {
+      if (event.target.closest('[data-task-search]') && event.button === 0 &&
+          !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
         const input = this.el.querySelector('[data-todo-search]');
-        if (input) { event.preventDefault(); this.toggleNavigation(false); input.focus(); input.select(); }
+        if (input) {
+          // LiveView handles navigation on the document, even after preventDefault.
+          // Stop this local focus action before it reaches that delegated handler.
+          event.preventDefault(); event.stopPropagation();
+          this.toggleNavigation(false); input.focus(); input.select();
+        }
         else { try { sessionStorage.setItem('maraithon:focus-search', 'true'); } catch {} }
       }
       if (event.target.closest('[data-native-sources]')) window.maraithonDesktop?.openSources();

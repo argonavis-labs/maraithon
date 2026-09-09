@@ -676,7 +676,7 @@ defmodule MaraithonWeb.ActivityLive do
       <div class="mx-auto max-w-4xl space-y-6">
         <.page_header
           title="Activity"
-          subtitle="The latest OTP agent runs, per-account source fan-outs, and todo creations."
+          subtitle="Work in progress, source updates, and new tasks."
         >
           <:actions>
             <.badge color="emerald">
@@ -693,7 +693,7 @@ defmodule MaraithonWeb.ActivityLive do
               <div>
                 <h2 class="text-sm/6 font-semibold text-zinc-950">Latest activity</h2>
                 <p class="text-sm/6 text-zinc-500">
-                  {@run_count} agent {if @run_count == 1, do: "run", else: "runs"}, {@source_run_count} source {if @source_run_count == 1, do: "fan-out", else: "fan-outs"}, and {@todo_count} recent todo {if @todo_count == 1, do: "creation", else: "creations"}
+                  {@run_count} assistant {if @run_count == 1, do: "run", else: "runs"}, {@source_run_count} source {if @source_run_count == 1, do: "update", else: "updates"}, and {@todo_count} new {if @todo_count == 1, do: "task", else: "tasks"}
                 </p>
               </div>
               <p :if={@refreshed_at} class="text-xs/5 text-zinc-400">
@@ -703,8 +703,8 @@ defmodule MaraithonWeb.ActivityLive do
           </:header>
 
           <div :if={@timeline == []} class="py-12 text-center">
-            <p class="text-sm/6 font-medium text-zinc-700">No agent runs yet</p>
-            <p class="mt-1 text-sm/6 text-zinc-500">New runs and created todos will appear here.</p>
+            <p class="text-sm/6 font-medium text-zinc-700">No activity yet</p>
+            <p class="mt-1 text-sm/6 text-zinc-500">Work, source updates, and new tasks will appear here.</p>
           </div>
 
           <ol :if={@timeline != []} class="divide-y divide-zinc-950/5">
@@ -759,7 +759,7 @@ defmodule MaraithonWeb.ActivityLive do
 
                 <details class="mt-3 text-xs/5 text-zinc-500">
                   <summary class="cursor-pointer select-none font-medium text-zinc-600 hover:text-zinc-950">
-                    Fan-out details
+                    Update details
                   </summary>
                   <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md bg-zinc-50 px-3 py-2">
                     <dt>Reference</dt>
@@ -876,7 +876,7 @@ defmodule MaraithonWeb.ActivityLive do
               <div :if={item.kind == :todo}>
                 <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
                   <div class="min-w-0">
-                    <.badge color="emerald">Todo created</.badge>
+                    <.badge color="emerald">Task created</.badge>
                     <.link
                       :if={item.linked?}
                       navigate={~p"/todos/#{item.todo_id}"}
@@ -901,7 +901,7 @@ defmodule MaraithonWeb.ActivityLive do
 
           <div :if={@source_run_count >= @source_run_limit} class="border-t border-zinc-950/5 py-4 text-center">
             <.button variant="outline" phx-click="load_more_source_runs">
-              Load older source fan-outs
+              Load older source updates
             </.button>
           </div>
         </.panel>

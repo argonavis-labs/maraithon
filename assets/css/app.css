@@ -103,6 +103,14 @@ html[data-desktop='darwin'] .desktop-only { display: flex; }
 html[data-desktop] .workspace-sidebar-bottom { -webkit-app-region: no-drag; }
 .runner-button-primary { background: var(--runner-foreground); color: var(--runner-background); }
 
+/* Brief HTML also serves email. Override its inline heading ink only on web. */
+.runner-brief-body h2 { color: var(--runner-foreground) !important; }
+.runner-brief-body ul { list-style-type: disc; }
+.runner-brief-body code { padding: 2px 4px; border-radius: 3px; background: var(--runner-foreground-3); color: var(--runner-foreground); }
+.dark .connector-logo-monochrome { filter: invert(1); }
+.connector-logo-notaui { background: #fcfcfa !important; }
+.connector-logo-notaui img { transform: scale(2); }
+
 .task-page-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 28px; }
 .task-eyebrow { color: var(--runner-muted-foreground); font-size: 11px; margin-bottom: 9px; }
 .task-page-header h1 { display: flex; align-items: center; gap: 12px; font-size: 25px; font-weight: 500; letter-spacing: -.8px; line-height: 1.2; }

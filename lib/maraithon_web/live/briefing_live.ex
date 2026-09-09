@@ -4,15 +4,21 @@ defmodule MaraithonWeb.BriefingLive do
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Digest
   alias Maraithon.Briefs.Markdown
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.UserIdentity
+  alias MaraithonWeb.LocalTime
 
   @history_limit 14
 
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
-     socket |> assign(:current_path, "/briefing") |> assign_identity_onboarding() |> refresh()}
+     socket
+     |> assign(:current_path, "/briefing")
+     |> assign(:page_title, "Daily brief")
+     |> assign_identity_onboarding()
+     |> refresh()}
   end
 
   @impl true
@@ -100,6 +106,7 @@ defmodule MaraithonWeb.BriefingLive do
       |> Enum.take(@history_limit)
 
     socket
+    |> assign(:timezone_info, LocalTime.timezone_info_for_user(user_id))
     |> assign(:briefs, briefs)
     |> assign(:latest_brief, List.first(briefs))
     |> assign(:selected_brief, socket.assigns[:selected_brief] || List.first(briefs))
@@ -119,25 +126,29 @@ defmodule MaraithonWeb.BriefingLive do
     assign(socket, :selected_brief, selected)
   end
 
-  defp today?(nil), do: false
+  defp today?(nil, _timezone_info), do: false
 
-  defp today?(brief) do
+  defp today?(brief, timezone_info) do
     case brief.scheduled_for || brief.inserted_at do
-      %DateTime{} = at -> DateTime.to_date(at) == Date.utc_today()
-      _other -> false
+      %DateTime{} = at ->
+        local_date(at, timezone_info) == local_date(DateTime.utc_now(), timezone_info)
+
+      _other ->
+        false
     end
   end
 
-  defp brief_date_label(brief) do
+  defp brief_date_label(brief, timezone_info) do
     at = brief.scheduled_for || brief.inserted_at
 
     case at do
       %DateTime{} = datetime ->
-        date = DateTime.to_date(datetime)
+        date = local_date(datetime, timezone_info)
+        today = local_date(DateTime.utc_now(), timezone_info)
 
         cond do
-          date == Date.utc_today() -> "Today"
-          date == Date.add(Date.utc_today(), -1) -> "Yesterday"
+          date == today -> "Today"
+          date == Date.add(today, -1) -> "Yesterday"
           true -> Calendar.strftime(date, "%A, %b %-d")
         end
 
@@ -146,30 +157,41 @@ defmodule MaraithonWeb.BriefingLive do
     end
   end
 
+  defp local_date(datetime, timezone_info) do
+    offset = Timezones.offset_at(timezone_info.name, datetime, timezone_info.offset_hours)
+    datetime |> DateTime.add(offset, :hour) |> DateTime.to_date()
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+      <.page_header title="Daily brief" subtitle="Your priorities, prepared for the day ahead." class="mb-6">
+        <:actions>
+          <.button :if={@selected_brief && @latest_brief && @selected_brief.id != @latest_brief.id}
+            patch={~p"/briefing"} variant="outline">Latest brief</.button>
+        </:actions>
+      </.page_header>
       <section
         :if={not @identity_confirmed?}
         class="mb-8 rounded-xl border border-zinc-200 bg-white p-6"
       >
         <h2 class="text-sm font-semibold text-zinc-900">Confirm who you are</h2>
         <p class="mt-1 text-sm text-zinc-600">
-          Maraithon uses this to tell your own messages apart from people contacting you —
+          Maraithon uses this to tell your own messages apart from people contacting you,
           especially in group chats. Connected accounts are filled in; add your phone number.
         </p>
 
         <form phx-submit="confirm_identity" class="mt-4 space-y-4">
           <div>
             <label for="identity-name" class="block text-xs font-semibold text-zinc-700">Your name</label>
-            <input
+            <.c_input
               id="identity-name"
               type="text"
               name="identity[display_name]"
               value={@identity_prefill.display_name}
-              class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+              class="mt-1"
             />
           </div>
 
@@ -189,43 +211,40 @@ defmodule MaraithonWeb.BriefingLive do
             <label for="identity-phones" class="block text-xs font-semibold text-zinc-700">
               Your phone numbers
             </label>
-            <input
+            <.c_input
               id="identity-phones"
               type="text"
               name="identity[phones]"
               value={Enum.join(@identity_prefill.phones, ", ")}
               placeholder="e.g. 416-555-0123, 647-555-0456"
-              class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+              class="mt-1"
             />
             <p class="mt-1 text-xs text-zinc-500">
               Detected from messages you've sent; correct or add as needed.
             </p>
           </div>
 
-          <button
-            type="submit"
-            class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800"
-          >
+          <.button type="submit" phx-disable-with="Saving…">
             Confirm identity
-          </button>
+          </.button>
         </form>
       </section>
 
-      <div class="flex items-baseline justify-between">
+      <div class="flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Morning briefing</p>
-          <h1 class="mt-1 text-2xl font-semibold text-zinc-900">
+          <h2 class="mt-1 text-xl font-semibold text-zinc-900">
             {if @selected_brief, do: @selected_brief.title, else: "No briefing yet"}
-          </h1>
+          </h2>
         </div>
         <span :if={@selected_brief} class="text-sm text-zinc-500">
-          {brief_date_label(@selected_brief)}
+          {brief_date_label(@selected_brief, @timezone_info)}
         </span>
       </div>
 
       <div :if={@selected_brief} class="mt-4 rounded-xl border border-zinc-200 bg-white p-6">
         <p class="text-sm font-medium text-zinc-700">{@selected_brief.summary}</p>
-        <div class="mt-4 text-sm leading-6 text-zinc-600">
+        <div class="runner-brief-body mt-4 text-sm leading-6 text-zinc-600">
           {Phoenix.HTML.raw(Markdown.to_html(@selected_brief.body))}
         </div>
       </div>
@@ -235,10 +254,10 @@ defmodule MaraithonWeb.BriefingLive do
       </div>
 
       <p
-        :if={@selected_brief != nil and @selected_brief == @latest_brief and not today?(@selected_brief)}
+        :if={@selected_brief != nil and @selected_brief == @latest_brief and not today?(@selected_brief, @timezone_info)}
         class="mt-3 text-sm text-zinc-500"
       >
-        No briefing yet today — this is your most recent one. The next briefing arrives on the morning schedule.
+        No briefing yet today. This is your most recent one. The next briefing arrives on the morning schedule.
       </p>
 
       <div :if={@selected_brief == @latest_brief} class="mt-8 space-y-8">
@@ -252,9 +271,11 @@ defmodule MaraithonWeb.BriefingLive do
           </div>
 
           <ul class="mt-3 divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white">
-            <li :for={entry <- group.entries} class="flex items-start gap-4 px-4 py-3">
+            <li :for={entry <- group.entries} class="flex flex-col items-start gap-3 px-4 py-3 sm:flex-row sm:gap-4">
               <div class="min-w-0 flex-1">
-                <p class="truncate text-sm font-medium text-zinc-900">{entry.card["headline"]}</p>
+                <.link navigate={~p"/todos/#{entry.todo.id}"} class="task-title-link block break-words text-sm">
+                  {entry.card["headline"]}
+                </.link>
                 <p class="mt-0.5 line-clamp-2 text-sm text-zinc-600">
                   {entry.card["next_best_action"]}
                 </p>
@@ -262,21 +283,25 @@ defmodule MaraithonWeb.BriefingLive do
                   “{entry.card["draft_preview"]}”
                 </p>
               </div>
-              <div class="flex shrink-0 items-center gap-2 pt-0.5">
-                <button
+              <div class="flex shrink-0 items-center gap-2 self-end pt-0.5 sm:self-start">
+                <.button
                   phx-click="complete_todo"
                   phx-value-id={entry.todo.id}
-                  class="rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                  variant="outline"
+                  aria-label={"Mark #{entry.card["headline"]} done"}
+                  phx-disable-with="Saving…"
                 >
                   Done
-                </button>
-                <button
+                </.button>
+                <.button
                   phx-click="dismiss_todo"
                   phx-value-id={entry.todo.id}
-                  class="rounded-md px-2 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-600"
+                  variant="plain"
+                  aria-label={"Dismiss #{entry.card["headline"]}"}
+                  phx-disable-with="Saving…"
                 >
                   Dismiss
-                </button>
+                </.button>
               </div>
             </li>
           </ul>
@@ -299,7 +324,7 @@ defmodule MaraithonWeb.BriefingLive do
                 <p class="truncate text-sm font-medium text-zinc-900">{brief.title}</p>
                 <p class="truncate text-sm text-zinc-500">{brief.summary}</p>
               </div>
-              <span class="ml-4 shrink-0 text-xs text-zinc-400">{brief_date_label(brief)}</span>
+              <span class="ml-4 shrink-0 text-xs text-zinc-400">{brief_date_label(brief, @timezone_info)}</span>
             </.link>
           </li>
         </ul>
