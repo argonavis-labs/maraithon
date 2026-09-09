@@ -2,6 +2,15 @@ defmodule MaraithonWeb.RunnerConversationComponents do
   @moduledoc "Runner presentation for Maraithon's existing public conversation projection."
   use MaraithonWeb, :html
 
+  def visible_messages(messages, include_drafts? \\ false) do
+    Enum.filter(messages, fn message ->
+      message.role in ~w(user assistant) &&
+        (message.body not in [nil, ""] ||
+           get_in(message, [:work_summary, "tool_calls"]) not in [nil, []] ||
+           (include_drafts? && get_in(message, [:structured_data, "draft_card"])))
+    end)
+  end
+
   attr :message, :map, required: true
 
   def turn(assigns) do

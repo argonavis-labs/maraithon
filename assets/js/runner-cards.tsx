@@ -14,16 +14,16 @@ import {Dialog, DialogContent, DialogTitle} from '@/components/ui/dialog'
 
 // Runner renders the components. This adapter only maps Maraithon's existing draft contract.
 type Card = Record<string, any>
-type Props = {card: Card; editable: boolean; busy: boolean; messageId: string; logo?: string; providerLabel: string}
+type Props = {card: Card; editable: boolean; terminal: boolean; busy: boolean; messageId: string; logo?: string; providerLabel: string}
 type Workspace = {
   el: HTMLElement; key: string; connected: boolean
   saved: {drafts: Record<string, Record<string, string>>; expanded: Record<string, boolean>}
   persist: () => void
   ask: (body: string) => void
   pushEvent: (event: string, payload: unknown, callback: () => void) => void
-  runnerCards?: Map<HTMLElement, {root: Root; key: string}>
+  runnerCards?: Map<HTMLElement, {root: Root; key: string; serialized?: string; connected?: boolean}>
 }
-const TERMINAL = new Set(['Completed', 'Running', 'Saving', 'Could not complete', 'Sent', 'Saved to calendar', 'Cancelled', 'Expired', 'Sending', 'Could not send', 'Check before retrying'])
+const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 function safeLink(value: unknown): value is string {
   if (typeof value !== 'string') return false
   try { return ['https:', 'http:'].includes(new URL(value, window.location.origin).protocol) } catch { return false }
@@ -46,13 +46,12 @@ function tone(card: Card): StatusBadgeTone {
   return 'neutral'
 }
 function CardReview({props, workspace, element, storeKey}: {props: Props; workspace: Workspace; element: HTMLElement; storeKey: string}) {
-  const {card, messageId, providerLabel, editable} = props
+  const {card, messageId, providerLabel, editable, terminal} = props
   const draft = useDraft(storeKey)
   const [minimized, setMinimized] = useState(workspace.saved.expanded[element.id] === undefined ? element !== workspace.el.querySelector('[aria-label="Action reviews"] [data-runner-card]') : !workspace.saved.expanded[element.id])
   const [expanded, setExpanded] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState('')
-  const terminal = TERMINAL.has(card.status)
   const busy = props.busy || submitting
   const locked = busy || !workspace.connected
   const args = projection(card)
@@ -60,6 +59,7 @@ function CardReview({props, workspace, element, storeKey}: {props: Props; worksp
   const gate = card.provider === 'gmail' ? emailDraftGate(args, draft) : messaging ? messagingDraftGate(args, draft, '') : undefined
   const summary = card.provider === 'gmail' ? emailSummary(args, draft) : messaging ? messagingSummary(args, draft) : card.title
   const badgeTone = tone(card)
+  const timeZone = card.timezone || localTimeZone
   useEffect(() => {
     if (editable) workspace.saved.drafts[messageId] = fields(card, storeKey)
     else delete workspace.saved.drafts[messageId]
@@ -127,7 +127,7 @@ function CardReview({props, workspace, element, storeKey}: {props: Props; worksp
   >
     {card.provider === 'gmail' ? <EmailBody args={args} commandId={storeKey} editable={editable} locked={locked} />
       : messaging ? <MessagingBody args={args} commandId={storeKey} editable={editable} locked={locked} />
-      : card.provider === 'calendar' ? <CalendarBody args={{summary: card.title, description: card.body, start: card.start_at, end: card.end_at, timeZone: card.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone}} commandId={storeKey} editable={false} locked={locked} timeZone={card.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone} toolId="maraithon.calendar.review" />
+      : card.provider === 'calendar' ? <CalendarBody args={{summary: card.title, description: card.body, start: card.start_at, end: card.end_at, timeZone}} commandId={storeKey} editable={false} locked={locked} timeZone={timeZone} toolId="maraithon.calendar.review" />
       : <div className="space-y-3">
         {card.subject && <ReadOnlyRow label="Title" value={card.subject} />}
         {card.start_at && <ReadOnlyRow label="Starts" value={card.start_at} />}
@@ -153,8 +153,10 @@ export function renderRunnerCards(workspace: Workspace) {
     if (!workspace.el.contains(element)) {entry.root.unmount(); clearDraft(entry.key); workspace.runnerCards.delete(element)}
   }
   for (const element of workspace.el.querySelectorAll<HTMLElement>('[data-runner-card]')) {
-    const props: Props = JSON.parse(element.dataset.card || '{}')
+    const serialized = element.dataset.card || '{}'
     let entry = workspace.runnerCards.get(element)
+    if (entry?.serialized === serialized && entry.connected === workspace.connected) continue
+    const props: Props = JSON.parse(serialized)
     if (!entry) {
       const key = `${workspace.key}:${props.messageId}`
       const saved = workspace.saved.drafts[props.messageId]
@@ -167,6 +169,7 @@ export function renderRunnerCards(workspace: Workspace) {
     }
     if (!props.editable) clearDraft(entry.key)
     entry.root.render(<CardReview props={props} workspace={workspace} element={element} storeKey={entry.key} />)
+    Object.assign(entry, {serialized, connected: workspace.connected})
   }
 }
 export function destroyRunnerCards(workspace: Workspace) {

@@ -276,14 +276,10 @@ defmodule MaraithonWeb.TodoWorkspace do
       %{status: status} = run when status in ["queued", "running"] -> run
       _ -> nil
     end)
-    |> Map.update!(:messages, fn messages ->
-      Enum.filter(
-        messages,
-        &(&1.role in ~w(user assistant) &&
-            (&1.body not in [nil, ""] || &1.structured_data["draft_card"] ||
-               get_in(&1, [:work_summary, "tool_calls"]) not in [nil, []]))
-      )
-    end)
+    |> Map.update!(
+      :messages,
+      &MaraithonWeb.RunnerConversationComponents.visible_messages(&1, true)
+    )
   end
 
   defp find_card(nil, _), do: nil

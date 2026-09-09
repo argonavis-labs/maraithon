@@ -5,7 +5,19 @@ import postcss from 'postcss'
 // Compile Runner's actual Tailwind 4 recipes without changing Phoenix's Tailwind 3 pages.
 mkdirSync('../priv/static/assets', {recursive: true})
 const temporary = '../priv/static/assets/.runner-unscoped.css'
-execFileSync(process.execPath, ['node_modules/@tailwindcss/cli/dist/index.mjs', '-i', 'css/runner-components.css', '-o', temporary], {stdio: 'inherit'})
+const theme = postcss.atRule({name: 'theme', params: 'inline'})
+postcss.parse(readFileSync('../priv/static/styles/runner-theme.css', 'utf8')).walkRules(':root', rule => {
+  if (rule.parent.type !== 'root') return
+  rule.walkDecls(/^--(font|text|radius|shadow)-/, declaration => {
+    if (/^--text-ui-.*--line-height$/.test(declaration.prop)) return
+    theme.append(declaration.clone({value: declaration.prop.startsWith('--text-ui-')
+      ? `var(--maraithon-${declaration.prop.slice(2)})` : declaration.value}))
+  })
+})
+// stdin keeps relative @source paths rooted in assets/css without a generated source file.
+execFileSync(process.execPath, ['../node_modules/@tailwindcss/cli/dist/index.mjs', '-i', '-', '-o', `../${temporary}`, '--minify'], {
+  cwd: 'css', input: readFileSync('css/runner-components.css', 'utf8') + theme, stdio: ['pipe', 'inherit', 'inherit']
+})
 const css = postcss.parse(readFileSync(temporary, 'utf8'))
 css.walkRules(rule => {
   let parent = rule.parent

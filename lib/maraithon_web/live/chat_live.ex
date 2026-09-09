@@ -232,15 +232,7 @@ defmodule MaraithonWeb.ChatLive do
 
     assigns =
       assigns
-      |> assign(
-        :messages,
-        Enum.filter(
-          messages,
-          &(&1.role in ~w(user assistant) &&
-              (&1.body not in [nil, ""] ||
-                 get_in(&1, [:work_summary, "tool_calls"]) not in [nil, []]))
-        )
-      )
+      |> assign(:messages, RunnerConversationComponents.visible_messages(messages))
       |> assign(:active_run, conversation && conversation.pending_run)
 
     ~H"""
@@ -274,7 +266,6 @@ defmodule MaraithonWeb.ChatLive do
             id="chat-messages"
             class="min-h-0 flex-1 space-y-6 overflow-y-auto p-4"
             role="log" aria-label="Conversation" tabindex="0"
-            data-last-message={List.last(@messages) && List.last(@messages).id}
             phx-hook="RunnerConversation"
           >
             <div :if={@thread == nil} class="flex h-full flex-col items-center justify-center text-center">

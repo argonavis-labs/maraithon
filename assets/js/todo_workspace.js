@@ -14,8 +14,11 @@ export const TodoWorkspace = {
     } catch (_) { this.saved = {} }
     this.saved.drafts ||= {}
     this.saved.expanded ||= {}
+    this.abort = new AbortController()
+    const options = {signal: this.abort.signal}
     this.onInput = event => {
-      if (event.target.matches('[data-workspace-composer] textarea')) this.saved.composer = event.target.value
+      if (!event.target.matches('[data-workspace-composer] textarea')) return
+      this.saved.composer = event.target.value
       this.persist()
     }
     this.onSubmit = event => {
@@ -36,28 +39,28 @@ export const TodoWorkspace = {
       }
     }
     this.onFocus = () => { if (this.connected) this.pushEvent('workspace_refresh', {}) }
-    this.el.addEventListener('input', this.onInput)
-    this.el.addEventListener('submit', this.onSubmit)
-    this.el.addEventListener('click', this.onClick)
-    window.addEventListener('focus', this.onFocus)
+    this.el.addEventListener('input', this.onInput, options)
+    this.el.addEventListener('submit', this.onSubmit, options)
+    this.el.addEventListener('click', this.onClick, options)
+    window.addEventListener('focus', this.onFocus, options)
     this.restore()
   },
   updated() { this.restore() },
-  disconnected() { this.connected = false; this.el.querySelector('[data-workspace-connection]').hidden = false; renderRunnerCards(this); renderRunnerConversation(this) },
+  disconnected() { this.setConnected(false) },
   reconnected() {
-    this.connected = true
+    this.setConnected(true)
+    this.pushEvent('workspace_refresh', {})
+  },
+  setConnected(connected) {
+    this.connected = connected
+    this.el.querySelector('[data-workspace-connection]').hidden = connected
     renderRunnerCards(this)
     renderRunnerConversation(this)
-    this.el.querySelector('[data-workspace-connection]').hidden = true
-    this.pushEvent('workspace_refresh', {})
   },
   destroyed() {
     destroyRunnerCards(this)
     destroyRunnerConversation(this)
-    this.el.removeEventListener('input', this.onInput)
-    this.el.removeEventListener('submit', this.onSubmit)
-    this.el.removeEventListener('click', this.onClick)
-    window.removeEventListener('focus', this.onFocus)
+    this.abort.abort()
   },
   persist() {
     try { (window.maraithonDesktop ? localStorage : sessionStorage).setItem(this.key, JSON.stringify(this.saved)) } catch (_) {}
@@ -97,17 +100,11 @@ export const TodoWorkspace = {
     this.el.querySelector('[data-retry-request]').hidden = !this.saved.request
     renderRunnerCards(this)
     renderRunnerConversation(this)
-    for (const time of this.el.querySelectorAll('[data-workspace-time]')) {
-      try {
-        time.textContent = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short', timeZone: time.dataset.timezone || undefined}).format(new Date(time.dateTime))
-      } catch (_) { /* Retain the exact source timestamp when formatting is unavailable. */ }
-    }
   }
 }
 
 export const TodoTimeline = {
   mounted() {
-    this.last = this.el.dataset.lastMessage
     this.first = this.el.querySelector('article')?.id
     this.follow = true
     this.onScroll = () => { this.follow = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 80 }
@@ -136,7 +133,6 @@ export const TodoTimeline = {
     if (this.follow) this.el.scrollTop = this.el.scrollHeight
     else if (first !== this.first) this.el.scrollTop = this.top + this.el.scrollHeight - this.height
     this.first = first
-    this.last = this.el.dataset.lastMessage
     this.observeTurns()
   },
   destroyed() {
@@ -148,13 +144,12 @@ export const TodoTimeline = {
 // The legacy conversation route shares the same presentation and scroll behavior.
 // Its existing Phoenix form and AssistantChat request handlers remain authoritative.
 export const RunnerConversation = {
+  ...TodoTimeline,
   mounted() {
     this.connected = true
     renderRunnerConversation(this)
     TodoTimeline.mounted.call(this)
   },
-  observeTurns: TodoTimeline.observeTurns,
-  beforeUpdate: TodoTimeline.beforeUpdate,
   updated() {
     renderRunnerConversation(this)
     TodoTimeline.updated.call(this)

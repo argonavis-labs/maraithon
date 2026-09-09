@@ -18,6 +18,8 @@ type Turn = { id: string; role: string; body: string; sent_at?: string; work_sum
 type Run = { id: string; status: string; started_at?: string; work_summary?: WorkSummary }
 type ConversationData = { message?: Turn; run?: Run; connected: boolean }
 type Workspace = { el: HTMLElement; connected: boolean; runnerTurns?: Map<HTMLElement, {root: Root; serialized: string; connected: boolean}> }
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'})
+const timeFormat = new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-digit'})
 
 function toolIcon(tool: string) {
   if (/gmail|email/.test(tool)) return <MailIcon />
@@ -63,8 +65,8 @@ function Timestamp({ value }: { value?: string }) {
   if (!value) return null
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return null
-  return <time dateTime={value} title={new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(date)} className="text-runner-foreground-40 text-ui-xs">
-    {new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-digit'}).format(date)}
+  return <time dateTime={value} title={dateTimeFormat.format(date)} className="text-runner-foreground-40 text-ui-xs">
+    {timeFormat.format(date)}
   </time>
 }
 

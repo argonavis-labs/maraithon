@@ -27,6 +27,8 @@ Runner's in-memory draft store stays intact. The Maraithon adapter restores and 
 
 Run `mix assets.setup` once after checkout. Run `mix assets.build` after changing components. Run `npm --prefix assets run typecheck` for the TypeScript compile check.
 
-The component stylesheet compiles Runner's actual Tailwind 4 recipes and scopes them with PostCSS. Phoenix's existing page stylesheet continues to use Tailwind 3. Shared light, dark, type, icon, and mobile tokens come from `priv/static/styles/runner-theme.css`.
+The component stylesheet compiles Runner's actual Tailwind 4 recipes and scopes them with PostCSS. The build reads fonts, type, radii, and shadows directly from `priv/static/styles/runner-theme.css`, then minifies the result. Keep those values in the shared theme; the React stylesheet only supplies its utility mappings and component rules. Phoenix's existing page stylesheet continues to use Tailwind 3.
+
+Card roots compare their serialized public props and connection state before rendering. Local field edits still update through Runner's draft store. The server supplies the card's terminal state and shared message filtering, so presentation rules stay consistent between task and chat routes.
 
 The Docker build installs the locked UI dependencies in a Node build stage. No dependency on the neighboring Runner checkout exists at build time or runtime.

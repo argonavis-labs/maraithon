@@ -170,20 +170,10 @@ defmodule MaraithonWeb.CoreComponents do
       assign(assigns, :classes, button_class(assigns.variant, assigns.color, assigns.class))
 
     ~H"""
-    <.link :if={@patch} patch={@patch} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
+    <.link :if={@href || @patch || @navigate} href={@href} patch={@patch} navigate={@navigate} class={@classes} {@rest}>
       <%= render_slot(@inner_block) %>
     </.link>
-    <.link :if={@navigate} navigate={@navigate} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
-      <%= render_slot(@inner_block) %>
-    </.link>
-    <a :if={@href && !@patch && !@navigate} href={@href} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
-      <%= render_slot(@inner_block) %>
-    </a>
     <button :if={!@href && !@patch && !@navigate} type={@type} disabled={@disabled} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
       <%= render_slot(@inner_block) %>
     </button>
     """

@@ -93,7 +93,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
               <.icon name="hero-arrow-path" class="size-4" />
             </.button>
           </div>
-          <div id={"todo-timeline-#{@todo.id}"} phx-hook="TodoTimeline" data-last-message={List.last(@messages) && List.last(@messages).id}
+          <div id={"todo-timeline-#{@todo.id}"} phx-hook="TodoTimeline"
             class="task-conversation-log"
             role="log" aria-label="Todo conversation" tabindex="0">
             <.button :if={@more?} variant="plain" phx-click="workspace_earlier">Load earlier messages</.button>
@@ -155,20 +155,22 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
 
   def draft_review(assigns) do
     card = assigns.message.structured_data["draft_card"]
+    terminal? = terminal?(card)
 
     editable? =
-      card["provider"] != "browser" && not terminal?(card) &&
+      card["provider"] != "browser" && not terminal? &&
         (card["editable"] == true || card["prepared_action_id"] || card["provider"] == "imessage")
 
     assigns =
       assigns
       |> assign(:card, card)
       |> assign(:editable?, !!editable?)
+      |> assign(:terminal?, terminal?)
       |> assign(:card_id, "review-" <> assigns.message.id)
 
     ~H"""
     <div id={@card_id} phx-update="ignore" data-runner-card
-      data-card={Jason.encode!(%{card: @card, editable: @editable?, busy: @busy?, messageId: @message.id, logo: logo(@card["provider"]), providerLabel: provider_label(@card["provider"])})}
+      data-card={Jason.encode!(%{card: @card, editable: @editable?, terminal: @terminal?, busy: @busy?, messageId: @message.id, logo: logo(@card["provider"]), providerLabel: provider_label(@card["provider"])})}
       class="runner-components runner-action-mount">
       <p role="status" class="text-sm text-zinc-500">Loading action review…</p>
     </div>

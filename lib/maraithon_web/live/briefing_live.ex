@@ -27,33 +27,30 @@ defmodule MaraithonWeb.BriefingLive do
   end
 
   @impl true
-  def handle_event("complete_todo", %{"id" => todo_id}, socket) do
+  def handle_event(event, %{"id" => todo_id}, socket)
+      when event in ~w(complete_todo dismiss_todo) do
     user_id = socket.assigns.current_user.id
 
-    case Todos.mark_done(user_id, todo_id,
-           note: "Completed from the morning briefing.",
+    {update, note, failure} =
+      case event do
+        "complete_todo" ->
+          {&Todos.mark_done/3, "Completed from the morning briefing.",
+           "Could not complete that item."}
+
+        "dismiss_todo" ->
+          {&Todos.dismiss/3, "Dismissed from the morning briefing.",
+           "Could not dismiss that item."}
+      end
+
+    case update.(user_id, todo_id,
+           note: note,
            actor_type: "user",
            actor_id: user_id,
            actor_label: "User",
            source: "web_briefing"
          ) do
       {:ok, _todo} -> {:noreply, refresh(socket)}
-      {:error, _reason} -> {:noreply, put_flash(socket, :error, "Could not complete that item.")}
-    end
-  end
-
-  def handle_event("dismiss_todo", %{"id" => todo_id}, socket) do
-    user_id = socket.assigns.current_user.id
-
-    case Todos.dismiss(user_id, todo_id,
-           note: "Dismissed from the morning briefing.",
-           actor_type: "user",
-           actor_id: user_id,
-           actor_label: "User",
-           source: "web_briefing"
-         ) do
-      {:ok, _todo} -> {:noreply, refresh(socket)}
-      {:error, _reason} -> {:noreply, put_flash(socket, :error, "Could not dismiss that item.")}
+      {:error, _reason} -> {:noreply, put_flash(socket, :error, failure)}
     end
   end
 
@@ -126,24 +123,15 @@ defmodule MaraithonWeb.BriefingLive do
     assign(socket, :selected_brief, selected)
   end
 
-  defp today?(nil, _timezone_info), do: false
+  defp today?(brief, timezone_info),
+    do: brief_date(brief, timezone_info) == local_date(DateTime.utc_now(), timezone_info)
 
-  defp today?(brief, timezone_info) do
-    case brief.scheduled_for || brief.inserted_at do
-      %DateTime{} = at ->
-        local_date(at, timezone_info) == local_date(DateTime.utc_now(), timezone_info)
-
-      _other ->
-        false
-    end
-  end
+  defp brief_date(brief, timezone_info),
+    do: local_date(brief.scheduled_for || brief.inserted_at, timezone_info)
 
   defp brief_date_label(brief, timezone_info) do
-    at = brief.scheduled_for || brief.inserted_at
-
-    case at do
-      %DateTime{} = datetime ->
-        date = local_date(datetime, timezone_info)
+    case brief_date(brief, timezone_info) do
+      %Date{} = date ->
         today = local_date(DateTime.utc_now(), timezone_info)
 
         cond do
@@ -157,10 +145,12 @@ defmodule MaraithonWeb.BriefingLive do
     end
   end
 
-  defp local_date(datetime, timezone_info) do
+  defp local_date(%DateTime{} = datetime, timezone_info) do
     offset = Timezones.offset_at(timezone_info.name, datetime, timezone_info.offset_hours)
     datetime |> DateTime.add(offset, :hour) |> DateTime.to_date()
   end
+
+  defp local_date(_, _), do: nil
 
   @impl true
   def render(assigns) do
