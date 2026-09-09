@@ -4,9 +4,12 @@ defmodule MaraithonWeb.CoreComponents do
     "hero-arrow-up-right" => "M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25",
     "hero-arrow-up" => "M12 19.5v-15m0 0l-6.75 6.75M12 4.5l6.75 6.75",
     "hero-chevron-down" => "M19.5 8.25L12 15.75l-7.5-7.5",
-    "hero-arrow-path" => "M16.023 9.348h4.992V4.356m-.553 10.856A9 9 0 014.038 9.348M3 19.644v-4.992h4.992m-4.44-5.864A9 9 0 0119.962 14.652",
-    "hero-calendar-days" => "M6.75 3v2.25m10.5-2.25v2.25M3.75 9h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v12a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5v-12a1.5 1.5 0 011.5-1.5zM7.5 12h.008v.008H7.5V12zm4.5 0h.008v.008H12V12zm4.5 0h.008v.008H16.5V12zm-9 4.5h.008v.008H7.5V16.5zm4.5 0h.008v.008H12V16.5z",
-    "hero-sparkles" => "M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.091L2.25 12l2.846-.813a4.5 4.5 0 003.091-3.091L9 5.25l.813 2.846a4.5 4.5 0 003.091 3.091L15.75 12l-2.846.813a4.5 4.5 0 00-3.091 3.091zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.456-2.456L14.25 6l1.035-.259a3.375 3.375 0 002.456-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"
+    "hero-arrow-path" =>
+      "M16.023 9.348h4.992V4.356m-.553 10.856A9 9 0 014.038 9.348M3 19.644v-4.992h4.992m-4.44-5.864A9 9 0 0119.962 14.652",
+    "hero-calendar-days" =>
+      "M6.75 3v2.25m10.5-2.25v2.25M3.75 9h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v12a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5v-12a1.5 1.5 0 011.5-1.5zM7.5 12h.008v.008H7.5V12zm4.5 0h.008v.008H12V12zm4.5 0h.008v.008H16.5V12zm-9 4.5h.008v.008H7.5V16.5zm4.5 0h.008v.008H12V16.5z",
+    "hero-sparkles" =>
+      "M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.091L2.25 12l2.846-.813a4.5 4.5 0 003.091-3.091L9 5.25l.813 2.846a4.5 4.5 0 003.091 3.091L15.75 12l-2.846.813a4.5 4.5 0 00-3.091 3.091zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.456-2.456L14.25 6l1.035-.259a3.375 3.375 0 002.456-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"
   }
   @moduledoc """
   Core UI components for MaraithonWeb.
@@ -116,7 +119,7 @@ defmodule MaraithonWeb.CoreComponents do
 
   def panel(assigns) do
     ~H"""
-    <section class={["overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm", @class]} {@rest}>
+    <section class={["overflow-hidden rounded-lg border border-zinc-950/10 bg-white", @class]} {@rest}>
       <div :if={@header != []} class="border-b border-zinc-950/10 px-5 py-5">
         <%= render_slot(@header) %>
       </div>
@@ -149,7 +152,7 @@ defmodule MaraithonWeb.CoreComponents do
   end
 
   @doc """
-  Catalyst-inspired button/link.
+  Runner button recipes with the existing Phoenix component API.
   """
   attr :type, :string, default: "button"
   attr :href, :string, default: nil
@@ -168,19 +171,19 @@ defmodule MaraithonWeb.CoreComponents do
 
     ~H"""
     <.link :if={@patch} patch={@patch} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,2.75rem)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
+      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
       <%= render_slot(@inner_block) %>
     </.link>
     <.link :if={@navigate} navigate={@navigate} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,2.75rem)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
+      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
       <%= render_slot(@inner_block) %>
     </.link>
     <a :if={@href && !@patch && !@navigate} href={@href} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,2.75rem)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
+      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
       <%= render_slot(@inner_block) %>
     </a>
     <button :if={!@href && !@patch && !@navigate} type={@type} disabled={@disabled} class={@classes} {@rest}>
-      <span class="absolute left-1/2 top-1/2 size-[max(100%,2.75rem)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
+      <span class="absolute left-1/2 top-1/2 size-[max(100%,44px)] -translate-x-1/2 -translate-y-1/2 sm:hidden" aria-hidden="true" />
       <%= render_slot(@inner_block) %>
     </button>
     """
@@ -197,7 +200,7 @@ defmodule MaraithonWeb.CoreComponents do
     assigns = assign(assigns, :classes, badge_class(assigns.color, assigns.class))
 
     ~H"""
-    <span class={@classes}>
+    <span class={["runner-badge", @classes]} data-color={@color}>
       <%= render_slot(@inner_block) %>
     </span>
     """
@@ -314,7 +317,7 @@ defmodule MaraithonWeb.CoreComponents do
         max={@max}
         maxlength={@maxlength}
         required={@required}
-        class="relative block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6 disabled:opacity-50"
+        class="relative block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-clay-500 focus:outline-none focus:ring-2 focus:ring-clay-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6 disabled:opacity-50"
         {@rest}
       />
     </span>
@@ -341,7 +344,7 @@ defmodule MaraithonWeb.CoreComponents do
       rows={@rows}
       maxlength={@maxlength}
       required={@required}
-      class={["block w-full resize-y rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
+      class={["block w-full resize-y rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-clay-500 focus:outline-none focus:ring-2 focus:ring-clay-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
       {@rest}
     ><%= @value %></textarea>
     """
@@ -365,7 +368,7 @@ defmodule MaraithonWeb.CoreComponents do
       name={@name}
       value={@value}
       disabled={@disabled}
-      class={["block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
+      class={["block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm focus:border-clay-500 focus:outline-none focus:ring-2 focus:ring-clay-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
       {@rest}
     >
       <%= render_slot(@inner_block) %>
@@ -522,28 +525,14 @@ defmodule MaraithonWeb.CoreComponents do
   end
 
   defp button_class(variant, color, extra) do
-    base =
-      "relative isolate inline-flex items-center justify-center gap-x-2 rounded-lg border px-3 py-1.5 text-sm/6 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+    base = "runner-button"
 
     style =
       case {variant, color} do
-        {"outline", _} ->
-          "border-zinc-950/10 bg-white text-zinc-950 shadow-sm hover:bg-zinc-950/[0.025]"
-
-        {"plain", _} ->
-          "border-transparent text-zinc-950 hover:bg-zinc-950/5"
-
-        {"solid", "red"} ->
-          "border-red-700 bg-red-600 text-white shadow-sm hover:bg-red-500"
-
-        {"solid", "amber"} ->
-          "border-amber-500 bg-amber-400 text-amber-950 shadow-sm hover:bg-amber-300"
-
-        {"solid", "indigo"} ->
-          "border-indigo-600 bg-indigo-500 text-white shadow-sm hover:bg-indigo-400"
-
-        {"solid", _} ->
-          "border-zinc-950 bg-zinc-900 text-white shadow-sm hover:bg-zinc-800"
+        {"outline", _} -> "runner-button-secondary"
+        {"plain", _} -> "runner-button-tertiary"
+        {"solid", "red"} -> "runner-button-destructive"
+        {"solid", _} -> "runner-button-primary"
       end
 
     [base, style, extra]
@@ -551,25 +540,8 @@ defmodule MaraithonWeb.CoreComponents do
     |> Enum.join(" ")
   end
 
-  defp badge_class(color, extra) do
-    color_class =
-      case color do
-        "red" -> "bg-red-500/15 text-red-700"
-        "amber" -> "bg-amber-400/20 text-amber-700"
-        "green" -> "bg-green-500/15 text-green-700"
-        "emerald" -> "bg-emerald-500/15 text-emerald-700"
-        "cyan" -> "bg-cyan-400/20 text-cyan-700"
-        "blue" -> "bg-blue-500/15 text-blue-700"
-        "indigo" -> "bg-indigo-500/15 text-indigo-700"
-        "rose" -> "bg-rose-400/15 text-rose-700"
-        _ -> "bg-zinc-600/10 text-zinc-700"
-      end
-
-    [
-      "inline-flex items-center gap-x-1.5 rounded-md px-1.5 py-0.5 text-sm/5 font-medium sm:text-xs/5",
-      color_class,
-      extra
-    ]
+  defp badge_class(_color, extra) do
+    ["inline-flex items-center gap-x-1.5 rounded-md px-1.5 py-0.5 text-xs font-medium", extra]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
   end

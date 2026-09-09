@@ -104,6 +104,6 @@ defmodule MaraithonWeb.SessionController do
   defp ip_to_string(ip), do: to_string(:inet.ntoa(ip))
 
   defp post_sign_in_path(user_id) do
-    if is_binary(user_id), do: "/dashboard", else: "/"
+    if is_binary(user_id), do: "/todos", else: "/"
   end
 end

@@ -1,7 +1,11 @@
-const VERSION = "maraithon-pwa-v1"
+const VERSION = "maraithon-runner-pwa-v2"
 const STATIC_CACHE = `${VERSION}:static`
 const PRECACHE_URLS = [
   "/offline.html",
+  "/styles/runner-theme.css",
+  "/styles/shell.css",
+  "/fonts/geist/GeistVariable.woff2",
+  "/theme.js",
   "/manifest.webmanifest",
   "/favicon.ico",
   "/images/app-icon.svg",

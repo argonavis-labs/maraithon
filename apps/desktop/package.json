@@ -1,0 +1,65 @@
+{
+  "name": "maraithon-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared task workspace with native Mac source sync",
+  "author": "Maraithon",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "npm run build && electron .",
+    "build": "node scripts/build.cjs",
+    "build:native": "bash scripts/build-native.sh",
+    "package": "npm run build:native && npm run build && node scripts/package-local.cjs",
+    "dist": "npm run build:native && npm run build && electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.maraithon.desktop",
+    "productName": "Maraithon Desktop",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**",
+      "pages/**",
+      "styles/**",
+      "fonts/**",
+      "theme.js",
+      "resources/icon.png",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ],
+      "hardenedRuntime": true,
+      "icon": "resources/icon.png",
+      "extraResources": [
+        {
+          "from": "native/Maraithon.app",
+          "to": "Maraithon.app"
+        }
+      ],
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "signIgnore": [
+        "/Contents/Resources/Maraithon\\.app($|/)"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    }
+  }
+}

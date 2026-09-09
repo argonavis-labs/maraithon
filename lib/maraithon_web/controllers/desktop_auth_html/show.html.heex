@@ -1,0 +1,13 @@
+<Layouts.app flash={@flash} current_path="/desktop/auth" current_user={@current_user}>
+  <div class="mx-auto max-w-md space-y-6 py-16">
+    <span class="workspace-mark" aria-hidden="true">m</span>
+    <.page_header title="Continue in Maraithon" subtitle="Your tasks, drafts, and daily brief, together on your desktop." />
+    <p class="text-sm/6 text-zinc-600">Sign in to the desktop app as <strong class="text-zinc-950"><%= @current_user.email %></strong>.</p>
+    <p class="text-sm/6 text-zinc-500">Continue if you started this sign-in from Maraithon on this computer.</p>
+    <.form for={%{}} action={~p"/desktop/auth/approve"} method="post">
+      <input type="hidden" name="request" value={@request} />
+      <.button type="submit">Open Maraithon</.button>
+      <.button navigate={~p"/todos"} variant="plain">Cancel</.button>
+    </.form>
+  </div>
+</Layouts.app>

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+native/
+styles/
+fonts/
+theme.js
+resources/icon.png

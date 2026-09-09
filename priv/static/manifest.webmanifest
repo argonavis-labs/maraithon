@@ -12,8 +12,8 @@
     "browser"
   ],
   "orientation": "portrait",
-  "background_color": "#f4f4f5",
-  "theme_color": "#18181b",
+  "background_color": "#fcfcfa",
+  "theme_color": "#fcfcfa",
   "categories": [
     "productivity"
   ],

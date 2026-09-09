@@ -1,10 +1,15 @@
-// Tab-scoped drafts survive LiveView patches, navigation and reconnects.
+// Web drafts stay tab-scoped. Electron drafts also survive an app restart.
 // Only a server receipt clears a submitted message. Retrying reuses its UUID.
 export const TodoWorkspace = {
   mounted() {
     this.connected = true
     this.key = this.el.dataset.storageKey
-    try { this.saved = JSON.parse(sessionStorage.getItem(this.key)) || {} } catch (_) { this.saved = {} }
+    try {
+      // Keep the hardened web tab isolation. The single desktop window uses an
+      // origin-partitioned profile and a user/task key for restart recovery.
+      const saved = window.maraithonDesktop ? localStorage.getItem(this.key) || sessionStorage.getItem(this.key) : sessionStorage.getItem(this.key)
+      this.saved = JSON.parse(saved) || {}
+    } catch (_) { this.saved = {} }
     this.saved.drafts ||= {}
     this.saved.expanded ||= {}
     this.onInput = event => {
@@ -90,7 +95,7 @@ export const TodoWorkspace = {
     window.removeEventListener('focus', this.onFocus)
   },
   persist() {
-    try { sessionStorage.setItem(this.key, JSON.stringify(this.saved)) } catch (_) {}
+    try { (window.maraithonDesktop ? localStorage : sessionStorage).setItem(this.key, JSON.stringify(this.saved)) } catch (_) {}
   },
   fields(form) { return Object.fromEntries(new FormData(form).entries()) },
   ask(body) {

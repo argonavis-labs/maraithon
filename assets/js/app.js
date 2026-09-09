@@ -1,3 +1,4 @@
+import {WorkspaceShell, TaskCreate} from "./workspace_shell"
 import {TodoWorkspace, TodoTimeline} from "./todo_workspace"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
@@ -10,7 +11,7 @@ const csrfToken = document
 
 const liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {TodoWorkspace, TodoTimeline, ...colocatedHooks, PeopleGraph, PeopleDates}
+  hooks: {WorkspaceShell, TaskCreate, TodoWorkspace, TodoTimeline, ...colocatedHooks, PeopleGraph, PeopleDates}
 })
 
 // Show the slim top progress bar only when navigation takes noticeable time.
@@ -31,7 +32,7 @@ window.addEventListener("phx:page-loading-stop", () => {
 liveSocket.connect()
 window.liveSocket = liveSocket
 
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && !window.maraithonDesktop) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js", {scope: "/"}).catch(() => {})
   })

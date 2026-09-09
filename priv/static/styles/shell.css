@@ -1,0 +1,17 @@
+/* Runner desktop's centred sign-in layout, using the shared product theme. */
+* { box-sizing: border-box; }
+body { min-height: 100vh; display: flex; flex-direction: column; }
+.drag-strip { height: 44px; width: 100%; -webkit-app-region: drag; }
+main { width: min(480px, 100%); margin: auto; padding: 48px 32px 80px; text-align: center; }
+.wordmark { display: flex; align-items: center; justify-content: center; gap: 11px; font-size: 18px; font-weight: 550; letter-spacing: -.5px; margin-bottom: 22px; }
+.mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: var(--radius-ui-lg); background: var(--runner-accent); color: white; font: 34px/1 Georgia, serif; padding-bottom: 5px; }
+h1 { font-size: 26px; line-height: 1.35; letter-spacing: -.6px; font-weight: 500; margin: 0 0 10px; }
+.description { font-size: var(--text-ui-base); line-height: 1.65; color: var(--runner-muted-foreground); margin: 0 0 24px; }
+button > span { padding-left: 12px; }
+#status { min-height: 36px; margin-top: 12px; font-size: var(--text-ui-sm); line-height: 1.6; color: var(--runner-muted-foreground); }
+.local-context { display: flex; justify-content: center; gap: 8px; padding-top: 20px; margin-top: 24px; border-top: .5px solid var(--runner-border); font-size: var(--text-ui-sm); line-height: 1.8; color: var(--runner-muted-foreground); }
+.dot { flex-shrink: 0; width: 5px; height: 5px; border-radius: 50%; background: var(--runner-accent); margin-top: 7px; }
+.muted { color: var(--runner-muted-foreground); }
+footer { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; font-size: var(--text-ui-sm); color: var(--runner-muted-foreground); }
+.text-button { background: none; border: 0; border-radius: 6px; color: var(--runner-muted-foreground); font: inherit; padding: 8px; cursor: pointer; }
+.text-button:hover { background: var(--runner-foreground-3); color: var(--runner-foreground); }

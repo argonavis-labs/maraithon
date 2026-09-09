@@ -18,7 +18,8 @@ defmodule MaraithonWeb do
   """
 
   def static_paths,
-    do: ~w(assets fonts images favicon.ico manifest.webmanifest offline.html robots.txt sw.js)
+    do:
+      ~w(assets fonts images styles theme.js favicon.ico manifest.webmanifest offline.html robots.txt sw.js)
 
   def router do
     quote do

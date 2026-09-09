@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct MaraithonApp: App {
+    @NSApplicationDelegateAdaptor(CompanionLifecycle.self) private var lifecycle
     @State private var environment = AppEnvironment()
 
     var body: some Scene {

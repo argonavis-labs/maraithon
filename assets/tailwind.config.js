@@ -7,11 +7,15 @@ module.exports = {
   ],
   theme: {
     extend: {
+      fontSize: { xs: ["var(--text-ui-sm)", "1.4"], sm: ["var(--text-ui-base)", "1.45"], base: ["var(--text-ui-md)", "1.5"], lg: ["var(--text-ui-lg)", "1.4"] },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
         display: ['"Instrument Serif"', "ui-serif", "Georgia", "serif"]
       },
       colors: {
+        white: "rgb(var(--runner-white) / <alpha-value>)",
+        zinc: Object.fromEntries([50,100,200,300,400,500,600,700,800,900,950].map(n => [n, `rgb(var(--runner-zinc-${n}) / <alpha-value>)`])),
+        clay: {500: "#a86448", 600: "#965638"},
         olive: {
           50: "oklch(98.8% 0.003 106.5)",
           100: "oklch(96.6% 0.005 106.5)",

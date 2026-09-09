@@ -1,0 +1,315 @@
+/* Copied from runner-next/apps/web-client/src/styles.css at c529ee6f96bca4e2839996ba176757184b0473df.
+ * Product tokens, responsive type scale, motion, grain, and shadows are Runner's.
+ * @theme declarations become :root for Phoenix's Tailwind 3 and Electron's plain CSS.
+ * The final compatibility block maps Maraithon's existing utility vocabulary.
+ */
+@font-face { font-family: Geist; font-style: normal; font-weight: 100 900; font-display: swap; src: url('../fonts/geist/GeistVariable.woff2') format('woff2'); }
+:root {
+  --runner-background: #fcfcfa;
+  --runner-foreground: #252116;
+  --runner-foreground-rgb: 37, 33, 22;
+  --runner-accent: #a86448;
+  --runner-caution: #d97706;
+  --runner-success: #16a34a;
+  --runner-destructive: #dc2626;
+  --runner-info: #2563eb;
+  /* The dashboard pill palette. red, amber, green, and blue reuse the status
+     hues above; these five fill the gaps. `.runner-pill` mixes any of them
+     into a 10% fill and a 50% text, the same recipe as the status badges. */
+  --runner-pill-orange: #ea580c;
+  --runner-pill-teal: #0d9488;
+  --runner-pill-indigo: #4f46e5;
+  --runner-pill-purple: #9333ea;
+  --runner-pill-pink: #db2777;
+  --runner-success-text: color-mix(in oklab, var(--runner-success) 50%, var(--runner-foreground));
+  --runner-destructive-text: color-mix(
+    in oklab,
+    var(--runner-destructive) 50%,
+    var(--runner-foreground)
+  );
+  --runner-caution-text: color-mix(in oklab, var(--runner-caution) 50%, var(--runner-foreground));
+  --runner-info-text: color-mix(in oklab, var(--runner-info) 50%, var(--runner-foreground));
+  --runner-surface-raised: color-mix(in srgb, var(--runner-background) 94%, white);
+  --runner-texture-image: url('./assets/texture-tile.png');
+  --runner-texture-size: 4px 4px;
+  --runner-texture-opacity: 0.15;
+  --runner-texture-blend-mode: soft-light;
+  --runner-texture-mask: none;
+  --runner-texture-fade-to-top: linear-gradient(to top, black 0%, transparent 100%);
+  --runner-noise-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='discrete' tableValues='0 1'/%3E%3CfeFuncG type='discrete' tableValues='0 1'/%3E%3CfeFuncB type='discrete' tableValues='0 1'/%3E%3CfeFuncA type='linear' slope='0' intercept='1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  --runner-noise-size: 200px 200px;
+  --runner-noise-opacity: 0.015;
+  --runner-noise-blend-mode: normal;
+  --runner-shadow-blur-opacity: 0.06;
+  --runner-foreground-2: color-mix(in srgb, var(--runner-foreground) 2%, var(--runner-background));
+  --runner-foreground-3: color-mix(in srgb, var(--runner-foreground) 3%, var(--runner-background));
+  --runner-foreground-5: color-mix(in srgb, var(--runner-foreground) 5%, var(--runner-background));
+  --runner-foreground-10: color-mix(
+    in srgb,
+    var(--runner-foreground) 10%,
+    var(--runner-background)
+  );
+  --runner-foreground-20: color-mix(
+    in srgb,
+    var(--runner-foreground) 20%,
+    var(--runner-background)
+  );
+  --runner-foreground-30: color-mix(
+    in srgb,
+    var(--runner-foreground) 30%,
+    var(--runner-background)
+  );
+  --runner-foreground-40: color-mix(
+    in srgb,
+    var(--runner-foreground) 40%,
+    var(--runner-background)
+  );
+  --runner-foreground-50: color-mix(
+    in srgb,
+    var(--runner-foreground) 50%,
+    var(--runner-background)
+  );
+  --runner-foreground-60: color-mix(
+    in srgb,
+    var(--runner-foreground) 60%,
+    var(--runner-background)
+  );
+  --runner-foreground-70: color-mix(
+    in srgb,
+    var(--runner-foreground) 70%,
+    var(--runner-background)
+  );
+  --runner-foreground-80: color-mix(
+    in srgb,
+    var(--runner-foreground) 80%,
+    var(--runner-background)
+  );
+  --runner-foreground-90: color-mix(
+    in srgb,
+    var(--runner-foreground) 90%,
+    var(--runner-background)
+  );
+  --runner-destructive-5: color-mix(
+    in oklch,
+    var(--runner-destructive) 5%,
+    var(--runner-background)
+  );
+  --runner-destructive-10: color-mix(
+    in oklch,
+    var(--runner-destructive) 10%,
+    var(--runner-background)
+  );
+  --runner-success-5: color-mix(in oklch, var(--runner-success) 5%, var(--runner-background));
+  --runner-success-10: color-mix(in oklch, var(--runner-success) 10%, var(--runner-background));
+  --runner-caution-5: color-mix(in oklch, var(--runner-caution) 5%, var(--runner-background));
+  --runner-caution-10: color-mix(in oklch, var(--runner-caution) 10%, var(--runner-background));
+  --runner-info-5: color-mix(in oklch, var(--runner-info) 5%, var(--runner-background));
+  --runner-info-10: color-mix(in oklch, var(--runner-info) 10%, var(--runner-background));
+  --runner-muted: oklch(from var(--runner-foreground) l c h / 0.05);
+  --runner-muted-foreground: var(--runner-foreground-50);
+  --runner-card: var(--runner-background);
+  --runner-popover: var(--runner-background);
+  /* Paired with the 0.5px hairline default (see HAIRLINE BORDERS at the end of
+     this file): halving the width doubles the tint, so edge weight holds. */
+  --runner-border: oklch(from var(--runner-foreground) l c h / 0.1);
+  --runner-input: oklch(from var(--runner-foreground) l c h / 0.1);
+  --runner-ring: oklch(from var(--runner-foreground) l c h / 0.25);
+  --runner-selected-bar: #bf7743;
+  /* Motion is deliberately compact: most product transitions should resolve
+     before they can delay the next action. Use ease-out for entering/exiting,
+     ease-in-out for movement, and CSS ease for hover/color feedback. */
+  --runner-motion-duration-fast: 120ms;
+  --runner-motion-duration-standard: 200ms;
+  --runner-motion-duration-slow: 280ms;
+  --runner-motion-ease-out: cubic-bezier(0.215, 0.61, 0.355, 1);
+  --runner-motion-ease-move: cubic-bezier(0.645, 0.045, 0.355, 1);
+  --radius: 8px;
+  --background: var(--runner-background);
+  --foreground: var(--runner-foreground);
+  --card: var(--runner-card);
+  --card-foreground: var(--runner-foreground);
+  --popover: var(--runner-popover);
+  --popover-foreground: var(--runner-foreground);
+  --primary: var(--runner-foreground);
+  --primary-foreground: var(--runner-background);
+  --secondary: var(--runner-foreground-5);
+  --secondary-foreground: var(--runner-foreground);
+  --muted: var(--runner-muted);
+  --muted-foreground: var(--runner-muted-foreground);
+  --accent: var(--runner-muted);
+  --accent-foreground: var(--runner-foreground);
+  --destructive: var(--runner-destructive);
+  --input: var(--runner-input);
+  --border: var(--runner-border);
+  --ring: var(--runner-ring);
+  --sidebar: var(--runner-background);
+  --sidebar-foreground: var(--runner-foreground);
+  --sidebar-primary: var(--runner-foreground);
+  --sidebar-primary-foreground: var(--runner-background);
+  --sidebar-accent: var(--runner-foreground-3);
+  --sidebar-accent-foreground: var(--runner-foreground);
+  --sidebar-border: var(--runner-border);
+  --sidebar-ring: var(--runner-ring);
+  --chart-1: var(--runner-accent);
+  --chart-2: var(--runner-caution);
+  --chart-3: var(--runner-success);
+  --chart-4: var(--runner-destructive);
+  --chart-5: var(--runner-foreground-60);
+}
+
+:root {
+  --font-heading: var(--font-sans);
+  --font-sans:
+    Geist, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-serif: Georgia, Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-xs--line-height: 1.4;
+  --text-sm: 13px;
+  --text-sm--line-height: 1.45;
+  --text-base: 15px;
+  --text-base--line-height: 1.5;
+  --text-lg: 18px;
+  --text-lg--line-height: 1.4;
+  --radius-ui-sm: 4px;
+  --radius-ui-md: 6px;
+  --radius-ui-lg: 8px;
+  --radius-ui-xl: 16px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+  --radius-4xl: 28px;
+  /* Stock shadow names carry the Runner shadow recipes (shadow-thin/minimal/
+     middle/strong below remain as aliases for existing call sites). */
+  --shadow-2xs: rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px;
+  --shadow-xs: rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px;
+  --shadow-sm:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px;
+  --shadow-md:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px;
+  --shadow-lg:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 12px 12px -6px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 24px 24px -12px;
+  --shadow-xl:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 12px 12px -6px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 24px 24px -12px;
+}
+
+:root {
+  --text-ui-sm: 11px;
+  --text-ui-sm--line-height: 1.4;
+  --text-ui-base: 13px;
+  --text-ui-base--line-height: 1.45;
+  --text-ui-md: 15px;
+  --text-ui-md--line-height: 1.5;
+  --text-ui-lg: 18px;
+  --text-ui-lg--line-height: 1.4;
+}
+
+@media (max-width: 47.999rem) {
+  :root {
+    --text-ui-sm: 13px;
+    --text-ui-base: 16px;
+    --text-ui-md: 18px;
+    --text-ui-lg: 20px;
+    --runner-icon-sm: 13px;
+    --runner-icon-base: 16px;
+    --runner-icon-md: 18px;
+    --runner-icon-lg: 20px;
+  }
+}
+
+.dark {
+  --runner-background: #21201d;
+  --runner-foreground: #f7f7f5;
+  --runner-foreground-rgb: 247, 247, 245;
+  --runner-accent: #c88d6f;
+  --runner-caution: #fbbf24;
+  --runner-success: #22c55e;
+  --runner-destructive: #ef4444;
+  --runner-info: #3b82f6;
+  --runner-pill-orange: #fb923c;
+  --runner-pill-teal: #2dd4bf;
+  --runner-pill-indigo: #818cf8;
+  --runner-pill-purple: #c084fc;
+  --runner-pill-pink: #f472b6;
+  --runner-shadow-blur-opacity: 0.12;
+}
+
+:root { --runner-selected: color-mix(in srgb, var(--runner-accent) 9%, var(--runner-background)); }
+html { background: var(--runner-background); font-size: 15px; }
+body { margin: 0; background: var(--runner-background); color: var(--runner-foreground); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+::selection { background: var(--runner-selected); }
+:focus-visible { outline: 2px solid var(--runner-ring); outline-offset: 3px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+.runner-noise-surface { position: relative; isolation: isolate; }
+.runner-noise-surface > * { position: relative; z-index: 1; }
+.runner-noise-surface::before { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; background-image: var(--runner-noise-image); background-repeat: repeat; background-size: var(--runner-noise-size); mix-blend-mode: var(--runner-noise-blend-mode); opacity: var(--runner-noise-opacity); }
+/* Recipes from Runner's components/ui/button.tsx, expressed as portable CSS. */
+.runner-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 4px 12px; border: .5px solid transparent; border-radius: var(--radius-ui-md); background-clip: padding-box; font: 500 var(--text-ui-base)/1.45 var(--font-sans); white-space: nowrap; user-select: none; cursor: pointer; transition: background var(--runner-motion-duration-fast), color var(--runner-motion-duration-fast); }
+.runner-button:focus-visible { border-color: var(--runner-ring); outline: 1px solid var(--runner-ring); outline-offset: 0; }
+.runner-button:active:not(:disabled) { transform: translateY(1px); }
+.runner-button:disabled { pointer-events: none; opacity: .5; }
+.runner-button-primary { background: var(--primary); color: var(--primary-foreground); }
+.runner-button-primary:hover { background: var(--runner-foreground-90); }
+.runner-button-secondary, .runner-button-destructive { border-color: oklch(from var(--runner-foreground) l c h / .15); background: var(--background); color: var(--foreground); }
+.runner-button-secondary:hover, .runner-button-tertiary:hover, .runner-button-destructive:hover { background: var(--runner-foreground-3); }
+.runner-button-tertiary { background: transparent; color: var(--foreground); }
+.runner-button-destructive { color: var(--destructive); }
+.runner-badge { background: color-mix(in oklch, var(--runner-pill, var(--runner-foreground)) 10%, var(--runner-background)); color: color-mix(in oklab, var(--runner-pill, var(--runner-foreground)) 50%, var(--runner-foreground)); }
+.runner-badge[data-color='red'], .runner-badge[data-color='rose'] { --runner-pill: var(--runner-destructive); }
+.runner-badge[data-color='amber'] { --runner-pill: var(--runner-caution); }
+.runner-badge[data-color='green'], .runner-badge[data-color='emerald'] { --runner-pill: var(--runner-success); }
+.runner-badge[data-color='blue'], .runner-badge[data-color='cyan'] { --runner-pill: var(--runner-info); }
+.runner-badge[data-color='indigo'] { --runner-pill: var(--runner-pill-indigo); }
+/* Existing zinc/white utilities retain their semantic ordering in each theme. */
+:root {
+  color-scheme: light;
+  --runner-zinc-50: 247 247 244;
+  --runner-zinc-100: 240 239 235;
+  --runner-zinc-200: 228 226 220;
+  --runner-zinc-300: 204 201 191;
+  --runner-zinc-400: 158 155 145;
+  --runner-zinc-500: 129 126 118;
+  --runner-zinc-600: 105 101 90;
+  --runner-zinc-700: 80 76 63;
+  --runner-zinc-800: 60 56 43;
+  --runner-zinc-900: 43 39 29;
+  --runner-zinc-950: 37 33 22;
+  --runner-white: 255 255 255;
+}
+:root.dark {
+  color-scheme: dark;
+  --runner-zinc-50: 33 32 29;
+  --runner-zinc-100: 46 45 41;
+  --runner-zinc-200: 61 60 54;
+  --runner-zinc-300: 85 83 76;
+  --runner-zinc-400: 137 134 126;
+  --runner-zinc-500: 170 167 159;
+  --runner-zinc-600: 189 187 179;
+  --runner-zinc-700: 209 206 199;
+  --runner-zinc-800: 229 226 220;
+  --runner-zinc-900: 240 238 233;
+  --runner-zinc-950: 247 247 245;
+  --runner-white: 39 38 34;
+}

@@ -54,7 +54,8 @@ defmodule MaraithonWeb.Endpoint do
     at: "/assets",
     from: {:maraithon, "priv/static/assets"},
     gzip: not code_reloading?,
-    cache_control_for_etags: "public, max-age=31536000, immutable"
+    cache_control_for_etags:
+      if(code_reloading?, do: "no-cache", else: "public, max-age=31536000, immutable")
 
   plug Plug.Static,
     at: "/",

@@ -14,7 +14,7 @@ import AppKit
 struct RootWindow: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selection: SidebarItem? = .todos
+    @State private var selection: SidebarItem? = CompanionLifecycle.isSyncHelper ? .source(id: "imessage") : .todos
     @State private var requestedTodoID: String?
 
     var body: some View {

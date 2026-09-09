@@ -130,3 +130,18 @@ deploy-hardened:
 
 release-companion:
 	apps/companion/scripts/release.sh
+
+# Shared Electron workspace. The signed Swift companion remains its Mac sync service.
+.PHONY: build-desktop run-desktop package-desktop build-sync-helper
+build-desktop:
+	npm --prefix apps/desktop ci --no-audit --no-fund
+	npm --prefix apps/desktop run build
+
+run-desktop:
+	npm --prefix apps/desktop start
+
+package-desktop:
+	npm --prefix apps/desktop run package
+
+build-sync-helper:
+	npm --prefix apps/desktop run build:native

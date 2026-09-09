@@ -27,6 +27,18 @@ defmodule MaraithonWeb.Router do
     plug MaraithonWeb.Plugs.RequireAdmin
   end
 
+  # Desktop sign-in uses a one-use PKCE credential instead of browser-cookie auth.
+  pipeline :desktop_exchange do
+    plug :accepts, ["json"]
+    plug :fetch_session
+    plug :put_secure_browser_headers
+  end
+
+  scope "/desktop", MaraithonWeb do
+    pipe_through :desktop_exchange
+    post "/exchange", DesktopAuthController, :exchange
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -107,6 +119,9 @@ defmodule MaraithonWeb.Router do
     post "/connectors/:provider/disconnect", ConnectorsController, :disconnect
     get "/conenctors", ConnectorsController, :legacy_redirect
     get "/how-it-works", HowItWorksController, :index
+
+    get "/desktop/auth", DesktopAuthController, :show
+    post "/desktop/auth/approve", DesktopAuthController, :approve
 
     # Companion desktop app pairing flow
     get "/companion/auth", CompanionAuthController, :show

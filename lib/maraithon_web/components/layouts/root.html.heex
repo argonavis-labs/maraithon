@@ -1,25 +1,28 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-zinc-50">
+<html lang="en" class="h-full">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <meta name="theme-color" content="#18181b" />
-    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#fcfcfa" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Maraithon" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="format-detection" content="telephone=no" />
-    <title>Maraithon — Todos</title>
+    <title>Maraithon · Tasks</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/images/app-icon.svg" />
     <link rel="apple-touch-icon" href="/images/app-icon-192.png" />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+    <link rel="preload" href="/fonts/geist/GeistVariable.woff2" as="font" type="font/woff2" crossorigin />
+    <script src="/theme.js"></script>
+    <link phx-track-static rel="stylesheet" href="/styles/runner-theme.css" />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css?theme=runner"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js?theme=runner"}>
     </script>
   </head>
-  <body class="h-full bg-zinc-50 font-sans text-zinc-950 antialiased">
+  <body class="h-full font-sans text-zinc-950 antialiased">
     <%= @inner_content %>
   </body>
 </html>

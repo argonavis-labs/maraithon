@@ -86,8 +86,8 @@ defmodule MaraithonWeb.TodosLive do
   @shortcut_groups [
     {"Move",
      [
-       %{keys: ["j", "↓", "→"], label: "Next todo"},
-       %{keys: ["k", "↑", "←"], label: "Previous todo"},
+       %{keys: ["j", "↓", "→"], label: "Next task"},
+       %{keys: ["k", "↑", "←"], label: "Previous task"},
        %{keys: ["o", "Enter"], label: "Open active todo"},
        %{keys: ["u", "Esc"], label: "Back to the list"}
      ]},
@@ -108,7 +108,7 @@ defmodule MaraithonWeb.TodosLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Todos",
+       page_title: "Tasks",
        current_path: "/todos",
        filters: @default_filters,
        filter_form: to_form(@default_filters, as: :filters),
@@ -342,7 +342,7 @@ defmodule MaraithonWeb.TodosLive do
              socket
              |> assign(:new_todo_form, to_form(@default_new_todo_params, as: :todo))
              |> assign(:new_todo_errors, %{})
-             |> put_flash(:info, "Todo added.")
+             |> put_flash(:info, "Task added.")
              |> push_patch(to: todo_detail_path(@default_filters, todo.id))}
 
           {:error, reason} ->
@@ -905,6 +905,25 @@ defmodule MaraithonWeb.TodosLive do
 
         <div :if={@todos_loaded?} id="todo-ready-content">
           <%= if @selected_todo do %>
+            <div class="task-detail-layout">
+              <aside class="task-detail-rail" aria-label="Task list">
+                <.link patch={todos_path(@filters)} class="task-rail-heading">All tasks <span><%= @total_count %></span></.link>
+                <nav aria-label="Tasks in this view">
+                  <.link :for={todo <- @todos} patch={todo_detail_path(@filters, todo.id)}
+                    class={["task-rail-row", todo.id == @selected_todo.id && "is-active"]}
+                    aria-current={todo.id == @selected_todo.id && "page"}>
+                    <span class="task-rail-status" data-status={todo.status}></span>
+                    <span><span class="task-rail-title"><%= todo.title %></span>
+                      <span class="task-rail-meta"><%= todo_source_label(todo.source) %> · <%= todo_project_name(todo, @projects) %></span>
+                    </span>
+                  </.link>
+                </nav>
+                <nav :if={@total_pages > 1} class="task-rail-pagination" aria-label="Task list pages">
+                  <.link :if={@page > 1} patch={todos_path(@filters, %{"page" => Integer.to_string(@page - 1)})}>Previous</.link>
+                  <span><%= @page %> / <%= @total_pages %></span>
+                  <.link :if={@page < @total_pages} patch={todos_path(@filters, %{"page" => Integer.to_string(@page + 1)})}>Next</.link>
+                </nav>
+              </aside>
             <.todo_detail_panel
               todo={@selected_todo}
               detail_tab={@detail_tab}
@@ -923,24 +942,33 @@ defmodule MaraithonWeb.TodosLive do
               reply_sending?={@reply_sending?}
               reply_sent={@reply_sent}
             />
+            </div>
           <% else %>
-            <div class="space-y-4">
-              <.page_header title="Todos">
-                <:actions>
-                  <.shortcut_help_button />
-                </:actions>
-              </.page_header>
+            <div class="task-index">
+              <header class="task-page-header">
+                <div><p class="task-eyebrow">Your workspace</p><h1>Tasks <span class="task-count"><%= @total_count %></span></h1>
+                  <p class="task-subtitle">A clear next step for everything on your plate.</p>
+                </div>
+                <div class="flex items-center gap-2"><.shortcut_help_button />
+                  <.button type="button" phx-click={Phoenix.LiveView.JS.dispatch("maraithon:new-task", to: "#task-create")}><.icon name={:plus} class="size-4" /> New task</.button>
+                </div>
+              </header>
+              <nav class="task-tabs" aria-label="Task views">
+                <.link :for={{label, status} <- [{"Active", "active"}, {"Snoozed", "snoozed"}, {"Completed", "done"}, {"All tasks", "all"}]}
+                  patch={todos_path(@filters, %{"status" => status, "page" => "1"})}
+                  class={["task-tab", @filters["status"] == status && "is-active"]} aria-current={@filters["status"] == status && "page"}><%= label %></.link>
+              </nav>
 
-          <details class="group">
+          <details id="task-create" class="group task-create" phx-hook="TaskCreate">
             <summary class="inline-flex cursor-pointer list-none items-center gap-6 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
-              Add a todo
+              Add a task
               <span class="text-zinc-400 group-open:rotate-45" aria-hidden="true">+</span>
             </summary>
             <div class="mt-3">
               <.panel body_class="px-5 py-4">
           <:header>
             <div class="flex flex-wrap items-end justify-between gap-3">
-              <h2 class="text-sm/6 font-semibold text-zinc-950">New todo</h2>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">New task</h2>
               <.form for={@new_project_form} id="new-project-form" phx-submit="create_project" class="flex items-center gap-2">
                 <.c_input
                   id={@new_project_form[:name].id}
@@ -958,7 +986,7 @@ defmodule MaraithonWeb.TodosLive do
             for={@new_todo_form}
             id="new-todo-form"
             phx-submit="create_todo"
-            class="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(14rem,1.2fr)_11rem_12rem_9rem_auto]"
+            class="task-create-form"
           >
             <.field
               label="Work item"
@@ -1030,7 +1058,7 @@ defmodule MaraithonWeb.TodosLive do
               <.button type="submit" phx-disable-with="Adding...">Add</.button>
             </div>
 
-            <.field label="Notes" for={@new_todo_form[:notes].id} class="lg:col-span-5">
+            <.field label="Notes" for={@new_todo_form[:notes].id} class="task-create-notes">
               <.c_textarea
                 id={@new_todo_form[:notes].id}
                 name={@new_todo_form[:notes].name}
@@ -1046,31 +1074,27 @@ defmodule MaraithonWeb.TodosLive do
             </div>
           </details>
 
-          <details class="group">
-            <summary class="inline-flex cursor-pointer list-none items-center gap-3 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
-              Search and filter
-              <span class="text-xs/5 text-zinc-500"><%= active_filter_label(@filters) %></span>
-            </summary>
-            <div class="mt-3">
-              <.panel body_class="px-5 py-4">
           <.form
             for={@filter_form}
             id="todo-filters"
             phx-change="update_filters"
             phx-submit="update_filters"
-            class="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(14rem,1.5fr)_repeat(6,minmax(8rem,1fr))_auto]"
+            class="task-filter-bar"
           >
-            <.field label="Search" for={@filter_form[:q].id}>
+            <div class="task-search-field"><.icon name={:search} class="size-4" /><label for={@filter_form[:q].id} class="sr-only">Search tasks</label>
               <.c_input
                 id={@filter_form[:q].id}
                 name={@filter_form[:q].name}
                 value={@filter_form[:q].value}
-                placeholder="Search title, next action, person, account, source"
+                placeholder="Search tasks…"
                 phx-debounce="250"
                 data-todo-search="true"
               />
-            </.field>
+            <kbd>/</kbd></div>
 
+            <details class="task-filters-more">
+              <summary><.icon name={:settings} class="size-4" /> Filters <span><%= active_filter_label(@filters) %></span></summary>
+              <div class="task-filter-fields">
             <.field label="Status" for={@filter_form[:status].id}>
               <.c_select id={@filter_form[:status].id} name={@filter_form[:status].name}>
                 <option :for={{label, value} <- @status_options} value={value} selected={@filters["status"] == value}>
@@ -1130,13 +1154,11 @@ defmodule MaraithonWeb.TodosLive do
             <div class="flex items-end">
               <.button type="button" variant="outline" phx-click="clear_filters">Reset</.button>
             </div>
+              </div>
+            </details>
           </.form>
-        </.panel>
 
-            </div>
-          </details>
-
-        <.panel body_class="px-5 py-0">
+        <.panel class="task-list-panel" body_class="task-list-body">
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <p class="text-sm/6 text-zinc-500">
@@ -1158,17 +1180,17 @@ defmodule MaraithonWeb.TodosLive do
                     <.table_header class="w-10">
                       <input
                         type="checkbox"
-                        aria-label="Select all todos"
+                        aria-label="Select all tasks"
                         checked={all_visible_todos_selected?(@todos, @selected_todo_ids)}
                         phx-click="toggle_all_todos"
                         class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
                       />
                     </.table_header>
-                    <.sortable_table_header filters={@filters} field="title" class="min-w-[20rem]">
-                      Todo
+                    <.sortable_table_header filters={@filters} field="title" class="task-title-column">
+                      Task
                     </.sortable_table_header>
-                    <.table_header class="min-w-40">Context</.table_header>
-                    <.sortable_table_header filters={@filters} field="due" class="min-w-32">
+                    <.table_header class="task-context-column">Source</.table_header>
+                    <.sortable_table_header filters={@filters} field="due" class="task-due-column">
                       Due
                     </.sortable_table_header>
                     <.table_header class="w-24 text-right">Action</.table_header>
@@ -1196,7 +1218,7 @@ defmodule MaraithonWeb.TodosLive do
                     <.table_cell class="w-10 align-top">
                       <span
                         data-active-indicator="true"
-                        class="absolute inset-y-2 left-0 hidden w-0.5 rounded-full bg-blue-600 group-data-[active=true]:block"
+                        class="task-active-indicator absolute inset-y-2 left-0 hidden w-0.5 rounded-full group-data-[active=true]:block"
                         aria-hidden="true"
                       />
                       <input
@@ -1210,7 +1232,7 @@ defmodule MaraithonWeb.TodosLive do
                     </.table_cell>
                     <.table_cell class="max-w-2xl whitespace-normal align-top">
                       <div class="flex flex-wrap items-center gap-2">
-                        <div class="font-medium text-zinc-950"><%= todo.title %></div>
+                        <.link patch={todo_detail_path(@filters, todo.id)} class="task-title-link"><%= todo.title %></.link>
                         <.badge :if={todo.status != "open"} color={status_color(todo.status)}>
                           <%= todo_status_label(todo.status) %>
                         </.badge>
@@ -1226,16 +1248,17 @@ defmodule MaraithonWeb.TodosLive do
                       </p>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top">
-                      <div class="text-sm/6 text-zinc-700"><%= todo_project_name(todo, @projects) %></div>
+                      <div class="task-source"><TodoWorkspaceComponents.provider_mark provider={todo.source} /><span><%= todo_source_label(todo.source) %></span></div>
+                      <div class="task-project"><%= todo_project_name(todo, @projects) %></div>
                       <div class="mt-1 flex flex-wrap items-center gap-1.5">
-                        <span class="text-xs/5 text-zinc-500"><%= todo_source_label(todo.source) %></span>
+
                         <.badge color={agent_actionability_color(todo.agent_actionability)}>
                           <%= agent_actionability_label(todo) %>
                         </.badge>
                       </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
-                      <%= format_datetime(todo.due_at, "No due date", @timezone_info) %>
+                      <span title={format_datetime(todo.due_at, "No due date", @timezone_info)}><%= compact_due(todo.due_at, @timezone_info) %></span>
                     </.table_cell>
                     <.table_cell class="align-top text-right">
                       <.button
@@ -1551,7 +1574,15 @@ defmodule MaraithonWeb.TodosLive do
           pages = max(div(count + @page_limit - 1, @page_limit), 1)
           selected_page = todo_page_for_id(navigation_ids, selected_todo_id)
 
-          {[], navigation_ids, count, pages, selected_page || min(requested_page, pages)}
+          page = selected_page || min(requested_page, pages)
+
+          todos =
+            Todos.list_for_user(
+              user_id,
+              Keyword.merge(query_opts, limit: @page_limit, offset: (page - 1) * @page_limit)
+            )
+
+          {todos, navigation_ids, count, pages, page}
 
         nil ->
           {todos, count, pages, current_page} =
@@ -1716,10 +1747,10 @@ defmodule MaraithonWeb.TodosLive do
       data-todo-loading-shell="true"
       role="status"
       aria-live="polite"
-      aria-label="Loading todos"
+      aria-label="Loading tasks"
       class="space-y-4"
     >
-      <span class="sr-only">Loading todos…</span>
+      <span class="sr-only">Loading tasks…</span>
 
       <div class="animate-pulse space-y-4 motion-reduce:animate-none" aria-hidden="true">
         <div class="flex items-center justify-between gap-4">
@@ -1975,19 +2006,19 @@ defmodule MaraithonWeb.TodosLive do
           patch={todos_path(@filters)}
           class="inline-flex items-center gap-1 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
         >
-          <span aria-hidden="true">←</span> Back to todos
+          <span aria-hidden="true">←</span> Back to tasks
         </.link>
 
-        <nav id="todo-sibling-navigation" aria-label="Todo navigation" class="flex items-center gap-1">
+        <nav id="todo-sibling-navigation" aria-label="Task navigation" class="flex items-center gap-1">
           <.button
             :if={@previous_todo}
             id="previous-todo"
             patch={@previous_todo_path}
             variant="plain"
             class="text-xs text-zinc-500"
-            aria-label="Previous todo"
+            aria-label="Previous task"
             aria-keyshortcuts="ArrowLeft K"
-            title="Previous todo (K or Left arrow)"
+            title="Previous task (K or Left arrow)"
           >
             <span aria-hidden="true">←</span> Previous
           </.button>
@@ -1998,7 +2029,7 @@ defmodule MaraithonWeb.TodosLive do
             disabled
             variant="plain"
             class="text-xs text-zinc-400"
-            aria-label="Previous todo"
+            aria-label="Previous task"
           >
             <span aria-hidden="true">←</span> Previous
           </.button>
@@ -2008,9 +2039,9 @@ defmodule MaraithonWeb.TodosLive do
             patch={@next_todo_path}
             variant="plain"
             class="text-xs text-zinc-500"
-            aria-label="Next todo"
+            aria-label="Next task"
             aria-keyshortcuts="ArrowRight J"
-            title="Next todo (J or Right arrow)"
+            title="Next task (J or Right arrow)"
           >
             Next <span aria-hidden="true">→</span>
           </.button>
@@ -2021,7 +2052,7 @@ defmodule MaraithonWeb.TodosLive do
             disabled
             variant="plain"
             class="text-xs text-zinc-400"
-            aria-label="Next todo"
+            aria-label="Next task"
           >
             Next <span aria-hidden="true">→</span>
           </.button>
@@ -2116,7 +2147,7 @@ defmodule MaraithonWeb.TodosLive do
         </div>
       </header>
 
-      <nav aria-label="Todo sections" class="flex gap-2 border-b border-zinc-950/10 pb-2">
+      <nav aria-label="Task sections" class="flex gap-2 border-b border-zinc-950/10 pb-2">
         <.button :for={{tab, label} <- [{"summary", "Workspace"}, {"details", "Details"}]}
           id={"todo-tab-#{tab}"} variant={if(@detail_tab == tab, do: "outline", else: "plain")}
           type="button" phx-click="detail_tab" phx-value-tab={tab}
@@ -2843,7 +2874,7 @@ defmodule MaraithonWeb.TodosLive do
     assigns = assign(assigns, :ball_label, Maraithon.Todos.Workflow.ball_label(assigns.workflow))
 
     ~H"""
-    <div class="mt-1 flex flex-wrap items-center gap-2" aria-label={"#{@ball_label}. State: #{@workflow["label"]}"}>
+    <div class="task-ownership mt-1 flex flex-wrap items-center gap-2" aria-label={"#{@ball_label}. State: #{@workflow["label"]}"}>
       <span class="inline-flex items-center gap-1.5 text-sm font-semibold text-zinc-950">
         <.icon name={:people} class="size-4 shrink-0" />
         <%= @ball_label %>
@@ -3372,8 +3403,8 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_row_class(%Todo{} = todo, selected_todo_ids) do
     [
-      "group relative cursor-pointer transition-all duration-100 hover:bg-zinc-950/[0.025] data-[active=true]:bg-blue-50 data-[active=true]:outline data-[active=true]:outline-2 data-[active=true]:-outline-offset-2 data-[active=true]:outline-blue-500/40",
-      MapSet.member?(selected_todo_ids, todo.id) && "bg-blue-50/60"
+      "group task-row relative cursor-pointer transition-colors duration-100",
+      MapSet.member?(selected_todo_ids, todo.id) && "is-selected"
     ]
     |> Enum.filter(&is_binary/1)
     |> Enum.join(" ")
@@ -3600,6 +3631,24 @@ defmodule MaraithonWeb.TodosLive do
     do: SourceLabels.label(source)
 
   defp todo_source_label(_source), do: "Maraithon"
+
+  defp compact_due(nil, _info), do: "No due date"
+
+  defp compact_due(%DateTime{} = datetime, timezone_info) do
+    info = normalize_timezone_info(timezone_info)
+    offset = Timezones.offset_at(info.name, datetime, info.offset_hours)
+    date = datetime |> DateTime.add(offset, :hour) |> DateTime.to_date()
+    today = local_today(info)
+
+    case Date.diff(date, today) do
+      0 -> "Today"
+      1 -> "Tomorrow"
+      -1 -> "Yesterday"
+      _ -> Calendar.strftime(date, "%b %-d")
+    end
+  end
+
+  defp compact_due(value, info), do: format_datetime(value, "No due date", info)
 
   defp format_datetime(nil, fallback, _timezone_info), do: fallback
 
