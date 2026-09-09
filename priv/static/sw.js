@@ -1,4 +1,4 @@
-const VERSION = "maraithon-runner-pwa-v2"
+const VERSION = "maraithon-runner-pwa-v3"
 const STATIC_CACHE = `${VERSION}:static`
 const PRECACHE_URLS = [
   "/offline.html",
@@ -17,7 +17,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(STATIC_CACHE)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+      .then((cache) => cache.addAll(PRECACHE_URLS.map(url => new Request(url, {cache: "reload"}))))
       .then(() => self.skipWaiting())
   )
 })

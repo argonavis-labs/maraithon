@@ -164,10 +164,6 @@ html[data-desktop] .workspace-sidebar-bottom { -webkit-app-region: no-drag; }
 .task-composer textarea { border: 0; box-shadow: none; background: transparent; padding: 2px 4px; resize: vertical; min-height: 70px; font-size: 13px; }
 .task-composer:focus-within { border-color: var(--runner-accent); }
 .task-composer textarea:focus { outline: none; box-shadow: none; }
-[data-workspace-review] { border-color: var(--runner-border); background: var(--runner-surface-raised); }
-[data-workspace-review][open] { border-color: color-mix(in srgb, var(--runner-accent) 40%, transparent); }
-[data-workspace-review] > summary { background: var(--runner-selected); border-radius: 7px; padding: 13px 16px; }
-[data-workspace-review][open] > summary { border-radius: 7px 7px 0 0; }
 @container (min-width: 840px) {
   .todo-workspace-grid { grid-template-columns: minmax(0, 1fr) 210px; }
   .todo-people-pane { border-top: 0; border-left: .5px solid var(--runner-border); padding: 0 0 0 24px; }
@@ -243,3 +239,12 @@ html[data-desktop] .workspace-sidebar-bottom { -webkit-app-region: no-drag; }
   .workspace-icon-button { min-width: 44px; min-height: 44px; }
   .task-list-panel .task-row td:nth-child(5) .runner-button { margin-left: 8px; }
 }
+
+.runner-action-mount { width: 100%; min-width: 0; scroll-margin-top: 24px; }
+.runner-action-mount:has([data-action-card-minimized]) { width: auto; }
+.runner-components [data-slot="button"] { cursor: pointer; }
+.runner-components [data-slot="button"]:disabled { cursor: default; }
+@media (max-width: 767px) { .runner-components [data-action-card-id] > div:first-child { flex-wrap: wrap; } }
+/* Tailwind 4 uses independent translate/rotate properties. Reset the older
+   Tailwind 3 transform utility so a shared class cannot apply them twice. */
+.runner-components * { transform: none; }

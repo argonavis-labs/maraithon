@@ -1,0 +1,39 @@
+{
+  "repository": "runner-next",
+  "commit": "c529ee6f96bca4e2839996ba176757184b0473df",
+  "files": {
+    "components/ui/button.tsx": "c59e9c7a40349d24c0e1d38eef2f9d688156f462db30044f0013fb220e907669",
+    "components/ui/badge.tsx": "820381f9858365423a117c47ea4cad34d75aa81a3874f3d1dd29564764ffa9e5",
+    "components/ui/status-badge.tsx": "f7a6c9555205f92b5bb639089fb3825105128d333cde6a6d8d671e0a00fe1068",
+    "components/ui/input.tsx": "3970b4e8f07154fffb238a0205d5a0b6b68430715349a5c709845b289e4ce07b",
+    "components/ui/textarea.tsx": "961c488e12e8cc62c0d8cb9ed6e121b3ef8f8c01d5f73453aa21e8e294ea3651",
+    "components/ui/tooltip.tsx": "6ceb22b79e74bdd340da1604d3e67500192dee02ca32dabb733967166b1a37a7",
+    "components/ui/spinner.tsx": "d439990403afbfb95c89314ae32a4bd79b778f9202534ae661104bcbebac0b75",
+    "components/ui/dialog.tsx": "6365d4da5db4efc354d8b7c7d6c3ad9ee113a572bd89b1328c676086fb3e3bb4",
+    "components/ui/card.tsx": "d88a6fc3719b2a4ce92106a3aa8d8da3871858eab2d186e0e0eb0ebc78f606d0",
+    "components/ui/label.tsx": "4e916e3532953a803d09e4f9d750759a8f32fbb485f9c9916072192038dedaa3",
+    "components/ui/segmented-control.tsx": "069090f2c8eb6802dcc2fb03d5066352b7395f548c287da0768039f2384ed655",
+    "components/action-cards/chrome.tsx": "29b782794e7f2f324ec6c3eab8c4fa04ec649814f60ddf1ae9df4c74690f8cc3",
+    "components/action-cards/fields.tsx": "fbe4674d98da3a1d24b7fdd5ed692cac83ecc7fa8ee83b0a263f4b283b21531c",
+    "components/action-cards/email-card.tsx": "958fb9ed4b673ca92e63f37020ff776bfab9ba49d65de295d2e33943a7e9e4c3",
+    "components/action-cards/messaging-card.tsx": "341a65a6d73114f973af38d1696de262c6cebe6ebf74f20b3d06946508729597",
+    "components/action-cards/markdown-field.tsx": "299426351cb3f9ca73771ba0e033750f9acce27b732479e87e360b45fa27b403",
+    "components/action-cards/draft-store.ts": "34a7cfc30cdb875ea584a59dcdcc2612a66e297071746e58d53348dc023b22e9",
+    "components/action-cards/scroll-fade.ts": "b2975779c1b50df49179cd1c5dcb69503f7f6d52a57a51749e8a73bc09f974f7",
+    "components/action-cards/expanded-card-height.ts": "bc41e93cc7749748ad1cfc6a835d4c8b8bc961ae0ea1dae2fc55bf8b681bb354",
+    "components/markdown/markdown-editor-config.ts": "460fde40d356f286981f7593dc1bfefc7ad3bb15cf244cd39cb0e4a14ae90972",
+    "components/markdown/markdown-editor-theme.ts": "496d5c74db8b2623f96dbcf80e36f2c6d7c9d25dae61c1ed91b0b30bd1ea8256",
+    "components/markdown/markdown-table-transformer.ts": "f2006ebf9789184f184ba62521a59e1e07dbe2b624a4e2fc5dfd0df7f71cb0e3",
+    "hooks/primitives/useSync.ts": "b8b447724ea8459aa5723c5455aa6dd4a8ac00c5cff227b9959a2675bfb518e8",
+    "hooks/primitives/useEventListener.ts": "6cb21d45e7ca362a83963fdeaebdf06745e119ff9a22dd3cdc12b9c38d0be5cd",
+    "lib/utils.ts": "6db5ddd8ec947115c6a1eb0462667228eed936cae61cb3434473d0c379eba6e3",
+    "components/action-cards/calendar-card.tsx": "587d7981a71844a25b355480229135f365e6d0dcbeae5cd9f447ef25938bb54c",
+    "components/action-cards/calendar-draft.ts": "5b71d641cda53251cc91ccd00fab329d3d388bbffe229bf273461194ce4eb6ff",
+    "components/ui/switch.tsx": "137c6c46a19f368bb2ecec86e86863b325ec4bad42ec01747eb8aed8321734c1",
+    "lib/time-format.ts": "607d2c771248abef072a4dc2e77db6bbbc044f4911199ebb91cfb22dbc3fd020",
+    "time/index.ts": "7273e5d0f11972c452b959678f290457bb4a083a5ac1218ae2a045654470c336"
+  },
+  "extraSources": {
+    "time/index.ts": "packages/time/src/index.ts"
+  }
+}

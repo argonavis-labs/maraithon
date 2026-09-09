@@ -1,3 +1,4 @@
+import {renderRunnerCards, destroyRunnerCards} from "./runner-cards"
 // Web drafts stay tab-scoped. Electron drafts also survive an app restart.
 // Only a server receipt clears a submitted message. Retrying reuses its UUID.
 export const TodoWorkspace = {
@@ -14,82 +15,43 @@ export const TodoWorkspace = {
     this.saved.expanded ||= {}
     this.onInput = event => {
       if (event.target.matches('[data-workspace-composer] textarea')) this.saved.composer = event.target.value
-      const review = event.target.closest('[data-workspace-review]')
-      if (review && review.dataset.editable === 'true') {
-        this.saved.drafts[review.dataset.messageId] = this.fields(review.querySelector('form'))
-      }
       this.persist()
-    }
-    this.onToggle = event => {
-      if (event.target.matches('[data-workspace-review]')) {
-        this.saved.expanded[event.target.id] = event.target.open
-        this.persist()
-      }
     }
     this.onSubmit = event => {
       const form = event.target
       if (form.matches('[data-workspace-composer]')) {
         event.preventDefault()
         this.ask(form.querySelector('textarea').value)
-      } else if (form.matches('[data-workspace-draft]')) {
-        event.preventDefault()
-        const decision = event.submitter?.dataset.decision
-        if (!decision || event.submitter.disabled) return
-        this.pushEvent('workspace_decide', {action_id: form.dataset.actionId, decision, draft_edits: form.closest('[data-workspace-review]').dataset.provider === 'browser' ? {} : this.fields(form)})
       }
     }
-    this.onClick = async event => {
+    this.onClick = event => {
       const button = event.target.closest('button')
       if (!button || button.disabled) return
       if (button.hasAttribute('data-workspace-prompt')) this.ask(button.dataset.workspacePrompt)
       if (button.hasAttribute('data-retry-request') && this.saved.request) this.ask(this.saved.request.body)
       if (button.hasAttribute('data-open-review')) {
         const review = document.getElementById(button.dataset.openReview)
-        if (review) { review.open = true; review.scrollIntoView({behavior: 'smooth', block: 'start'}) }
-      }
-      const form = button.closest('[data-workspace-draft]')
-      if (!form) return
-      const fields = this.fields(form)
-      const feedback = form.querySelector('[data-draft-feedback]')
-      if (button.hasAttribute('data-copy-draft')) {
-        try {
-          await navigator.clipboard.writeText(fields.body || '')
-          feedback.textContent = 'Copied'
-        } catch (_) { feedback.textContent = 'Select the message and copy it with your browser.' }
-      }
-      if (button.hasAttribute('data-open-messages')) {
-        const recipient = fields.recipient || ''
-        if (!/^(\+?[0-9]{7,15}|[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)$/.test(recipient)) {
-          feedback.textContent = 'A verified Messages address is needed. You can copy the draft.'
-          return
-        }
-        // Device handoff only. The app cannot infer delivery from opening Messages.
-        const separator = /iPad|iPhone|iPod/.test(navigator.userAgent) ? '&' : '?'
-        window.location.href = `sms:${encodeURIComponent(recipient)}${separator}body=${encodeURIComponent(fields.body || '')}`
-        feedback.textContent = 'Review and send in Messages. If it does not open on this device, copy the draft.'
-      }
-      if (button.hasAttribute('data-prepare-email') && form.reportValidity()) {
-        this.ask(`Save this reviewed email as a Gmail draft and prepare its approval card. Do not send. Keep the original thread context. From: ${form.dataset.from || 'the source account'}\nTo: ${fields.recipient || ''}\nSubject: ${fields.subject || ''}\nCc: ${fields.cc || ''}\nBcc: ${fields.bcc || ''}\n\n${fields.body || ''}`)
+        if (review) { review.dispatchEvent(new Event('runner:expand')); review.scrollIntoView({behavior: 'smooth', block: 'start'}) }
       }
     }
     this.onFocus = () => { if (this.connected) this.pushEvent('workspace_refresh', {}) }
     this.el.addEventListener('input', this.onInput)
-    this.el.addEventListener('toggle', this.onToggle, true)
     this.el.addEventListener('submit', this.onSubmit)
     this.el.addEventListener('click', this.onClick)
     window.addEventListener('focus', this.onFocus)
     this.restore()
   },
   updated() { this.restore() },
-  disconnected() { this.connected = false; this.el.querySelector('[data-workspace-connection]').hidden = false },
+  disconnected() { this.connected = false; this.el.querySelector('[data-workspace-connection]').hidden = false; renderRunnerCards(this) },
   reconnected() {
     this.connected = true
+    renderRunnerCards(this)
     this.el.querySelector('[data-workspace-connection]').hidden = true
     this.pushEvent('workspace_refresh', {})
   },
   destroyed() {
+    destroyRunnerCards(this)
     this.el.removeEventListener('input', this.onInput)
-    this.el.removeEventListener('toggle', this.onToggle, true)
     this.el.removeEventListener('submit', this.onSubmit)
     this.el.removeEventListener('click', this.onClick)
     window.removeEventListener('focus', this.onFocus)
@@ -97,7 +59,6 @@ export const TodoWorkspace = {
   persist() {
     try { (window.maraithonDesktop ? localStorage : sessionStorage).setItem(this.key, JSON.stringify(this.saved)) } catch (_) {}
   },
-  fields(form) { return Object.fromEntries(new FormData(form).entries()) },
   ask(body) {
     body = body.trim()
     if (!body) return
@@ -131,17 +92,7 @@ export const TodoWorkspace = {
     const status = this.el.querySelector('[data-workspace-status]')
     status.textContent = this.saved.request ? `Awaiting confirmation: ${this.saved.request.body.slice(0, 180)}` : ''
     this.el.querySelector('[data-retry-request]').hidden = !this.saved.request
-    for (const review of this.el.querySelectorAll('[data-workspace-review]')) {
-      if (Object.hasOwn(this.saved.expanded, review.id)) review.open = this.saved.expanded[review.id]
-      const fields = this.saved.drafts[review.dataset.messageId]
-      if (fields && review.dataset.editable === 'true') {
-        for (const input of review.querySelectorAll('input[name], textarea[name]')) {
-          if (!input.readOnly && Object.hasOwn(fields, input.name) && input.value !== fields[input.name]) input.value = fields[input.name]
-        }
-      } else if (review.dataset.editable !== 'true') {
-        delete this.saved.drafts[review.dataset.messageId]
-      }
-    }
+    renderRunnerCards(this)
     for (const time of this.el.querySelectorAll('[data-workspace-time]')) {
       try {
         time.textContent = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short', timeZone: time.dataset.timezone || undefined}).format(new Date(time.dateTime))

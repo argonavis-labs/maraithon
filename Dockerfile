@@ -8,7 +8,15 @@ ARG DEBIAN_VERSION=bookworm-20240130-slim
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 
+FROM node:22-bookworm-slim AS ui-deps
+WORKDIR /ui
+COPY assets/package.json assets/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
 FROM ${BUILDER_IMAGE} as builder
+COPY --from=ui-deps /usr/local/bin/node /usr/local/bin/node
+COPY --from=ui-deps /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 
 # Install build dependencies
 RUN apt-get update -y && apt-get install -y build-essential git \
@@ -55,6 +63,7 @@ RUN mix compile
 # Build and digest static assets (tailwind + esbuild standalone binaries).
 # Runs after compile so colocated LiveView hooks are extracted for bundling.
 COPY assets assets
+COPY --from=ui-deps /ui/node_modules assets/node_modules
 RUN mix assets.deploy
 
 # Copy runtime config and release templates

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "vendor/runner/*"
+      ],
+      "@runner-next/time": [
+        "vendor/runner/time/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "js/**/*.tsx",
+    "vendor/runner/**/*.ts",
+    "vendor/runner/**/*.tsx"
+  ]
+}

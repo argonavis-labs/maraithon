@@ -313,3 +313,18 @@ body { margin: 0; background: var(--runner-background); color: var(--runner-fore
   --runner-zinc-950: 247 247 245;
   --runner-white: 39 38 34;
 }
+
+:root {
+  --maraithon-text-ui-sm: var(--text-ui-sm);
+  --maraithon-text-ui-base: var(--text-ui-base);
+  --maraithon-text-ui-md: var(--text-ui-md);
+  --maraithon-text-ui-lg: var(--text-ui-lg);
+}
+
+:root {
+  --runner-icon-sm: var(--text-ui-sm);
+  --runner-icon-base: var(--text-ui-base);
+  --runner-icon-md: var(--text-ui-md);
+  --runner-icon-lg: var(--text-ui-lg);
+  --runner-touch-target: 44px;
+}

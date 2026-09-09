@@ -17,10 +17,11 @@
     <link rel="apple-touch-icon" href="/images/app-icon-192.png" />
     <link rel="preload" href="/fonts/geist/GeistVariable.woff2" as="font" type="font/woff2" crossorigin />
     <script src="/theme.js"></script>
-    <link phx-track-static rel="stylesheet" href="/styles/runner-theme.css" />
+    <link phx-track-static rel="stylesheet" href={~p"/styles/runner-theme.css?v=cards-1"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css?theme=runner"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js?theme=runner"}>
     </script>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/runner-components.css"} />
   </head>
   <body class="h-full font-sans text-zinc-950 antialiased">
     <%= @inner_content %>

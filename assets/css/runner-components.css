@@ -1,0 +1,285 @@
+@import 'tailwindcss' source(none);
+@import 'tw-animate-css';
+@source '../vendor/runner';
+@source '../js/runner-cards.tsx';
+@custom-variant dark (&:where(.dark, .dark *));
+@theme inline {
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-runner-background: var(--runner-background);
+  --color-runner-foreground: var(--runner-foreground);
+  --color-runner-accent: var(--runner-accent);
+  --color-runner-caution: var(--runner-caution);
+  --color-runner-success: var(--runner-success);
+  --color-runner-destructive: var(--runner-destructive);
+  --color-runner-info: var(--runner-info);
+  --color-runner-success-text: var(--runner-success-text);
+  --color-runner-destructive-text: var(--runner-destructive-text);
+  --color-runner-caution-text: var(--runner-caution-text);
+  --color-runner-info-text: var(--runner-info-text);
+  --color-runner-surface-raised: var(--runner-surface-raised);
+  --color-runner-foreground-2: var(--runner-foreground-2);
+  --color-runner-foreground-3: var(--runner-foreground-3);
+  --color-runner-foreground-5: var(--runner-foreground-5);
+  --color-runner-foreground-10: var(--runner-foreground-10);
+  --color-runner-foreground-20: var(--runner-foreground-20);
+  --color-runner-foreground-30: var(--runner-foreground-30);
+  --color-runner-foreground-40: var(--runner-foreground-40);
+  --color-runner-foreground-50: var(--runner-foreground-50);
+  --color-runner-foreground-60: var(--runner-foreground-60);
+  --color-runner-foreground-70: var(--runner-foreground-70);
+  --color-runner-foreground-80: var(--runner-foreground-80);
+  --color-runner-foreground-90: var(--runner-foreground-90);
+  --color-runner-destructive-5: var(--runner-destructive-5);
+  --color-runner-destructive-10: var(--runner-destructive-10);
+  --color-runner-success-5: var(--runner-success-5);
+  --color-runner-success-10: var(--runner-success-10);
+  --color-runner-caution-5: var(--runner-caution-5);
+  --color-runner-caution-10: var(--runner-caution-10);
+  --color-runner-info-5: var(--runner-info-5);
+  --color-runner-info-10: var(--runner-info-10);
+  --color-runner-muted: var(--runner-muted);
+  --color-runner-muted-foreground: var(--runner-muted-foreground);
+  --color-runner-card: var(--runner-card);
+  --color-runner-popover: var(--runner-popover);
+  --color-runner-border: var(--runner-border);
+  --color-runner-input: var(--runner-input);
+  --color-runner-selected-bar: var(--runner-selected-bar);
+  --font-heading: var(--font-sans);
+  --font-sans:
+    'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Exposure', Georgia, 'Times New Roman', serif;
+  --font-mono: 'Fragment Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* One scale, two vocabularies. The `ui-*` tokens are the Runner scale (in
+     the runtime @theme block below, so the mobile media query can rescale
+     them); the default Tailwind names alias the nearest DESKTOP Runner step
+     (kept in lockstep, as literals — @theme inline cannot self-reference) so
+     stock shadcn components land on-scale without per-callsite rewrites. The
+     root font size is 15px, so rem-based defaults would otherwise sit
+     off-grid. The generic names stay desktop-static on purpose: marketing
+     pages use them and own their own responsive type. */
+  --text-xs: 11px;
+  --text-xs--line-height: 1.4;
+  --text-sm: 13px;
+  --text-sm--line-height: 1.45;
+  --text-base: 15px;
+  --text-base--line-height: 1.5;
+  --text-lg: 18px;
+  --text-lg--line-height: 1.4;
+  --radius-ui-sm: 4px;
+  --radius-ui-md: 6px;
+  --radius-ui-lg: 8px;
+  --radius-ui-xl: 16px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+  --radius-4xl: 28px;
+  /* Stock shadow names carry the Runner shadow recipes (shadow-thin/minimal/
+     middle/strong below remain as aliases for existing call sites). */
+  --shadow-2xs: rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px;
+  --shadow-xs: rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px;
+  --shadow-sm:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px;
+  --shadow-md:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px;
+  --shadow-lg:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 12px 12px -6px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 24px 24px -12px;
+  --shadow-xl:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 12px 12px -6px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 24px 24px -12px;
+}
+
+@theme inline {
+  --text-ui-sm: var(--maraithon-text-ui-sm);
+  --text-ui-base: var(--maraithon-text-ui-base);
+  --text-ui-md: var(--maraithon-text-ui-md);
+  --text-ui-lg: var(--maraithon-text-ui-lg);
+}
+@utility shadow-thin {
+  --tw-shadow: rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px;
+  box-shadow:
+    var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+    var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+@utility shadow-minimal {
+  --tw-shadow:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px;
+  box-shadow:
+    var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+    var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+@utility shadow-middle {
+  --tw-shadow:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px;
+  box-shadow:
+    var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+    var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+@utility shadow-strong {
+  --tw-shadow:
+    rgba(var(--runner-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--runner-shadow-blur-opacity)) 0 6px 6px -3px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 12px 12px -6px,
+    rgba(0, 0, 0, calc(var(--runner-shadow-blur-opacity) * 0.67)) 0 24px 24px -12px;
+  box-shadow:
+    var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+    var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+/* Icon scale: an inline icon must be exactly as large as the text beside it,
+   so the icon steps mirror the text steps one for one (the --runner-icon-*
+   variables are kept in lockstep with --text-ui-* and rescale together on
+   mobile). Never free-size an inline icon with size-*; pick the icon-* step
+   that matches the neighboring text. */
+@utility icon-sm {
+  width: var(--runner-icon-sm);
+  height: var(--runner-icon-sm);
+}
+@utility icon-base {
+  width: var(--runner-icon-base);
+  height: var(--runner-icon-base);
+}
+@utility icon-md {
+  width: var(--runner-icon-md);
+  height: var(--runner-icon-md);
+}
+@utility icon-lg {
+  width: var(--runner-icon-lg);
+  height: var(--runner-icon-lg);
+}
+
+/* Mobile touch-target extension: below md, gives the element an invisible
+   centered hit area of at least --runner-touch-target without changing its
+   visual size. Where slops of packed controls overlap, a positioned ::after
+   paints above a later sibling's in-flow content, so the EARLIER control wins
+   the shared strip; acceptable, but keep >=8px gaps where possible. The
+   `position: relative` here loses to a call site's own `.absolute`/`.fixed`
+   only because Tailwind emits those utilities after this one — the centering
+   assertion in LayoutFrame.browser.test.tsx is what catches a regression.
+   Applied by the shared Button; add it to any custom tap control. */
+@utility runner-touch-hitslop {
+  @media (max-width: 47.999rem) {
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, var(--runner-touch-target));
+      height: max(100%, var(--runner-touch-target));
+      transform: translate(-50%, -50%);
+    }
+  }
+}
+
+/* Runner cube spinner: a 3×3 grid sized in em so it inherits the size of the
+   text beside it, colored via currentColor. One size by design — adjust by
+   setting text size/color on the spinner or its parent. */
+.cube-spinner {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 1em;
+  height: 1em;
+  gap: 0.08em;
+}
+
+.cube-spinner > span {
+  background-color: currentColor;
+  animation: cube-spinner-grid 1.3s infinite ease-in-out;
+  transform: scale3d(0.5, 0.5, 1);
+}
+
+.cube-spinner > span:nth-child(1) {
+  animation-delay: 0.2s;
+}
+.cube-spinner > span:nth-child(2) {
+  animation-delay: 0.3s;
+}
+.cube-spinner > span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+.cube-spinner > span:nth-child(4) {
+  animation-delay: 0.1s;
+}
+.cube-spinner > span:nth-child(5) {
+  animation-delay: 0.2s;
+}
+.cube-spinner > span:nth-child(6) {
+  animation-delay: 0.3s;
+}
+.cube-spinner > span:nth-child(7) {
+  animation-delay: 0s;
+}
+.cube-spinner > span:nth-child(8) {
+  animation-delay: 0.1s;
+}
+.cube-spinner > span:nth-child(9) {
+  animation-delay: 0.2s;
+}
+
+@keyframes cube-spinner-grid {
+  0%,
+  70%,
+  100% {
+    transform: scale3d(0.5, 0.5, 1);
+  }
+  35% {
+    transform: scale3d(0, 0, 1);
+  }
+}
+

@@ -59,6 +59,10 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           </div>
         </section>
 
+        <section :if={@reviews != []} aria-label="Action reviews" class="flex flex-wrap gap-2">
+          <.draft_review :for={message <- @reviews} message={message} busy?={@state.busy? || @state.loading?} />
+        </section>
+
         <section :if={@todo.status in ~w(open snoozed) && @actions != []} aria-labelledby="todo-next-actions-title">
           <h2 id="todo-next-actions-title" class="text-sm/6 font-semibold text-zinc-950">Suggested next actions</h2>
           <div class="mt-2 divide-y divide-zinc-950/10 border-y border-zinc-950/10">
@@ -78,9 +82,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           <div class="mt-3 space-y-4"><%= render_slot(@summary) %></div>
         </details>
 
-        <section :if={@reviews != []} aria-label="Action reviews" class="space-y-2">
-          <.draft_review :for={message <- @reviews} message={message} busy?={@state.busy? || @state.loading?} />
-        </section>
+
 
         <section id="todo-conversation" class="min-w-0 scroll-mt-6" aria-labelledby="todo-conversation-title">
           <div class="mb-3 flex items-center justify-between gap-3">
@@ -170,59 +172,11 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       |> assign(:card_id, "review-" <> assigns.message.id)
 
     ~H"""
-    <details id={@card_id} data-workspace-review data-provider={@card["provider"]} data-message-id={@message.id}
-      data-editable={to_string(@editable?)} class="group rounded-lg border border-zinc-950/10 bg-white">
-      <summary class="flex cursor-pointer list-none items-center gap-3 p-4">
-        <.provider_mark provider={@card["provider"]} />
-        <div class="min-w-0 flex-1"><span class="block text-sm/6 font-medium text-zinc-950"><%= @card["title"] || provider_label(@card["provider"]) %></span>
-          <span class="block truncate text-xs/5 text-zinc-500"><%= @card["recipient_name"] || @card["recipient"] || @card["from"] %></span>
-        </div>
-        <span class="max-w-36 text-right text-xs/5 text-zinc-500"><%= @card["status"] || "Review draft" %></span>
-        <.icon name="hero-chevron-down" class="size-4 shrink-0 text-zinc-400 group-open:rotate-180" />
-      </summary>
-      <form data-workspace-draft data-action-id={@card["prepared_action_id"]} data-from={@card["from"]} class="space-y-4 border-t border-zinc-950/10 p-4 sm:p-5">
-        <div :if={@card["from"]} class="text-sm/6"><span class="mr-2 text-zinc-500">From</span><%= @card["from"] %></div>
-        <.field :if={@card["recipient"]} label="To" for={@card_id <> "-recipient"}>
-          <.c_input id={@card_id <> "-recipient"} name="recipient" value={@card["recipient"]}
-            readonly={!@editable? || @card["provider"] != "gmail"} required />
-        </.field>
-        <div :if={@card["provider"] == "gmail"} class="grid gap-4 sm:grid-cols-2">
-          <.field :for={name <- ~w(cc bcc)} label={String.upcase(name)} for={@card_id <> "-" <> name}>
-            <.c_input id={@card_id <> "-" <> name} name={name} value={@card[name]} readonly={!@editable?} />
-          </.field>
-        </div>
-        <.field :if={@card["subject"] || @card["provider"] == "gmail"} label="Subject" for={@card_id <> "-subject"}>
-          <.c_input id={@card_id <> "-subject"} name="subject" value={@card["subject"]} readonly={!@editable?} />
-        </.field>
-        <dl :if={@card["provider"] == "calendar"} class="space-y-2 text-sm/6">
-          <div :for={{label, key} <- [{"Starts", "start_at"}, {"Ends", "end_at"}]} :if={@card[key]}>
-            <dt class="text-xs text-zinc-500"><%= label %></dt><dd><time datetime={@card[key]} data-workspace-time data-timezone={@card["timezone"]}><%= @card[key] %></time></dd>
-          </div>
-          <div :if={@card["timezone"]}><dt class="text-xs text-zinc-500">Timezone</dt><dd><%= @card["timezone"] %></dd></div>
-        </dl>
-        <.field label={cond do @card["provider"] == "browser" -> "Browser step"; @card["provider"] == "calendar" -> "Event details"; true -> "Message" end} for={@card_id <> "-body"}>
-          <.c_textarea id={@card_id <> "-body"} name="body" value={@card["body"]} rows={7}
-            readonly={!@editable? || @card["provider"] == "calendar"} required={@card["provider"] != "calendar"} />
-        </.field>
-        <div :if={@card["connection_required"]} class="space-y-2 rounded-lg bg-amber-50 p-3 text-sm/6 text-amber-900">
-          <p><%= @card["connection_notice"] %></p>
-          <.button :if={safe_link(@card["connection_url"])} href={@card["connection_url"]} target="_blank" rel="noopener" variant="outline"><%= @card["connection_label"] %></.button>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <.button :if={@card["prepared_action_id"]} type="submit" data-decision="confirm"
-            disabled={@busy? || @card["connection_required"] == true}>
-            <%= @card["send_label"] || "Approve action" %>
-          </.button>
-          <.button :if={@card["prepared_action_id"]} type="submit" data-decision="reject" formnovalidate variant="plain" disabled={@busy?}>Cancel action</.button>
-          <.button :if={@editable? && @card["provider"] == "gmail" && is_nil(@card["prepared_action_id"])}
-            data-prepare-email disabled={@busy? || @card["connection_required"] == true}>Prepare to send</.button>
-          <.button :if={@card["provider"] == "imessage" && !terminal?(@card)} data-open-messages variant="outline">Open in Messages</.button>
-          <.button :if={@card["body"]} data-copy-draft variant="outline">Copy</.button>
-          <.button :if={safe_link(@card["open_url"])} href={@card["open_url"]} target="_blank" rel="noopener" variant="plain"><%= @card["open_label"] || "Open source" %></.button>
-        </div>
-        <p data-draft-feedback role="status" class="text-xs/5 text-zinc-500" />
-      </form>
-    </details>
+    <div id={@card_id} phx-update="ignore" data-runner-card
+      data-card={Jason.encode!(%{card: @card, editable: @editable?, busy: @busy?, messageId: @message.id, logo: logo(@card["provider"]), providerLabel: provider_label(@card["provider"])})}
+      class="runner-components runner-action-mount">
+      <p role="status" class="text-sm text-zinc-500">Loading action review…</p>
+    </div>
     """
   end
 
@@ -297,6 +251,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       card["status"] in [
         "Completed",
         "Running",
+        "Saving",
         "Could not complete",
         "Sent",
         "Saved to calendar",
@@ -308,8 +263,6 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       ]
 
   defp valid_id?(id), do: match?({:ok, _}, Ecto.UUID.cast(id))
-  defp safe_link(url) when is_binary(url), do: URI.parse(url).scheme in ["https", "http"]
-  defp safe_link(_), do: false
 
   defp initials(name),
     do: (name || "") |> String.split() |> Enum.take(2) |> Enum.map_join(&String.first/1)

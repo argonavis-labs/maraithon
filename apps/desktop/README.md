@@ -13,7 +13,7 @@ make build-desktop
 MARAITHON_DESKTOP_ORIGIN=http://127.0.0.1:4000 make run-desktop
 ```
 
-Start Phoenix separately with the repository's normal development command. Sign-in opens in your default browser. After signing in, choose **Open Maraithon** to return to the desktop task list. The desktop keeps its own session across restarts.
+Run `mix assets.setup` once and `mix assets.build` to build the shared UI. Start Phoenix separately with the repository's normal development command. Sign-in opens in your default browser. After signing in, choose **Open Maraithon** to return to the desktop task list. The desktop keeps its own session across restarts.
 
 The default origin is `https://maraithon.com`. That server must run this branch before the new desktop sign-in endpoints will work. This change does not deploy the server.
 
@@ -44,6 +44,8 @@ Desktop login and Mac pairing are separate existing sessions. If Mac sources sho
 - The centred browser sign-in flow and macOS window conventions from Runner's desktop app.
 
 The portable stylesheet converts Tailwind 4 `@theme` declarations to CSS variables. A small adapter preserves Maraithon's existing zinc utility names. Phoenix's task layout stays in `assets/css/app.css`; its events and durable draft hooks stay in their existing modules. The desktop build copies the same theme and font files, so it cannot acquire a separate colour palette.
+
+The action cards now render the actual Runner React component system from `assets/vendor/runner`. This includes the card shell, collapsed cards, rich text email editor, recipient fields, message editor, calendar review, buttons, status badges, tooltips, and expansion dialog. `source-manifest.json` records the original source hashes. The adapter in `assets/js/runner-cards.tsx` maps Maraithon's existing draft payload and LiveView events. It preserves the approval and delivery code. See the component README for the small local adaptations and build commands.
 
 ## Build a local Mac app
 

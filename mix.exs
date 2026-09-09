@@ -108,9 +108,18 @@ defmodule Maraithon.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
-      "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["tailwind app", "esbuild app"],
-      "assets.deploy": ["tailwind app --minify", "esbuild app --minify", "phx.digest"],
+      "assets.setup": [
+        "cmd --cd assets npm ci --ignore-scripts --no-audit --no-fund",
+        "tailwind.install --if-missing",
+        "esbuild.install --if-missing"
+      ],
+      "assets.build": ["cmd --cd assets npm run build", "tailwind app", "esbuild app"],
+      "assets.deploy": [
+        "cmd --cd assets npm run build",
+        "tailwind app --minify",
+        "esbuild app --minify",
+        "phx.digest"
+      ],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test --no-start"],
