@@ -29,7 +29,7 @@ The helper is built from `apps/companion`, with its existing signing configurati
 
 The helper keeps `com.maraithon.companion`, its existing credential stores, encryption keys, privacy permissions, queues, cursors, and source implementations. It still includes Messages, Contacts, Notes, Voice Memos, Reminders, Calendar, Files, browser history, and the Chrome relay. Electron does not read the Messages database or take ownership of those permissions.
 
-A running companion is reused. Otherwise Electron starts the bundled helper with `--sync-helper`. `MARAITHON_NATIVE_HELPER` can point at a specific signed companion bundle. Closing or quitting Electron leaves native sync running. The helper's source window remains available from its menu bar.
+A running companion is reused. Otherwise Electron prefers the existing `~/Applications/Maraithon.app` or `/Applications/Maraithon.app`. macOS privacy grants depend on the app location, so the desktop must not move an existing installation. If no installed companion exists, the bundled helper is copied once to `~/Applications/Maraithon.app` and launched with `--sync-helper`. Existing app bundles are never overwritten. An older installed companion may show its usual window; its source panels and menu-bar service remain available. `MARAITHON_NATIVE_HELPER` can point at a specific signed companion bundle. Closing or quitting Electron leaves native sync running. The helper's source window remains available from its menu bar.
 
 Desktop login and Mac pairing are separate existing sessions. If Mac sources shows **Connect to Maraithon**, pair the device there. Signing into the task window does not silently pair a device or grant access to local data. During verification on this Mac, both builds restored the existing account after the brief startup screen. All eight sources reported ready. The rebuilt helper completed a live iMessage check successfully, with existing context intact and no new pairing or privacy grants.
 
@@ -53,7 +53,7 @@ make package-desktop
 
 This builds and signs the Swift helper, copies shared assets, and packages Electron. When the helper uses an Apple Development identity, the local packaging script uses that identity for the desktop too. The result is `apps/desktop/dist/mac-arm64/Maraithon Desktop.app` on an Apple Silicon Mac.
 
-The helper is excluded from Electron's re-signing pass. Its original signature and entitlements must stay intact. Verify both bundles with `codesign --verify --deep --strict` before distributing a build.
+The helper is excluded from Electron's re-signing pass. Its original signature and entitlements must stay intact. The installed companion path is still preferred at runtime to preserve existing macOS privacy grants. Verify both bundles with `codesign --verify --deep --strict` before distributing a build.
 
 This local build is development signed. A public release still needs Developer ID signing, notarization, and a deployed server with the desktop auth routes. `npm run dist` invokes the release packager; configure the release identities and notarization through the existing release process first. Windows and Linux targets are configured but have not been built or verified here. Mac-only sources stay on macOS.
 
