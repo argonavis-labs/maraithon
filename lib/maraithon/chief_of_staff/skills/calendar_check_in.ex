@@ -4,9 +4,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   A few times during the work day this skill looks for genuine openings in
   the operator's calendar and, when there is something useful to say, sends a short
-  proactive check-in over Telegram — pointing at the opening and one or two
-  concrete things they could tee up (a todo, prep for an upcoming meeting, a
-  reply they owe).
+  proactive check-in as a brief (push, desktop, or email, whichever channels
+  the user has) — pointing at the opening and one or two concrete things they
+  could tee up (a todo, prep for an upcoming meeting, a reply they owe).
+
+  The prompt input is deliberately compact: the model runtime caps a request
+  at 128 KB, and the full todo serialization for a few dozen todos blew past
+  it, which silently killed every check-in.
 
   Opening detection is deterministic interval math over the day's timed
   events; the *decision to interrupt* and the wording are model-backed, so a
@@ -67,13 +71,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         service: "calendar",
         label: "Google Calendar",
         description: "Used to find openings in the work day. Local calendar also works.",
-        required?: false
-      },
-      %{
-        kind: :provider,
-        provider: "telegram",
-        label: "Telegram",
-        description: "Needed to deliver the proactive check-in.",
         required?: false
       }
     ]
@@ -210,8 +207,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   # SPEC 06 R2 / prompt-size invariant: every enrichment list stays bounded so
   # the low-effort, 2000-max-output-token check-in call never has to skim a
   # huge JSON blob. Trim server-side; never raise llm_max_tokens instead.
-  @enrichment_list_cap 15
-  @due_bucket_fetch_limit 40
+  @enrichment_list_cap 10
+  @due_bucket_fetch_limit 24
+  @due_bucket_prompt_cap 8
+  @open_todos_cap 12
+  @held_interruptions_cap 8
+  @prompt_text_cap 240
+  @todo_prompt_keys ~w(id title next_action due_at direction counterparty_label attention_mode status kind)a
 
   @doc false
   def build_check_in_input(user_id, now, state, context) do
@@ -271,22 +273,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       "waiting_on_me" =>
         user_id
         |> Todos.list_owed_to_me(limit: @enrichment_list_cap)
-        |> Enum.map(&Todos.serialize_for_prompt/1),
+        |> Enum.map(&compact_todo/1),
       "i_owe" =>
         user_id
         |> Todos.list_owed_by_me(limit: @enrichment_list_cap)
-        |> Enum.map(&Todos.serialize_for_prompt/1),
+        |> Enum.map(&compact_todo/1),
       "due" => due_buckets_for_check_in(user_id, now, offset, timezone),
       "open_work" => %{
         "todos" =>
           user_id
-          |> Todos.list_open_for_user(limit: 25)
-          |> Enum.map(&Todos.serialize_for_prompt/1),
+          |> Todos.list_open_for_user(limit: @open_todos_cap)
+          |> Enum.map(&compact_todo/1),
         # SPEC 02 R8: without this, a user whose morning-briefing agent is
         # idle/deduped never has held interruptions drained — the morning
         # brief was the only consumer. Same shape the morning brief uses
         # (shared field mapping in ProactiveQueue).
-        "held_interruptions" => ProactiveQueue.held_interruptions_for_prompt(user_id, limit: 25)
+        "held_interruptions" =>
+          user_id
+          |> ProactiveQueue.held_interruptions_for_prompt(limit: @held_interruptions_cap)
+          |> Enum.map(&prompt_compact/1)
       },
       "last_check_in_at" => state.last_check_in_at
     }
@@ -305,10 +310,36 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       limit: @due_bucket_fetch_limit
     )
     |> Map.new(fn
-      {key, items} when is_list(items) -> {key, Enum.take(items, @enrichment_list_cap)}
+      {key, items} when is_list(items) ->
+        {key, items |> Enum.take(@due_bucket_prompt_cap) |> Enum.map(&prompt_compact/1)}
+
+      {key, value} ->
+        {key, value}
+    end)
+  end
+
+  # A check-in only needs to name a todo and say why it fits the opening;
+  # the full serialization (brief, plan, draft, metadata) is what overran
+  # the request budget.
+  defp compact_todo(todo) do
+    todo
+    |> Todos.serialize_for_prompt()
+    |> Map.take(@todo_prompt_keys)
+    |> prompt_compact()
+  end
+
+  defp prompt_compact(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", [], %{}] end)
+    |> Map.new(fn
+      {key, value} when is_binary(value) -> {key, String.slice(value, 0, @prompt_text_cap)}
+      {key, %DateTime{} = value} -> {key, DateTime.to_iso8601(value)}
+      {key, value} when is_map(value) and not is_struct(value) -> {key, prompt_compact(value)}
       {key, value} -> {key, value}
     end)
   end
+
+  defp prompt_compact(value), do: value
 
   # Deterministic interval math: free stretches >= min_opening_minutes between
   # now (or the work-day start) and the work-day end, ignoring all-day events.
@@ -451,7 +482,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   defp check_in_prompt(input_json) do
     """
     You are the operator's chief of staff, deciding whether to send a short proactive
-    check-in over Telegram right now.
+    check-in right now. It arrives as a notification on their phone or desktop.
 
     It is a work day and the operator has one or more openings in the calendar (see the
     input JSON). Send a check-in only when it would genuinely help: point at a
@@ -462,8 +493,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     perfectly good, common outcome — do not invent work to justify a send.
 
     Voice: warm, specific, and brief, like a trusted operator — not a system
-    notification. Use the local clock times from the input. Plain Telegram text,
-    no markdown tables, no internal labels.
+    notification. Use the local clock times from the input. Plain text, no
+    markdown tables, no internal labels.
 
     Curated inputs: waiting_on_me lists items where someone else owes the
     operator; i_owe lists items the operator owes someone else; due.overdue and
@@ -496,7 +527,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       "decision": "send" | "hold",
       "title": "short title, e.g. 'Open afternoon'",
       "summary": "one-line summary of the check-in",
-      "body": "the Telegram-ready check-in text, or an empty string when holding",
+      "body": "the check-in text, or an empty string when holding",
       "reason": "short reasoning for the decision"
     }
 
