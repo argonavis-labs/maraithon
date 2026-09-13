@@ -19,6 +19,7 @@ defmodule MaraithonWeb.RuntimeController do
     Authority,
     NodeIncarnation,
     Partition,
+    RevisionRetirement,
     Session,
     TaskAssignment
   }
@@ -29,6 +30,13 @@ defmodule MaraithonWeb.RuntimeController do
   end
 
   def status(conn, _params), do: json(conn, status_payload())
+
+  def retire(conn, params) do
+    case RevisionRetirement.request(params["serving_revision"], params["retired_revisions"]) do
+      {:ok, result} -> json(conn, result)
+      {:error, reason} -> conn |> put_status(409) |> json(%{error: Atom.to_string(reason)})
+    end
+  end
 
   def rejoin(conn, _params) do
     case Session.rejoin() do
@@ -49,6 +57,7 @@ defmodule MaraithonWeb.RuntimeController do
       phase: Atom.to_string(phase),
       node_incarnation_id: node_id,
       process_role: Atom.to_string(RuntimeConfig.process_role()),
+      live_runtime_revisions: RevisionRetirement.live_revisions(),
       deployment_generation: Authority.deployment_generation(),
       deployment_gate: Authority.deployment_gate_status(),
       # The Session's ETS phase is only an availability hint. Prove the

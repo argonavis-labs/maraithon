@@ -946,6 +946,12 @@ defmodule Maraithon.Connectors.Slack do
     SlackOAuth.api_request(:get, endpoint, access_token)
   end
 
+  @doc "Returns Slack's canonical permalink for the exact source message."
+  def get_message_permalink(access_token, channel_id, timestamp) do
+    query = URI.encode_query(%{channel: channel_id, message_ts: timestamp})
+    SlackOAuth.api_request(:get, append_query("chat.getPermalink", query), access_token)
+  end
+
   @doc """
   Searches Slack messages with a user token.
   """

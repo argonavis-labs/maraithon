@@ -153,7 +153,7 @@ defmodule Maraithon.Todos.BriefActions do
         _ -> false
       end
 
-    if resolves? do
+    if resolves? and not Maraithon.Todos.Workflow.outcome_tracked?(todo) do
       true
     else
       case Todos.update_for_user(user_id, todo.id, %{"status" => "open"},

@@ -206,6 +206,9 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   def prepared_action(reason) do
     case normalize_reason(reason) do
+      "gmail_draft_not_saved" ->
+        "Gmail has not verified a saved draft. Keep the editable draft here, enable Gmail draft access if needed, then save it before preparing to send."
+
       "write_tools_disabled" ->
         "Action drafting is not enabled."
 

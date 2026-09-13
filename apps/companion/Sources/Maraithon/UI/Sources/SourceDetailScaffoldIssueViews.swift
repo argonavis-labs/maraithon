@@ -1,29 +1,16 @@
 import SwiftUI
 
-/// Focused non-healthy states for `SourceDetailScaffold`.
+/// Focused non-healthy bodies for `SourceDetailScaffold`: each is one
+/// `SourceIssueCard` under the shared page header.
 extension SourceDetailScaffold {
     func errorView(reason: String) -> some View {
-        ContentUnavailableView {
-            Label(SourceDetailCopy.issueErrorTitle, systemImage: "xmark.octagon.fill")
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(StatusTone.error.color)
-        } description: {
-            VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
-                Text(SourceIssueCopy.detail(reason, sourceName: displayName))
-                    .font(.body)
-            }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 480)
-        } actions: {
-            Button {
-                env.sources.syncNow(id: sourceID)
-            } label: {
-                Label(SourceDetailCopy.checkNowButtonTitle, systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
+        SourceIssueCard(
+            dotColor: Tokens.Palette.destructive,
+            title: SourceDetailCopy.issueErrorTitle,
+            message: SourceIssueCopy.detail(reason, sourceName: displayName)
+        ) {
+            checkNowButton
         }
-        .navigationTitle(displayName)
     }
 
     func issueView(issue: SourceStatusPublisher.IssueEvent) -> some View {
@@ -31,70 +18,63 @@ extension SourceDetailScaffold {
         let title = isError
             ? SourceDetailCopy.issueErrorTitle
             : SourceDetailCopy.issueAttentionTitle(plural: syncedItemPlural)
-        let symbol = isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
-        let tone = isError ? StatusTone.error : StatusTone.attention
 
-        return ContentUnavailableView {
-            Label(title, systemImage: symbol)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(tone.color)
-        } description: {
-            VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
-                Text(SourceIssueCopy.issue(issue.reason, failedCount: issue.failedCount))
-                Text(SourceDetailCopy.failedItemsLine(
-                    issue.failedCount,
-                    singular: syncedItemSingular,
-                    plural: syncedItemPlural
-                ))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                if let last = publisher?.lastSyncAt {
-                    Text("Last successful check: \(SourceStat.relative(last))")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 480)
-        } actions: {
-            VStack(spacing: Tokens.Spacing.small) {
-                Button {
-                    env.sources.syncNow(id: sourceID)
-                } label: {
-                    Label(SourceDetailCopy.checkNowButtonTitle, systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-
-                Button {
-                    env.sources.resetCursor(id: sourceID)
-                    env.sources.syncNow(id: sourceID)
-                } label: {
-                    Label(SourceDetailCopy.resetSourceButtonTitle, systemImage: "arrow.counterclockwise")
-                }
-                .buttonStyle(.bordered)
-            }
+        var notes = [
+            SourceDetailCopy.failedItemsLine(
+                issue.failedCount,
+                singular: syncedItemSingular,
+                plural: syncedItemPlural
+            )
+        ]
+        if let last = publisher?.lastSyncAt {
+            notes.append(SourceDetailCopy.lastSuccessfulCheckLine(last))
         }
-        .navigationTitle(displayName)
+
+        return SourceIssueCard(
+            dotColor: isError ? Tokens.Palette.destructive : Tokens.Palette.caution,
+            title: title,
+            message: SourceIssueCopy.issue(issue.reason, failedCount: issue.failedCount),
+            notes: notes
+        ) {
+            checkNowButton
+
+            Button {
+                env.sources.resetCursor(id: sourceID)
+                env.sources.syncNow(id: sourceID)
+            } label: {
+                HStack(spacing: Tokens.Spacing.compact) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .accessibilityHidden(true)
+                    Text(SourceDetailCopy.resetSourceButtonTitle)
+                }
+            }
+            .buttonStyle(RunnerButtonStyle(.secondary))
+        }
     }
 
     var waitingForFirstSyncView: some View {
-        ContentUnavailableView {
-            Label(SourceDetailCopy.firstSyncTitle, systemImage: "clock.arrow.circlepath")
-                .symbolRenderingMode(.hierarchical)
-        } description: {
-            Text(SourceDetailCopy.firstSyncDescription(displayName: displayName))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 480)
-        } actions: {
-            Button {
-                env.sources.syncNow(id: sourceID)
-            } label: {
-                Label(SourceDetailCopy.checkNowButtonTitle, systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
+        SourceIssueCard(
+            dotColor: Tokens.Palette.info,
+            title: SourceDetailCopy.firstSyncTitle,
+            message: SourceDetailCopy.firstSyncDescription(displayName: displayName)
+        ) {
+            checkNowButton
         }
-        .navigationTitle(displayName)
+    }
+
+    /// Primary "Check now" button shared by the issue cards; Return
+    /// triggers it because it is the only sensible next step.
+    private var checkNowButton: some View {
+        Button {
+            env.sources.syncNow(id: sourceID)
+        } label: {
+            HStack(spacing: Tokens.Spacing.compact) {
+                Image(systemName: "arrow.clockwise")
+                    .accessibilityHidden(true)
+                Text(SourceDetailCopy.checkNowButtonTitle)
+            }
+        }
+        .buttonStyle(RunnerButtonStyle(.primary))
+        .keyboardShortcut(.defaultAction)
     }
 }

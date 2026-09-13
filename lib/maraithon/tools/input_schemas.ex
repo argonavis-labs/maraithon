@@ -10,6 +10,9 @@ defmodule Maraithon.Tools.InputSchemas do
 
   def schema_for(name) when is_binary(name) do
     case name do
+      name when name in ["browser_read", "browser_interact"] ->
+        Maraithon.TodoBrowser.schema()
+
       "time" ->
         object(%{})
 

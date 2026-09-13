@@ -13,7 +13,7 @@ struct AIDataDisclosureView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: Runner.Spacing.large) {
                     header
 
                     section(
@@ -36,77 +36,94 @@ struct AIDataDisclosureView: View {
 
                     Link(AIDataDisclosureCopy.privacyLinkTitle,
                          destination: URL(string: AIDataDisclosureCopy.privacyURL)!)
-                        .font(.subheadline)
-                        .padding(.top, 4)
+                        .font(Runner.Typography.smallMedium)
+                        .foregroundStyle(Runner.Palette.accent)
+                        .padding(.top, Runner.Spacing.xsmall)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
-                .padding(.bottom, 120)
+                .padding(.horizontal, Runner.Layout.pageInset)
+                .padding(.top, Runner.Spacing.large)
+                .padding(.bottom, Runner.Spacing.xlarge)
             }
-            .navigationTitle(AIDataDisclosureCopy.navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
                 acceptBar
             }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .runnerPage()
         }
         .interactiveDismissDisabled(true)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 36, weight: .regular))
-                .foregroundStyle(.tint)
-            Text(AIDataDisclosureCopy.headlineTitle)
-                .font(.title2.weight(.semibold))
+        VStack(alignment: .leading, spacing: Runner.Spacing.tight) {
+            MaraithonBrandMark()
+
+            VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
+                Text(AIDataDisclosureCopy.navigationTitle)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+
+                Text(AIDataDisclosureCopy.headlineTitle)
+                    .font(Runner.Typography.pageTitle)
+                    .tracking(Runner.Typography.pageTitleTracking)
+                    .foregroundStyle(Runner.Palette.foreground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+            }
+
             Text(AIDataDisclosureCopy.headlineBody)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.body)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func section(title: String, body: String, bullets: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
             Text(title)
-                .font(.headline)
+                .font(Runner.Typography.bodySemibold)
+                .foregroundStyle(Runner.Palette.foreground)
+                .accessibilityAddTraits(.isHeader)
+
             Text(body)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.body)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+
             if !bullets.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(bullets, id: \.self) { bullet in
-                        HStack(alignment: .top, spacing: 8) {
-                            Text("•")
-                            Text(bullet)
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                RunnerCard {
+                    ForEach(bullets.indices, id: \.self) { index in
+                        if index > 0 { RunnerHairline() }
+                        Text(bullets[index])
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.foreground)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .runnerCardRow()
                     }
                 }
-                .padding(.top, 2)
+                .padding(.top, Runner.Spacing.xsmall)
             }
         }
     }
 
     private var acceptBar: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Runner.Spacing.small) {
             Button(action: onAccept) {
                 Text(AIDataDisclosureCopy.acceptTitle)
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(RunnerButtonStyle(.primary, fullWidth: true))
 
             Text(AIDataDisclosureCopy.acceptFooter)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
-        .background(.bar)
+        .padding(.horizontal, Runner.Layout.pageInset)
+        .padding(.vertical, Runner.Spacing.tight)
+        .background(Runner.Palette.background)
+        .overlay(alignment: .top) { RunnerHairline() }
     }
 }
 

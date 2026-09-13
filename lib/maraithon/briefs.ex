@@ -201,12 +201,16 @@ defmodule Maraithon.Briefs do
   def list_pending(limit \\ 20) when is_integer(limit) and limit > 0 do
     terminal_delivery_errors = DeliveryErrorCopy.terminal_storage_messages()
     retry_cutoff = DateTime.add(DateTime.utc_now(), -@failed_retry_after_seconds, :second)
+    configuration_error = DeliveryErrorCopy.storage_message(:push_not_configured)
+    push_ready? = Maraithon.Push.Notifier.configuration_status() == :ready
 
     Brief
     |> where(
       [b],
       b.status == "pending" or
-        (b.status == "failed" and b.updated_at < ^retry_cutoff and
+        (b.status == "failed" and
+           (b.updated_at < ^retry_cutoff or
+              (b.error_message == ^configuration_error and ^push_ready?)) and
            (is_nil(b.error_message) or b.error_message not in ^terminal_delivery_errors))
     )
     |> order_by([b], asc: b.scheduled_for, asc: b.inserted_at)
@@ -224,7 +228,8 @@ defmodule Maraithon.Briefs do
         cadence when is_binary(cadence) and cadence != "all" ->
           where(query, [b], b.cadence == ^cadence)
 
-        _ -> query
+        _ ->
+          query
       end
 
     query
@@ -314,8 +319,26 @@ defmodule Maraithon.Briefs do
         :skip
 
       {:error, reason} ->
+        terminal_errors = DeliveryErrorCopy.terminal_storage_messages()
+
+        Brief
+        |> where([candidate], candidate.id == ^brief.id)
+        |> where(
+          [candidate],
+          candidate.status == "pending" or
+            (candidate.status == "failed" and
+               (is_nil(candidate.error_message) or candidate.error_message not in ^terminal_errors))
+        )
+        |> Repo.update_all(
+          set: [
+            status: "failed",
+            error_message: DeliveryErrorCopy.storage_message(reason),
+            updated_at: DateTime.utc_now()
+          ]
+        )
+
         Logger.warning("Failed to broker brief push",
-          reason: inspect(reason),
+          failure_code: Redaction.error_class(reason),
           brief_id: brief.id
         )
 

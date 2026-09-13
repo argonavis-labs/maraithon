@@ -4,6 +4,7 @@ defmodule Maraithon.LLM do
   """
 
   alias Maraithon.LLM.RequestBudget
+  alias Maraithon.LLM.UserModel
   alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   require Logger
@@ -193,7 +194,7 @@ defmodule Maraithon.LLM do
           "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
 
       module ->
-        with {:ok, bounded_params} <- RequestBudget.validate(params) do
+        with {:ok, bounded_params} <- RequestBudget.validate(UserModel.apply(params)) do
           run_provider_request(module, bounded_params, &module.complete/1, bucket)
         end
     end
@@ -309,7 +310,7 @@ defmodule Maraithon.LLM do
         complete_in_bucket(params, bucket)
 
       function_exported?(provider(), :stream_complete, 2) ->
-        with {:ok, bounded_params} <- RequestBudget.validate(params) do
+        with {:ok, bounded_params} <- RequestBudget.validate(UserModel.apply(params)) do
           module = provider()
 
           run_provider_request(

@@ -13,6 +13,12 @@ struct IdentityOnboardingView: View {
     @State private var phones: String
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @FocusState private var focusedField: Field?
+
+    private enum Field {
+        case name
+        case phones
+    }
 
     private let api = MobileAPIClient()
 
@@ -28,57 +34,100 @@ struct IdentityOnboardingView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Text(IdentityOnboardingCopy.intro)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: Runner.Spacing.large) {
+                    header
 
-                Section(IdentityOnboardingCopy.nameSection) {
-                    TextField(IdentityOnboardingCopy.namePlaceholder, text: $displayName)
-                        .textContentType(.name)
-                }
+                    VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                        RunnerSectionLabel(IdentityOnboardingCopy.nameSection)
+                        TextField(IdentityOnboardingCopy.namePlaceholder, text: $displayName)
+                            .textContentType(.name)
+                            .focused($focusedField, equals: .name)
+                            .runnerField(isFocused: focusedField == .name)
+                    }
 
-                if !prefill.emails.isEmpty {
-                    Section(IdentityOnboardingCopy.emailSection) {
-                        ForEach(prefill.emails, id: \.self) { email in
-                            Text(email)
-                                .font(.subheadline)
+                    if !prefill.emails.isEmpty {
+                        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                            RunnerSectionLabel(IdentityOnboardingCopy.emailSection)
+                            RunnerCard {
+                                ForEach(prefill.emails.indices, id: \.self) { index in
+                                    if index > 0 { RunnerHairline() }
+                                    Text(prefill.emails[index])
+                                        .font(Runner.Typography.small)
+                                        .foregroundStyle(Runner.Palette.foreground)
+                                        .runnerCardRow()
+                                }
+                            }
                         }
                     }
-                }
 
-                Section {
-                    TextField(IdentityOnboardingCopy.phonePlaceholder, text: $phones)
-                        .keyboardType(.phonePad)
-                        .textContentType(.telephoneNumber)
-                } header: {
-                    Text(IdentityOnboardingCopy.phoneSection)
-                } footer: {
-                    Text(IdentityOnboardingCopy.phoneFooter)
-                }
-
-                if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                        RunnerSectionLabel(IdentityOnboardingCopy.phoneSection)
+                        TextField(IdentityOnboardingCopy.phonePlaceholder, text: $phones)
+                            .keyboardType(.phonePad)
+                            .textContentType(.telephoneNumber)
+                            .focused($focusedField, equals: .phones)
+                            .runnerField(isFocused: focusedField == .phones)
+                        Text(IdentityOnboardingCopy.phoneFooter)
+                            .font(Runner.Typography.caption)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                .padding(.horizontal, Runner.Layout.pageInset)
+                .padding(.top, Runner.Spacing.large)
+                .padding(.bottom, Runner.Spacing.xlarge)
             }
-            .navigationTitle(IdentityOnboardingCopy.title)
+            .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom) {
+                confirmBar
+            }
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(IdentityOnboardingCopy.confirmTitle) {
-                        confirm()
-                    }
-                    .disabled(isSaving)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
+            .runnerPage()
             .interactiveDismissDisabled(isSaving)
         }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Runner.Spacing.tight) {
+            MaraithonBrandMark()
+
+            Text(IdentityOnboardingCopy.title)
+                .font(Runner.Typography.pageTitle)
+                .tracking(Runner.Typography.pageTitleTracking)
+                .foregroundStyle(Runner.Palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+
+            Text(IdentityOnboardingCopy.intro)
+                .font(Runner.Typography.body)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var confirmBar: some View {
+        VStack(spacing: Runner.Spacing.small) {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.destructiveText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button(IdentityOnboardingCopy.confirmTitle) {
+                confirm()
+            }
+            .buttonStyle(RunnerButtonStyle(.primary, fullWidth: true))
+            .disabled(isSaving)
+        }
+        .padding(.horizontal, Runner.Layout.pageInset)
+        .padding(.vertical, Runner.Spacing.tight)
+        .background(Runner.Palette.background)
+        .overlay(alignment: .top) { RunnerHairline() }
     }
 
     private func confirm() {

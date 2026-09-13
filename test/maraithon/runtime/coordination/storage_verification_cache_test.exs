@@ -97,4 +97,75 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCacheTest do
     assert Cache.fetch({__MODULE__, :a}, counting_verify(self(), :never), &(&1 == :ok))
     refute_received {:verified, _}
   end
+
+  test "an invalidation during verification discards that proof and verifies again" do
+    put_ttl(60_000)
+    parent = self()
+    counter = :atomics.new(1, signed: false)
+
+    task =
+      Task.async(fn ->
+        Cache.fetch(
+          {__MODULE__, :generation},
+          fn ->
+            attempt = :atomics.add_get(counter, 1, 1)
+            send(parent, {:verification_started, self(), attempt})
+
+            receive do
+              :finish_proof -> attempt
+            end
+          end,
+          &is_integer/1
+        )
+      end)
+
+    assert_receive {:verification_started, verifier, 1}
+    Cache.invalidate()
+    send(verifier, :finish_proof)
+    assert_receive {:verification_started, ^verifier, 2}
+    send(verifier, :finish_proof)
+    assert Task.await(task) == 2
+
+    assert Cache.fetch(
+             {__MODULE__, :generation},
+             fn -> flunk("fresh proof was not cached") end,
+             &is_integer/1
+           ) == 2
+  end
+
+  test "simultaneous publication preserves independent keys" do
+    put_ttl(60_000)
+    parent = self()
+
+    tasks =
+      for key <- [:first, :second] do
+        Task.async(fn ->
+          Cache.fetch(
+            {__MODULE__, key},
+            fn ->
+              send(parent, {:proof_ready, self()})
+
+              receive do
+                :publish -> key
+              end
+            end,
+            &is_atom/1
+          )
+        end)
+      end
+
+    assert_receive {:proof_ready, first}
+    assert_receive {:proof_ready, second}
+    send(first, :publish)
+    send(second, :publish)
+    assert Enum.map(tasks, &Task.await/1) == [:first, :second]
+
+    for key <- [:first, :second] do
+      assert Cache.fetch(
+               {__MODULE__, key},
+               fn -> flunk("independent key was lost") end,
+               &is_atom/1
+             ) == key
+    end
+  end
 end

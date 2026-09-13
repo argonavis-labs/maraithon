@@ -4,6 +4,7 @@ import SwiftUI
 enum AppTab: Hashable {
     case today
     case todos
+    case people
     case chat
 }
 
@@ -41,10 +42,19 @@ struct AppShellView: View {
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: .chat) {
                 ChatThreadsView()
             }
+            Tab("People", systemImage: "person.2", value: .people) {
+                CRMView()
+            }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
+        .tint(Runner.Palette.accent)
         .environment(navigation)
         .task {
+            #if DEBUG
+            if let tab = UITestLaunchSupport.requestedStartTab() {
+                navigation.selectedTab = tab
+            }
+            #endif
             PushCoordinator.shared.clearBadge()
 
             // A push tap or deep link may have arrived before this shell
@@ -52,14 +62,14 @@ struct AppShellView: View {
             drainPendingDeepLink()
 
             // Push permission must not wait on the identity network call.
-            async let pushSetup: Void = PushCoordinator.shared.enablePush()
+            async let pushSetup: Void = enablePushUnlessReviewing()
             await checkIdentity()
             await pushSetup
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 PushCoordinator.shared.clearBadge()
-                Task { await PushCoordinator.shared.enablePush() }
+                Task { await enablePushUnlessReviewing() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .maraithonDeepLink)) { _ in
@@ -70,6 +80,13 @@ struct AppShellView: View {
                 identityPrefill = nil
             }
         }
+    }
+
+    private func enablePushUnlessReviewing() async {
+        #if DEBUG
+        if UITestLaunchSupport.skipsPushPrompt { return }
+        #endif
+        await PushCoordinator.shared.enablePush()
     }
 
     private func drainPendingDeepLink() {

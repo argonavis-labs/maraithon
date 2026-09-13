@@ -48,46 +48,44 @@ struct MorningBriefingCard: View {
     let brief: MobileAPIClient.RemoteBrief
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label(MorningBriefingCopy.sectionTitle, systemImage: "sunrise.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+        RunnerCard {
+            VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                HStack {
+                    Label(MorningBriefingCopy.sectionTitle, systemImage: "sunrise.fill")
+                        .font(Runner.Typography.captionMedium)
+                        .foregroundStyle(Runner.Palette.accent)
 
-                Spacer(minLength: 8)
+                    Spacer(minLength: Runner.Spacing.small)
 
-                if let date = brief.referenceDate {
-                    Text(MorningBriefingCopy.dayLabel(for: date))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let date = brief.referenceDate {
+                        Text(MorningBriefingCopy.dayLabel(for: date))
+                            .font(Runner.Typography.caption)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
+                    }
                 }
-            }
 
-            Text(brief.title)
-                .font(.headline)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let summary = brief.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Text(brief.title)
+                    .font(Runner.Typography.bodySemibold)
+                    .foregroundStyle(Runner.Palette.foreground)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            HStack(spacing: 4) {
-                Text(MorningBriefingCopy.readBriefingTitle)
-                Image(systemName: "chevron.right")
+                if let summary = brief.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: Runner.Spacing.xsmall) {
+                    Text(MorningBriefingCopy.readBriefingTitle)
+                    Image(systemName: "chevron.right")
+                }
+                .font(Runner.Typography.smallMedium)
+                .foregroundStyle(Runner.Palette.accent)
             }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(Color.accentColor)
+            .padding(Runner.Spacing.medium)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
     }
 }
 
@@ -97,51 +95,52 @@ struct BriefDetailView: View {
 
     /// Parsed once at construction; the brief body is immutable for the life
     /// of this view, so re-parsing markdown per render was pure waste. Blocks
-    /// are identified by their (stable) index.
-    private let blocks: [BriefMarkdown.Block]
+    /// are identified by their (stable) index within each section.
+    private let sections: [DailyBriefSections.Section]
 
     init(brief: MobileAPIClient.RemoteBrief) {
         self.brief = brief
-        self.blocks = BriefMarkdown.blocks(from: brief.body ?? "")
+        self.sections = DailyBriefSections.sections(from: brief.body ?? "", title: brief.title)
+    }
+
+    private var summary: String? {
+        guard let summary = brief.summary, !summary.isEmpty else { return nil }
+        return summary
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let date = brief.referenceDate {
-                        Text(MorningBriefingCopy.dayLabel(for: date))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 0) {
+                RunnerPageHeader(
+                    eyebrow: brief.referenceDate.map { MorningBriefingCopy.dayLabel(for: $0) },
+                    title: brief.title,
+                    subtitle: summary
+                )
+
+                VStack(alignment: .leading, spacing: Runner.Spacing.large) {
+                    ForEach(sections) { section in
+                        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                            RunnerSectionLabel(section.title)
+                            RunnerCard {
+                                ForEach(section.blocks.indices, id: \.self) { index in
+                                    if index > 0 { RunnerHairline() }
+                                    BriefBlockView(block: section.blocks[index])
+                                        .runnerCardRow()
+                                }
+                            }
+                        }
                     }
-
-                    Text(brief.title)
-                        .font(.title2.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let summary = brief.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                Divider()
-
-                ForEach(blocks.indices, id: \.self) { index in
-                    BriefBlockView(block: blocks[index])
                 }
             }
-            .padding(20)
+            .padding(.horizontal, Runner.Layout.pageInset)
+            .padding(.top, Runner.Spacing.small)
+            .padding(.bottom, Runner.Spacing.xlarge)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(MorningBriefingCopy.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .runnerPage()
     }
-
 }
 
 struct BriefBlockView: View {
@@ -150,10 +149,14 @@ struct BriefBlockView: View {
     var body: some View {
         switch block {
         case .heading(let text):
-            Text(text).font(.headline)
+            Text(text)
+                .font(Runner.Typography.bodySemibold)
+                .foregroundStyle(Runner.Palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
         case .bullet(let text), .paragraph(let text):
             Text(BriefMarkdown.inline(text))
-                .font(.body)
+                .font(Runner.Typography.body)
+                .foregroundStyle(Runner.Palette.foreground)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -212,28 +215,36 @@ struct PreviousBriefRow: View {
     let brief: MobileAPIClient.RemoteBrief
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
+        HStack(alignment: .center, spacing: Runner.Spacing.tight) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.xxsmall) {
                 Text(brief.title)
-                    .font(.subheadline.weight(.medium))
+                    .font(Runner.Typography.smallMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
                     .lineLimit(1)
 
-                Spacer(minLength: 8)
-
-                if let date = brief.referenceDate {
-                    Text(MorningBriefingCopy.dayLabel(for: date))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let summary = brief.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                        .lineLimit(2)
                 }
             }
 
-            if let summary = brief.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+            Spacer(minLength: Runner.Spacing.small)
+
+            if let date = brief.referenceDate {
+                Text(MorningBriefingCopy.dayLabel(for: date))
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
             }
+
+            Image(systemName: "chevron.right")
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .accessibilityHidden(true)
         }
+        .runnerCardRow()
+        .contentShape(Rectangle())
     }
 }
 

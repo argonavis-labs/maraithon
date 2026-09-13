@@ -30,7 +30,7 @@ defmodule Maraithon.Todos.Brief.Context do
   @max_thread_messages 12
   @max_slack_messages 30
   @max_slack_name_lookups 8
-  @max_people 3
+  @max_people 12
 
   @type t :: %{
           todo: map(),
@@ -71,7 +71,7 @@ defmodule Maraithon.Todos.Brief.Context do
 
     people =
       bounded(
-        fn -> people(user_id, todo) end,
+        fn -> people(user_id, todo, source) end,
         Keyword.get(opts, :people_timeout_ms, @people_timeout_ms),
         []
       )
@@ -89,6 +89,21 @@ defmodule Maraithon.Todos.Brief.Context do
       source: source,
       people: people,
       identity: safe(fn -> UserIdentity.prompt_block(user_id) end, nil),
+      operator_identity:
+        safe(fn -> Maraithon.Todos.PersonalInvolvement.identity_context(user_id) end, %{}),
+      todo_instructions:
+        safe(
+          fn ->
+            Maraithon.Memory.list_items(user_id,
+              kind: "instruction",
+              tag: "todo_scope",
+              limit: 16
+            )
+            |> Enum.filter(&(&1.author_type == "user"))
+            |> Enum.map(& &1.content)
+          end,
+          []
+        ),
       voice: voice,
       now: now_label(user_id),
       channel: channel
@@ -122,27 +137,32 @@ defmodule Maraithon.Todos.Brief.Context do
   """
   def source_history(%{source: %{} = source}) do
     messages =
-      case Map.get(source, "thread") do
-        values when is_list(values) and values != [] -> values
-        _other -> List.wrap(Map.get(source, "message"))
+      cond do
+        is_list(source["thread"]) and source["thread"] != [] -> source["thread"]
+        is_list(source["messages"]) and source["messages"] != [] -> source["messages"]
+        is_list(source["conversation"]) and source["conversation"] != [] -> source["conversation"]
+        true -> List.wrap(source["message"])
       end
 
     messages
     |> Enum.filter(&is_map/1)
     |> Enum.map(fn message ->
       %{
-        "speaker" => display_address(read_string(message, "from")),
+        "speaker" =>
+          display_address(read_string(message, "from") || read_string(message, "speaker")),
         "from" => read_string(message, "from"),
         "to" => read_string(message, "to"),
         "subject" => read_string(message, "subject"),
-        "at" => read_string(message, "date"),
+        "at" => read_string(message, "date") || read_string(message, "at"),
         "text" =>
           first_present([
             read_string(message, "body"),
+            read_string(message, "text"),
             read_string(message, "snippet")
           ])
           |> truncate(@max_history_body_chars),
-        "from_user" => Map.get(message, "is_from_user") == true
+        "from_user" =>
+          Map.get(message, "is_from_user") == true or Map.get(message, "from_user") == true
       }
       |> compact()
     end)
@@ -171,6 +191,7 @@ defmodule Maraithon.Todos.Brief.Context do
     draft = todo.action_draft || %{}
 
     %{
+      "workflow" => Maraithon.Todos.Workflow.current(todo),
       "title" => todo.title,
       "summary" => todo.summary,
       "next_action" => todo.next_action,
@@ -189,9 +210,13 @@ defmodule Maraithon.Todos.Brief.Context do
       "nudge_count" => todo.nudge_count,
       "last_nudged_at" => iso(todo.last_nudged_at),
       "existing_draft" =>
-        if(ActionDrafts.real_draft?(draft), do: ActionDrafts.preview(draft), else: nil),
+        if(ActionDrafts.real_draft?(draft) and not Maraithon.Todos.Brief.generated_draft?(todo),
+          do: ActionDrafts.preview(draft),
+          else: nil
+        ),
       "existing_draft_subject" => read_string(draft, "subject"),
       "attention_profile" => Map.get(serialized, :attention_profile),
+      "personal_involvement" => Map.get(todo.metadata || %{}, "personal_involvement"),
       "metadata" => metadata
     }
     |> compact()
@@ -363,14 +388,28 @@ defmodule Maraithon.Todos.Brief.Context do
   end
 
   defp slack_thread(user_id, %Todo{} = todo) do
+    case Maraithon.Todos.Brief.CachedSlackContext.read(user_id, todo) ||
+           live_slack_thread(user_id, todo) do
+      %{"status" => "unavailable"} = unavailable ->
+        Maraithon.Todos.Brief.SearchedSlackContext.read(user_id, todo) || unavailable
+
+      source ->
+        source
+    end
+  end
+
+  defp live_slack_thread(user_id, %Todo{} = todo) do
     metadata = todo.metadata || %{}
     draft = todo.action_draft || %{}
+
+    location = Maraithon.Todos.SourceActions.slack_location(todo)
 
     team_id =
       first_present([
         read_string(draft, "team_id"),
         read_string(metadata, "team_id"),
         read_string(metadata, "workspace_id"),
+        location.team,
         single_connected_slack_team_id(user_id)
       ])
 
@@ -380,6 +419,7 @@ defmodule Maraithon.Todos.Brief.Context do
         read_string(draft, "channel"),
         read_string(metadata, "channel_id"),
         read_string(metadata, "channel"),
+        location.channel,
         slack_channel_from_item_id(todo.source_item_id)
       ])
 
@@ -389,16 +429,20 @@ defmodule Maraithon.Todos.Brief.Context do
         read_string(metadata, "thread_ts"),
         read_string(metadata, "ts"),
         read_string(metadata, "message_ts"),
+        location.timestamp,
         slack_ts_from_item_id(todo.source_item_id)
       ])
 
     with true <- is_binary(team_id) and is_binary(channel),
          {:ok, messages} <- fetch_slack_messages(user_id, team_id, channel, thread_ts) do
+      permalink = slack_permalink(user_id, team_id, channel, thread_ts)
       names = slack_display_names(user_id, team_id, messages)
 
       %{
         "status" => "available",
         "provider" => "slack",
+        "permalink" => permalink,
+        "team_id" => team_id,
         "channel_name" =>
           first_present([
             read_string(metadata, "channel_name"),
@@ -415,6 +459,7 @@ defmodule Maraithon.Todos.Brief.Context do
             user = read_string(message, :user)
 
             %{
+              "user_id" => user,
               "from" => Map.get(names, user) || user || read_string(message, :bot_id),
               "at" => slack_ts_to_iso(read_string(message, :ts)),
               "text" => truncate(read_string(message, :text), 1_500),
@@ -436,6 +481,18 @@ defmodule Maraithon.Todos.Brief.Context do
         |> Map.put("reason", safe_reason(reason))
     end
   end
+
+  defp slack_permalink(user_id, team_id, channel, timestamp) when is_binary(timestamp) do
+    with {:ok, token} <- SlackHelpers.resolve_access_token(user_id, team_id),
+         {:ok, %{"permalink" => url}} <-
+           Slack.get_message_permalink(token.access_token, channel, timestamp) do
+      url
+    else
+      _ -> nil
+    end
+  end
+
+  defp slack_permalink(_, _, _, _), do: nil
 
   defp fetch_slack_messages(user_id, team_id, channel, thread_ts) when is_binary(thread_ts) do
     args = %{
@@ -573,8 +630,9 @@ defmodule Maraithon.Todos.Brief.Context do
   # People, voice, time
   # ---------------------------------------------------------------------------
 
-  defp people(user_id, %Todo{} = todo) do
-    people = Crm.people_for_resource(user_id, "todo", todo.id, limit: @max_people)
+  defp people(user_id, %Todo{} = todo, source) do
+    people =
+      Maraithon.Todos.Workspace.candidate_people(user_id, todo, source) |> Enum.take(@max_people)
 
     user_id
     |> Crm.relationship_contexts(people, link_limit: 6, resource_type: "todo")
@@ -582,6 +640,8 @@ defmodule Maraithon.Todos.Brief.Context do
       person = context.person
 
       %{
+        "person_id" => person.id,
+        "contact_details" => person.contact_details,
         "name" => person.display_name || Enum.join([person.first_name, person.last_name], " "),
         "relationship" => person.relationship,
         "preferred_channel" => person.preferred_communication_method,

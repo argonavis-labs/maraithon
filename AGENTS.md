@@ -1,12 +1,12 @@
 # Maraithon engineering rules
 
-Maraithon is a todo list that keeps itself current. A user's Chief of Staff
-agent reads their inbox, calendar, Slack, and other sources, turns commitments
-and follow-ups into todos, keeps them ranked, marks them done when the world
-says so, and briefs the user. Everything else in this repository (connectors,
-runtime, mobile, companion) exists to make that todo list trustworthy. When a
-change does not make the todo list more accurate, timelier, or easier to act
-on, question it.
+Maraithon is an AI-first todo application that acts as the user's Chief of
+Staff. It scans the user's connected life and work to discover what needs
+doing, keeps those todos current, and delivers a daily digest of the day ahead.
+It remembers the people in the user's life and work to prepare for meetings
+and surface timely, proactive follow-ups. Connectors, runtime, mobile, and
+companion all serve this product goal. Judge changes by whether they help the
+user know what matters, prepare for their day, and follow through.
 
 ## Monorepo layout
 
@@ -26,13 +26,22 @@ on, question it.
 - Native apps use XcodeGen. Treat each `project.yml` as the source of truth
   and do not commit generated `.xcodeproj` files.
 
-## Product focus: the todo list
+## Product focus: an AI Chief of Staff
 
 - The unit of value is a todo the user trusts: sourced from something real
   (an email, a meeting, a Slack thread), explained in one line, ranked, and
   closed automatically when evidence arrives. Todo surfaces (`/todos`, the
   mobile todo list, the daily brief) come first; connector and runtime pages
   are operational and stay row-oriented and quiet.
+- Discovery is proactive: the AI finds commitments and needed actions across
+  connected sources, explains the evidence, and updates priorities and
+  completion as the user's world changes.
+- The daily digest is a core daily promise. It should explain the day's
+  commitments, priorities, and meeting preparation, and reliably reach the
+  user each day.
+- People context supports action: keep track of relationships, shared history,
+  and outstanding commitments so the user is prepared for meetings and knows
+  when a thoughtful follow-up would help.
 - The Chief of Staff (`Maraithon.Behaviors.AIChiefOfStaff` plus the skills in
   `lib/maraithon/chief_of_staff/skills`) wakes every 10 minutes by default,
   fetches a source bundle, runs its enabled skills as LLM effects, and emits
@@ -40,6 +49,22 @@ on, question it.
   (`Maraithon.Runtime.RecurringJobs`) run every 1 to 30 minutes and fan work
   out to per-account and per-user partitions. Both must be observably alive in
   production; see "Runtime health" below.
+
+## Architecture direction
+
+- Build a lightweight, fast, fault-tolerant, self-healing application using
+  Erlang and OTP. Keep the runtime small and understandable as the product
+  grows.
+- Use OTP supervision, isolated processes, monitors, and explicit state
+  machines for execution and recovery. Justify additional coordination layers
+  with a concrete failure case that existing mechanisms cannot handle.
+- Keep coordination loops responsive. Bound concurrency, queues, timeouts,
+  and retries; keep slow provider and model work outside coordination loops.
+  Preserve the durable ownership and outcome guarantees described below.
+- Recover routine transient failures automatically. When human intervention
+  is necessary, explain the actual cause and affected product outcome. A
+  successful recovery restores useful work and delivery, not just a green
+  process status.
 
 ## The exact OTP runtime
 

@@ -3,7 +3,8 @@ import SwiftUI
 /// Single-cell rollup used in stat grids on detail panes.
 ///
 /// Deliberately chrome-less — no borders, no shadows, no fills. Spacing
-/// and type hierarchy do the visual grouping. See `AGENTS.md` rule #2.
+/// and type hierarchy do the visual grouping, using the workspace
+/// type scale and palette so the tile matches the rest of the theme.
 struct StatCard: View {
     enum Trend {
         case up(String)
@@ -17,30 +18,29 @@ struct StatCard: View {
     var trend: Trend? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxsmall) {
             Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+                .sectionHeaderStyle()
 
             Text(value)
-                .font(.title2.weight(.semibold))
+                .font(Tokens.Typography.pageTitle)
+                .tracking(Tokens.Typography.pageTitleTracking)
                 .monospacedDigit()
-                .foregroundStyle(.primary)
+                .foregroundStyle(Tokens.Palette.foreground)
 
             HStack(spacing: Tokens.Spacing.xsmall) {
                 if let trend, let trendDescription = trendLabel(trend) {
                     Image(systemName: trendSymbol(trend))
-                        .font(.caption)
+                        .font(Tokens.Typography.caption)
                         .foregroundStyle(trendTone(trend).color)
                     Text(trendDescription)
-                        .font(.caption)
+                        .font(Tokens.Typography.caption)
                         .foregroundStyle(trendTone(trend).color)
                 }
                 if let caption {
                     Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.Palette.mutedForeground)
                 }
             }
         }
@@ -84,4 +84,5 @@ struct StatCard: View {
     }
     .padding(Tokens.Spacing.large)
     .frame(width: 640)
+    .background(Tokens.Palette.background)
 }

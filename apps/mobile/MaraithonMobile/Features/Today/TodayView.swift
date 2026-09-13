@@ -39,82 +39,52 @@ struct TodayView: View {
         scenePhase == .active && appNavigation.selectedTab == .today
     }
 
+    private var dateEyebrow: String {
+        now.formatted(Date.FormatStyle(date: .complete, time: .omitted, timeZone: calendar.timeZone))
+    }
+
+    private var scheduleSubtitle: String? {
+        guard let schedule else { return nil }
+        return schedule.configured ? schedule.refreshDescription : "Morning briefing is not configured."
+    }
+
     var body: some View {
         NavigationStack {
-            List {
-                if let refreshErrorMessage {
-                    SyncIssueBanner(
-                        title: "Brief could not refresh",
-                        message: refreshErrorMessage,
-                        retry: { Task { await refresh() } },
-                        dismiss: { self.refreshErrorMessage = nil }
-                    )
-                    .listRowInsets(EdgeInsets())
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let refreshErrorMessage {
+                        SyncIssueBanner(
+                            title: "Brief could not refresh",
+                            message: refreshErrorMessage,
+                            retry: { Task { await refresh() } },
+                            dismiss: { self.refreshErrorMessage = nil }
+                        )
+                    }
 
-                Section {
-                    if let brief = todayBrief {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let summary = brief.summary, !summary.isEmpty {
-                                Text(summary)
-                            } else {
-                                Text(brief.title)
-                            }
-                            if let updated = brief.insertedAt {
-                                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                    VStack(alignment: .leading, spacing: 0) {
+                        RunnerPageHeader(eyebrow: dateEyebrow, title: "Today", subtitle: scheduleSubtitle) {
+                            AccountMenuButton()
                         }
-                        .fixedSize(horizontal: false, vertical: true)
-                    } else if isRefreshing && briefs.isEmpty {
-                        ProgressView("Loading your day")
-                    } else {
-                        Text("Today's brief isn't ready yet.")
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text(now.formatted(Date.FormatStyle(date: .complete, time: .omitted, timeZone: calendar.timeZone)))
-                } footer: {
-                    if let schedule {
-                        Text(schedule.configured ? schedule.refreshDescription : "Morning briefing is not configured.")
-                    }
-                }
 
-                if let brief = todayBrief {
-                    let sections = DailyBriefSections.sections(from: brief.body ?? "", title: brief.title)
-                    ForEach(sections) { section in
-                        Section(section.title) {
-                            ForEach(section.blocks.indices, id: \.self) { index in
-                                BriefBlockView(block: section.blocks[index])
-                            }
-                        }
-                    }
-                    if !sections.contains(where: { $0.title == "Calendar" }) {
-                        Section("Calendar") {
-                            Text("Calendar details aren't available in this brief.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
+                        VStack(alignment: .leading, spacing: Runner.Spacing.large) {
+                            todayBriefCard
 
-                if !previousBriefs.isEmpty {
-                    Section("Previous briefings") {
-                        ForEach(previousBriefs) { brief in
-                            NavigationLink {
-                                BriefDetailView(brief: brief)
-                            } label: {
-                                PreviousBriefRow(brief: brief)
+                            if let brief = todayBrief {
+                                briefSections(for: brief)
+                            }
+
+                            if !previousBriefs.isEmpty {
+                                previousBriefList
                             }
                         }
                     }
+                    .padding(.horizontal, Runner.Layout.pageInset)
+                    .padding(.top, Runner.Spacing.small)
+                    .padding(.bottom, Runner.Spacing.xlarge)
                 }
             }
-            .navigationTitle("Today")
-            .listSectionSpacing(16)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { AccountMenuButton() }
-            }
+            .runnerPage()
+            .toolbar(.hidden, for: .navigationBar)
             .task(id: isVisible) {
                 guard isVisible else { return }
                 // The server creates the daily brief even when the app is closed.
@@ -127,6 +97,94 @@ struct TodayView: View {
                 }
             }
             .refreshable { await refresh() }
+        }
+    }
+
+    private var todayBriefCard: some View {
+        RunnerCard {
+            Group {
+                if let brief = todayBrief {
+                    VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                        Group {
+                            if let summary = brief.summary, !summary.isEmpty {
+                                Text(summary)
+                            } else {
+                                Text(brief.title)
+                            }
+                        }
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                        if let updated = brief.insertedAt {
+                            Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
+                                .font(Runner.Typography.caption)
+                                .foregroundStyle(Runner.Palette.mutedForeground)
+                        }
+                    }
+                } else if isRefreshing && briefs.isEmpty {
+                    HStack(spacing: Runner.Spacing.snug) {
+                        ProgressView()
+                            .tint(Runner.Palette.mutedForeground)
+                        Text("Loading your day")
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
+                    }
+                } else {
+                    Text("Today's brief isn't ready yet.")
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                }
+            }
+            .padding(Runner.Spacing.medium)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func briefSections(for brief: MobileAPIClient.RemoteBrief) -> some View {
+        let sections = DailyBriefSections.sections(from: brief.body ?? "", title: brief.title)
+
+        ForEach(sections) { section in
+            VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                RunnerSectionLabel(section.title)
+                RunnerCard {
+                    ForEach(section.blocks.indices, id: \.self) { index in
+                        if index > 0 { RunnerHairline() }
+                        BriefBlockView(block: section.blocks[index])
+                            .runnerCardRow()
+                    }
+                }
+            }
+        }
+
+        if !sections.contains(where: { $0.title == "Calendar" }) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                RunnerSectionLabel("Calendar")
+                RunnerCard {
+                    Text("Calendar details aren't available in this brief.")
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                        .runnerCardRow()
+                }
+            }
+        }
+    }
+
+    private var previousBriefList: some View {
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+            RunnerSectionLabel(MorningBriefingCopy.previousSectionTitle)
+            RunnerCard {
+                ForEach(Array(previousBriefs.enumerated()), id: \.element.id) { index, brief in
+                    if index > 0 { RunnerHairline() }
+                    NavigationLink {
+                        BriefDetailView(brief: brief)
+                    } label: {
+                        PreviousBriefRow(brief: brief)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 

@@ -12,7 +12,7 @@ defmodule Maraithon.Todos.SourceActions do
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Todos.{ActionDrafts, Brief, PublicMetadata, Todo}
 
-  @max_draft_length 2_000
+  @max_draft_length 8_000
   @max_prefill_length 700
 
   @provider_labels %{
@@ -42,8 +42,9 @@ defmodule Maraithon.Todos.SourceActions do
     draft = draft_text(todo)
     open_url = open_url(provider, todo, metadata, draft)
     source_context = source_context(todo)
+    call = get_in(Brief.current(todo) || %{}, ["call"])
 
-    if is_nil(open_url) and is_nil(draft) do
+    if is_nil(open_url) and is_nil(draft) and is_nil(call) do
       nil
     else
       label = provider_label(provider)
@@ -57,7 +58,9 @@ defmodule Maraithon.Todos.SourceActions do
         "draft_kind" => draft_kind(todo),
         "recipient" => recipient(todo, metadata),
         "recipient_handle" => recipient_handle(provider, metadata),
-        "subject" => source_subject(todo, metadata)
+        "subject" => source_subject(todo, metadata),
+        "call_url" => if(is_map(call), do: "tel:" <> call["number"]),
+        "call_label" => if(is_map(call), do: "Call " <> call["label"])
       }
       |> SourceContext.merge_into(source_context)
       |> compact()
@@ -84,7 +87,8 @@ defmodule Maraithon.Todos.SourceActions do
   end
 
   defp open_url(provider, todo, metadata, draft) do
-    explicit_link(metadata) || built_url(provider, todo, metadata, draft)
+    safe_web_url((Brief.current(todo) || %{})["source_url"]) || explicit_link(metadata) ||
+      built_url(provider, todo, metadata, draft)
   end
 
   defp explicit_link(metadata) do
@@ -102,12 +106,13 @@ defmodule Maraithon.Todos.SourceActions do
     if id, do: "https://mail.google.com/mail/u/0/#all/#{URI.encode(id)}"
   end
 
-  defp built_url("slack", _todo, metadata, _draft) do
-    team = read_string(metadata, "team_id")
-    channel = read_string(metadata, "channel_id")
+  defp built_url("slack", todo, _metadata, _draft) do
+    %{team: team, channel: channel, timestamp: timestamp} = slack_location(todo)
 
     if team && channel do
-      "slack://channel?team=#{URI.encode(team)}&id=#{URI.encode(channel)}"
+      params = %{"team" => team, "id" => channel}
+      params = if timestamp, do: Map.put(params, "message", timestamp), else: params
+      "slack://channel?" <> URI.encode_query(params)
     end
   end
 
@@ -132,6 +137,35 @@ defmodule Maraithon.Todos.SourceActions do
   end
 
   defp built_url(_provider, _todo, _metadata, _draft), do: nil
+
+  @doc "Source identifiers shared by source retrieval and exact conversation links."
+  def slack_location(%Todo{} = todo) do
+    metadata = todo.metadata || %{}
+    draft = todo.action_draft || %{}
+    ref = read_string(metadata, "source_ref") || ""
+
+    {ref_team, ref_channel, ref_ts} =
+      case String.split(ref, ":") do
+        ["slack", team, channel, ts] -> {team, channel, ts}
+        _ -> {nil, nil, nil}
+      end
+
+    {item_channel, item_ts} =
+      case String.split(todo.source_item_id || "", ":") do
+        [channel, ts] -> {channel, ts}
+        _ -> {nil, nil}
+      end
+
+    %{
+      team: read_string(draft, "team_id") || read_string(metadata, "team_id") || ref_team,
+      channel:
+        read_string(draft, "channel_id") || read_string(metadata, "channel_id") || ref_channel ||
+          item_channel,
+      timestamp:
+        read_string(draft, "thread_ts") || read_string(metadata, "thread_ts") ||
+          read_string(metadata, "message_ts") || read_string(metadata, "ts") || ref_ts || item_ts
+    }
+  end
 
   defp gmail_source_item_id(%Todo{source: "gmail", source_item_id: id})
        when is_binary(id) and id != "" do

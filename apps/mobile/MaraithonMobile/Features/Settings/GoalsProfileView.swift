@@ -12,31 +12,43 @@ struct GoalsProfileView: View {
     var body: some View {
         NavigationStack {
             List {
+                ThemedListHeader {
+                    RunnerPageHeader(title: GoalsProfileCopy.title, count: goals.isEmpty ? nil : goals.count)
+                }
+
                 if isLoading {
-                    loadingRow
+                    ThemedListSection {
+                        ThemedLoadingRow(title: GoalsProfileCopy.loadingTitle)
+                    }
                 } else if let errorMessage {
-                    ContentUnavailableView(
-                        GoalsProfileCopy.loadFailedTitle,
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(errorMessage)
-                    )
+                    ThemedListSection {
+                        RunnerEmptyState(
+                            title: GoalsProfileCopy.loadFailedTitle,
+                            description: errorMessage,
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 } else if goals.isEmpty {
-                    ContentUnavailableView(
-                        GoalsProfileCopy.emptyTitle,
-                        systemImage: "target",
-                        description: Text(GoalsProfileCopy.emptyDescription)
-                    )
+                    ThemedListSection {
+                        RunnerEmptyState(
+                            title: GoalsProfileCopy.emptyTitle,
+                            description: GoalsProfileCopy.emptyDescription,
+                            systemImage: "target"
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 } else {
-                    Section {
+                    ThemedListSection(GoalsProfileCopy.activeSectionTitle) {
                         ForEach(goals) { goal in
                             GoalProfileRow(goal: goal)
                         }
-                    } header: {
-                        Text(GoalsProfileCopy.activeSectionTitle)
                     }
                 }
             }
-            .navigationTitle(GoalsProfileCopy.title)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .runnerPage()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -76,14 +88,6 @@ struct GoalsProfileView: View {
         }
     }
 
-    private var loadingRow: some View {
-        HStack(spacing: 12) {
-            ProgressView()
-            Text(GoalsProfileCopy.loadingTitle)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private func loadGoals() async {
         guard let sessionToken = sessionStore.user?.sessionToken else {
             goals = []
@@ -120,35 +124,30 @@ private struct GoalProfileRow: View {
     let goal: MobileAPIClient.RemoteGoal
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
+            HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.small) {
                 Text(goal.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
                     .lineLimit(2)
 
-                Spacer(minLength: 8)
+                Spacer(minLength: Runner.Spacing.small)
 
-                Text(GoalsProfileCopy.categoryTitle(goal.category))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(GoalsProfileCopy.categoryTint(goal.category))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        GoalsProfileCopy.categoryTint(goal.category).opacity(0.12),
-                        in: Capsule()
-                    )
+                StatusPill(
+                    title: GoalsProfileCopy.categoryTitle(goal.category),
+                    tint: GoalsProfileCopy.categoryTint(goal.category)
+                )
             }
 
             if let desiredOutcome = goal.desiredOutcome?.trimmingCharacters(in: .whitespacesAndNewlines),
                !desiredOutcome.isEmpty {
                 Text(desiredOutcome)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .lineLimit(3)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: Runner.Spacing.snug) {
                 Label(GoalsProfileCopy.statusTitle(goal.status), systemImage: "circle.fill")
                 Label(GoalsProfileCopy.reviewTitle(goal.reviewCadence), systemImage: "calendar.badge.clock")
 
@@ -156,20 +155,20 @@ private struct GoalProfileRow: View {
                     Label("\(goal.linkedWorkCount) work", systemImage: "checklist")
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(Runner.Typography.caption)
+            .foregroundStyle(Runner.Palette.mutedForeground)
             .lineLimit(1)
 
             if let progress = goal.latestProgress,
                let summary = progress.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
                !summary.isEmpty {
                 Text(summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .lineLimit(2)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Runner.Spacing.xsmall)
     }
 }
 
@@ -196,31 +195,45 @@ private struct GoalEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(GoalEditorCopy.goalSectionTitle) {
+                ThemedListHeader {
+                    RunnerPageHeader(title: GoalEditorCopy.navigationTitle)
+                }
+
+                ThemedListSection(GoalEditorCopy.goalSectionTitle) {
                     TextField(GoalEditorCopy.titlePlaceholder, text: $title)
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .accessibilityIdentifier("goal-title-field")
 
                     TextField(GoalEditorCopy.outcomePlaceholder, text: $desiredOutcome, axis: .vertical)
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .lineLimit(3...6)
                         .accessibilityIdentifier("goal-outcome-field")
 
                     TextField(GoalEditorCopy.whyPlaceholder, text: $why, axis: .vertical)
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .lineLimit(2...4)
 
                     TextField(GoalEditorCopy.metricPlaceholder, text: $successMetric, axis: .vertical)
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .lineLimit(2...4)
                 }
 
-                Section(GoalEditorCopy.categorySectionTitle) {
+                ThemedListSection(GoalEditorCopy.categorySectionTitle) {
                     Picker(GoalEditorCopy.categoryPickerTitle, selection: $category) {
                         ForEach(GoalEditorCategory.allCases) { category in
                             Label(category.title, systemImage: category.systemImage)
                                 .tag(category)
                         }
                     }
+                    .font(Runner.Typography.body)
+                    .foregroundStyle(Runner.Palette.foreground)
 
                     Stepper(value: $priority, in: 0...100, step: 5) {
-                        LabeledContent(GoalEditorCopy.priorityLabel, value: "\(priority)")
+                        ThemedValueRow(label: GoalEditorCopy.priorityLabel, value: "\(priority)")
                     }
 
                     Picker(GoalEditorCopy.reviewPickerTitle, selection: $reviewCadence) {
@@ -228,24 +241,32 @@ private struct GoalEditorView: View {
                             Text(cadence.title).tag(cadence)
                         }
                     }
+                    .font(Runner.Typography.body)
+                    .foregroundStyle(Runner.Palette.foreground)
                 }
 
-                Section(GoalEditorCopy.privacySectionTitle) {
+                ThemedListSection(GoalEditorCopy.privacySectionTitle) {
                     Picker(GoalEditorCopy.sensitivityPickerTitle, selection: $sensitivity) {
                         ForEach(GoalEditorSensitivity.allCases) { sensitivity in
                             Text(sensitivity.title).tag(sensitivity)
                         }
                     }
+                    .font(Runner.Typography.body)
+                    .foregroundStyle(Runner.Palette.foreground)
 
                     Picker(GoalEditorCopy.visibilityPickerTitle, selection: $proactiveVisibility) {
                         ForEach(GoalEditorVisibility.allCases) { visibility in
                             Text(visibility.title).tag(visibility)
                         }
                     }
+                    .font(Runner.Typography.body)
+                    .foregroundStyle(Runner.Palette.foreground)
                 }
 
-                Section(GoalEditorCopy.timingSectionTitle) {
+                ThemedListSection(GoalEditorCopy.timingSectionTitle) {
                     Toggle(GoalEditorCopy.targetDateToggleTitle, isOn: $hasTargetDate)
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
 
                     if hasTargetDate {
                         DatePicker(
@@ -253,18 +274,22 @@ private struct GoalEditorView: View {
                             selection: $targetDate,
                             displayedComponents: [.date]
                         )
+                        .font(Runner.Typography.body)
+                        .foregroundStyle(Runner.Palette.foreground)
                     }
                 }
 
                 if let errorMessage {
-                    Section {
+                    ThemedListSection {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.destructiveText)
                     }
                 }
             }
-            .navigationTitle(GoalEditorCopy.navigationTitle)
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .runnerPage()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -484,7 +509,7 @@ private enum GoalsProfileCopy {
         case "life":
             .orange
         default:
-            .secondary
+            Runner.Palette.mutedForeground
         }
     }
 }

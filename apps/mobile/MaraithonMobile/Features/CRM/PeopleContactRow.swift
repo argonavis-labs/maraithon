@@ -9,52 +9,41 @@ struct PeopleContactRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Circle()
-                .fill(contact.status.tint.opacity(0.18))
-                .frame(width: 44, height: 44)
-                .overlay {
-                    Text(initials)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(contact.status.tint)
-                }
-                .accessibilityHidden(true)
+        HStack(alignment: .top, spacing: Runner.Spacing.tight) {
+            PeopleAvatar(initials: PeopleAvatar.initials(for: contact.name))
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(contact.name)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 8)
-                }
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
+                Text(contact.name)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
+                    .lineLimit(1)
 
                 Text(context.signalLine(for: tab))
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.foreground80)
                     .lineLimit(2)
 
                 Text(context.contextLine(for: tab))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .lineLimit(1)
 
                 if let action = suggestedAction {
                     Label(action, systemImage: "arrow.turn.up.right")
-                        .font(.caption)
-                        .foregroundStyle(.tint)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.accent)
                         .lineLimit(2)
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: Runner.Spacing.compact) {
                     ForEach(context.badges.prefix(3)) { badge in
                         StatusPill(title: badge.title, tint: badge.tint)
                     }
                 }
+                .padding(.top, Runner.Spacing.xxsmall)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, Runner.Spacing.xsmall)
     }
 
     private var suggestedAction: String? {
@@ -62,16 +51,6 @@ struct PeopleContactRow: View {
         return context.suggestion?.suggestedAction?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfBlank
-    }
-
-    private var initials: String {
-        contact.name
-            .split(separator: " ")
-            .prefix(2)
-            .compactMap(\.first)
-            .map(String.init)
-            .joined()
-            .uppercased()
     }
 }
 

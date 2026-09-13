@@ -2,6 +2,7 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
   @moduledoc false
 
   use GenServer
+  require Logger
 
   alias Maraithon.Runtime.Coordination.TaskSupervisor
   alias Maraithon.Runtime.TaskGuardian
@@ -11,6 +12,7 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
   @proof_retry_ms 1_000
   @max_pending_proofs 8_192
   @max_retry_batch 8
+  @reservation_bind_timeout_ms 30_000
 
   def start_link(opts) do
     case Keyword.get(opts, :name, __MODULE__) do
@@ -109,6 +111,12 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
             task_pid: nil,
             task_ref: nil,
             down: nil,
+            bind_timer:
+              :erlang.start_timer(
+                @reservation_bind_timeout_ms,
+                self(),
+                {:reservation_bind_timeout, identity}
+              ),
             termination_capability_digest: capability.termination_capability_digest
           })
 
@@ -139,6 +147,7 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
     case exact(state, identity) do
       %{owner: ^owner, bound_task_pid: nil, task_pid: nil, down: nil} = reservation ->
         if supervised_child?(state.supervisor_pid, task_pid) do
+          _ = Process.cancel_timer(reservation.bind_timer)
           bound_ref = Process.monitor(task_pid)
           reservation = %{reservation | bound_task_pid: task_pid, bound_task_ref: bound_ref}
 
@@ -289,6 +298,28 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
     state = %{state | proof_retry_timer: nil}
     {state, _persisted, _remaining} = retry_pending(state)
     {:noreply, state}
+  end
+
+  def handle_info({:timeout, timer, {:reservation_bind_timeout, identity}}, state) do
+    case exact(state, identity) do
+      %{bind_timer: ^timer, bound_task_pid: nil, task_pid: nil, down: nil} = reservation ->
+        # A live runner can abandon a committed reservation without crashing.
+        # Cancel activation in the guardian; its independent persistence queue
+        # owns the never-activated proof. Do not synchronously persist here:
+        # another runner may hold database locks while asking us to reserve.
+        # Time passing is only a wakeup hint, never a termination proof.
+        Logger.warning("Unbound coordinated task reservation expired",
+          failure_code: "task_reservation_unbound"
+        )
+
+        case TaskGuardian.cancel_reserved(state.guardian, identity) do
+          :ok -> {:noreply, delete(state, reservation)}
+          {:error, _reason} -> {:stop, :coordinated_task_guardian_lost, state}
+        end
+
+      _bound_or_released ->
+        {:noreply, state}
+    end
   end
 
   defp authenticate_down(%{guardian_ref: ref} = state, ref, pid) do
@@ -706,6 +737,8 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
   end
 
   defp delete(state, reservation) do
+    _ = Process.cancel_timer(reservation.bind_timer)
+
     indexed_refs =
       state.monitors
       |> Enum.flat_map(fn

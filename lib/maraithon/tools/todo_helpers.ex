@@ -53,6 +53,7 @@ defmodule Maraithon.Tools.TodoHelpers do
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       status: todo.status,
+      workflow: Maraithon.Todos.Workflow.current(todo),
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,

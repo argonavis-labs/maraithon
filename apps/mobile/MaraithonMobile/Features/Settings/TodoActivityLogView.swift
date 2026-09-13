@@ -10,29 +10,43 @@ struct TodoActivityLogView: View {
     var body: some View {
         NavigationStack {
             List {
+                ThemedListHeader {
+                    RunnerPageHeader(title: TodoActivityLogCopy.title, count: events.isEmpty ? nil : events.count)
+                }
+
                 if isLoading {
-                    loadingRow
+                    ThemedListSection {
+                        ThemedLoadingRow(title: TodoActivityLogCopy.loadingTitle)
+                    }
                 } else if let errorMessage {
-                    ContentUnavailableView(
-                        TodoActivityLogCopy.loadFailedTitle,
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(errorMessage)
-                    )
+                    ThemedListSection {
+                        RunnerEmptyState(
+                            title: TodoActivityLogCopy.loadFailedTitle,
+                            description: errorMessage,
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 } else if events.isEmpty {
-                    ContentUnavailableView(
-                        TodoActivityLogCopy.emptyTitle,
-                        systemImage: "clock.arrow.circlepath",
-                        description: Text(TodoActivityLogCopy.emptyDescription)
-                    )
+                    ThemedListSection {
+                        RunnerEmptyState(
+                            title: TodoActivityLogCopy.emptyTitle,
+                            description: TodoActivityLogCopy.emptyDescription,
+                            systemImage: "clock.arrow.circlepath"
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 } else {
-                    Section {
+                    ThemedListSection {
                         ForEach(events) { event in
                             TodoActivityRow(event: event)
                         }
                     }
                 }
             }
-            .navigationTitle(TodoActivityLogCopy.title)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .runnerPage()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -54,14 +68,6 @@ struct TodoActivityLogView: View {
             .refreshable {
                 await loadActivity()
             }
-        }
-    }
-
-    private var loadingRow: some View {
-        HStack(spacing: 12) {
-            ProgressView()
-            Text(TodoActivityLogCopy.loadingTitle)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -90,22 +96,24 @@ private struct TodoActivityRow: View {
     let event: MobileAPIClient.RemoteTodoActivity
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Runner.Spacing.tight) {
             Image(systemName: TodoActivityLogCopy.systemImage(for: event))
-                .font(.title3)
+                .font(Runner.Typography.icon)
                 .foregroundStyle(TodoActivityLogCopy.tint(for: event))
-                .frame(width: 28)
+                .frame(width: Runner.Spacing.large)
+                .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
                 Text(TodoActivityLogCopy.eventTitle(for: event))
-                    .font(.headline)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
 
                 Text(TodoActivityLogCopy.todoTitle(for: event))
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.foreground80)
                     .lineLimit(2)
 
-                HStack(spacing: 8) {
+                HStack(spacing: Runner.Spacing.small) {
                     Label(
                         TodoActivityLogCopy.actorText(for: event),
                         systemImage: TodoActivityLogCopy.actorSystemImage(for: event)
@@ -113,12 +121,12 @@ private struct TodoActivityRow: View {
 
                     Text(AppFormatters.relativeString(for: event.occurredAt))
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
                 .lineLimit(1)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Runner.Spacing.xsmall)
     }
 }
 
@@ -190,13 +198,13 @@ enum TodoActivityLogCopy {
     static func tint(for event: MobileAPIClient.RemoteTodoActivity) -> Color {
         switch event.eventType {
         case "created":
-            .blue
+            Runner.Palette.info
         case "marked_done":
-            .green
+            Runner.Palette.success
         case "deleted":
-            .red
+            Runner.Palette.destructive
         default:
-            .secondary
+            Runner.Palette.mutedForeground
         }
     }
 }

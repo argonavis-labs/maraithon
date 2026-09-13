@@ -513,6 +513,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     cross_source_opts =
       Keyword.take(opts, [
         :now,
+        :review_memo,
+        :cached_calendar_evidence,
         :llm_complete,
         :live_sources,
         :source_bundle,

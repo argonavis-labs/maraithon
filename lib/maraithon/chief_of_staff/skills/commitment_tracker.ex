@@ -1866,46 +1866,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp fallback_persist_todos(user_id, candidates, reason) do
-    Logger.warning(
-      "commitment_tracker todo intelligence failed; using direct checked upsert",
-      reason: Maraithon.Redaction.error_summary(reason),
+    Logger.warning("commitment_tracker ownership assessment unavailable; queuing a retry",
+      failure_code: Maraithon.Redaction.error_class(reason),
       candidate_count: length(candidates)
     )
 
-    {allowed_candidates, skipped_candidates} =
-      Maraithon.Todos.SignalGate.partition_candidates(candidates)
-
-    case Todos.upsert_many(user_id, allowed_candidates, model_selected?: true) do
-      {:ok, todos} ->
-        {:ok,
-         %{
-           todos: todos,
-           decisions:
-             direct_upsert_decisions(todos) ++ signal_gate_skip_decisions(skipped_candidates),
-           skipped_count: length(skipped_candidates),
-           usage: %{},
-           fallback_reason: Maraithon.Redaction.error_summary(reason)
-         }}
-
-      {:error, direct_reason} ->
-        {:error, {:todo_ingest_failed, reason, direct_reason}}
-    end
-  end
-
-  defp direct_upsert_decisions(todos) do
-    todos
-    |> Enum.with_index()
-    |> Enum.map(fn {todo, index} ->
-      %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
-    end)
-  end
-
-  defp signal_gate_skip_decisions(skipped_candidates) do
-    skipped_candidates
-    |> Enum.with_index()
-    |> Enum.map(fn {%{reason: reason}, index} ->
-      %{candidate_index: index, mode: "signal_gate_skip", reasoning: reason}
-    end)
+    # A model outage cannot bypass ownership assessment. The existing durable
+    # per-user lane retries these candidates without blocking the Agent.
+    Maraithon.Todos.DeferredIngestion.enqueue(user_id, candidates,
+      source: "chief_of_staff_commitment_tracker"
+    )
   end
 
   defp commitment_todo_candidate(todo, tracker_input) when is_map(todo) do

@@ -5,6 +5,8 @@ import Foundation
 /// Keeps user-facing source metrics in outcome language instead of
 /// sync-engine vocabulary like "accepted" or "duplicates."
 enum SourceDetailCopy {
+    static let sourcesEyebrow = "Mac sources"
+    static let statusSectionTitle = "Status"
     static let capabilitiesSectionTitle = "What your assistant can use"
     static let privacySectionTitle = "Control and privacy"
     static let activitySectionTitle = "Available context"
@@ -132,6 +134,25 @@ enum SourceDetailCopy {
 
         sentences.append("Checked \(relativeSyncTime(lastSyncAt, relativeTo: now)).")
         return sentences.joined(separator: " ")
+    }
+
+    /// Title line of one check-history row.
+    static func checkHistoryTitle(added: Int) -> String {
+        "\(added.formatted(.number)) added"
+    }
+
+    /// Detail line of one check-history row, reusing the column titles
+    /// the table used so the vocabulary stays identical.
+    static func checkHistoryDetail(found: Int, alreadyKnown: Int, needAnotherCheck: Int) -> String {
+        [
+            "Found \(found.formatted(.number))",
+            "\(alreadySyncedTitle) \(alreadyKnown.formatted(.number))",
+            "\(notSyncedTitle) \(needAnotherCheck.formatted(.number))"
+        ].joined(separator: " · ")
+    }
+
+    static func lastSuccessfulCheckLine(_ date: Date) -> String {
+        "Last successful check: \(SourceStat.relative(date))"
     }
 
     static func firstSyncDescription(displayName: String) -> String {

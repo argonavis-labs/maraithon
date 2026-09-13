@@ -1,0 +1,76 @@
+{
+  "slice": 2,
+  "status": "complete",
+  "code_commit": "3e5086103299",
+  "revision": "maraithon-00285-t2f",
+  "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-3e5086103299-20260908224459-1",
+  "cloud_build": "9cac7e33-5ce6-473d-b052-e7456bbe626c",
+  "build_status": "SUCCESS",
+  "local_verification": {
+    "compile": "mix compile --warnings-as-errors",
+    "tests": 48,
+    "failures": 0,
+    "files": [
+      "test/maraithon/telegram_assistant/action_reconciliation_test.exs",
+      "test/maraithon/telegram_assistant/prepared_action_state_test.exs",
+      "test/maraithon/telegram_assistant/continuation_test.exs",
+      "test/maraithon/telegram_assistant/runner_test.exs"
+    ]
+  },
+  "production_verification": {
+    "execution": "maraithon-todo-validation-vrjt9",
+    "receipt": {
+      "status": "executed",
+      "at": "2026-09-08T22:52:39.194164Z",
+      "kind": "controlled_production_action_reconciliation",
+      "action_id": "cc2f558e-5d65-42d2-89fb-5d2f80ef1199",
+      "job": {
+        "id": "2a71f030-0271-4c9c-a559-ef311b637065",
+        "status": "completed",
+        "result": {
+          "checks": 1,
+          "state": "executed"
+        },
+        "assignments": [
+          {
+            "id": "9bdd9701-4a76-4bfa-a14d-bb7f0dcdf615",
+            "outcome": "completed",
+            "outcome_evidence": true,
+            "provider_boundary": "outcome_known",
+            "state": "settled"
+          }
+        ],
+        "attempts": 0,
+        "scheduled_at": "2026-09-08T22:50:31.741313Z",
+        "claimed_at": null,
+        "completed_at": "2026-09-08T22:50:32.334298Z"
+      },
+      "synthetic_provider_receipt": true,
+      "no_external_mutation_dispatched": true,
+      "execution_attempts": 1,
+      "receipt": {
+        "command_id": "cc2f558e-5d65-42d2-89fb-5d2f80ef1199",
+        "confirmed_payload_hash": "6fc750fabc6af7aac71aa62e702f310f73a2679559d66a93e097da489fc2ccaa",
+        "observed_at": "2026-09-08T22:50:32.197590Z",
+        "reconciled": true,
+        "source": "browser"
+      },
+      "todo_status": "open"
+    }
+  },
+  "limits": [
+    "Production verification used a controlled saved browser receipt. No actual browser interaction or message to another person was dispatched.",
+    "Gmail and calendar dropped-response scenarios use controlled provider responses in focused tests.",
+    "Legacy approvals without a frozen identity stay reviewable. Missing provider evidence never authorises replay.",
+    "This does not prove exactly-once arbitrary browser effects without a device receipt."
+  ],
+  "runtime_snapshot": {
+    "phase": "ready",
+    "admitting_partitions": 64,
+    "unready_partitions": 0,
+    "open_tasks": 0,
+    "unproven_tasks": 0,
+    "agent_leases": 1,
+    "limit": "This snapshot is not the complete runtime health checklist."
+  }
+}

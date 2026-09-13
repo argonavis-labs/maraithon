@@ -17,15 +17,29 @@ struct ReconnectSuggestionsSection: View {
             Section {
                 ForEach(suggestions) { suggestion in
                     row(for: suggestion)
+                        .crmListRow()
                 }
             } header: {
-                HStack(spacing: 6) {
+                HStack(spacing: Runner.Spacing.compact) {
                     Image(systemName: "sparkles")
-                        .foregroundStyle(.tint)
-                    Text("Reconnect")
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.accent)
+                        .accessibilityHidden(true)
+                    RunnerSectionLabel("Reconnect")
                 }
+                .padding(.horizontal, Runner.Layout.pageInset)
+                .padding(.top, Runner.Spacing.roomy)
+                .padding(.bottom, Runner.Spacing.xsmall)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Runner.Palette.background)
+                .listRowInsets(EdgeInsets())
             } footer: {
                 Text("People worth reaching out to, based on your work and how you usually keep in touch.")
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+                    .padding(.horizontal, Runner.Layout.pageInset)
+                    .padding(.top, Runner.Spacing.small)
+                    .listRowInsets(EdgeInsets())
             }
         }
     }
@@ -44,7 +58,7 @@ struct ReconnectSuggestionsSection: View {
                 } label: {
                     Label(CRMViewCopy.reachedOutActionTitle, systemImage: "phone.arrow.up.right")
                 }
-                .tint(.blue)
+                .tint(Runner.Palette.info)
             }
         } else {
             ReconnectCard(suggestion: suggestion)
@@ -64,42 +78,47 @@ private struct ReconnectCard: View {
         ReconnectPresentation.category(for: suggestion)
     }
 
+    private var tone: RunnerBadge.Tone {
+        RunnerBadge.Tone.from(tint: category.tint)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+            HStack(spacing: Runner.Spacing.small) {
                 Image(systemName: category.systemImage)
-                    .font(.subheadline)
-                    .foregroundStyle(category.tint)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(tone.text)
                     .accessibilityHidden(true)
 
                 Text(suggestion.person.displayName)
-                    .font(.headline)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
                     .lineLimit(1)
 
-                Spacer()
+                Spacer(minLength: Runner.Spacing.small)
 
                 StatusPill(title: category.label, tint: category.tint)
             }
 
             Text(suggestion.reason)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
+                .font(Runner.Typography.small)
+                .foregroundStyle(Runner.Palette.foreground80)
                 .fixedSize(horizontal: false, vertical: true)
 
             if let signal = ReconnectPresentation.signalLine(for: suggestion) {
                 Text(signal)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
             }
 
             if let action = suggestion.suggestedAction, !action.isEmpty {
                 Label(action, systemImage: "arrow.turn.up.right")
-                    .font(.caption)
-                    .foregroundStyle(.tint)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.accent)
                     .labelStyle(.titleAndIcon)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, Runner.Spacing.xsmall)
     }
 }

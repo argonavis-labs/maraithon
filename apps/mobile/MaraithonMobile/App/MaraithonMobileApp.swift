@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = PushCoordinator.shared
+        RunnerAppearance.apply()
         return true
     }
 
@@ -68,6 +69,7 @@ struct MaraithonMobileApp: App {
             RootView()
                 .environment(sessionStore)
                 .modelContainer(modelContainer)
+                .tint(Runner.Palette.accent)
         }
     }
 }

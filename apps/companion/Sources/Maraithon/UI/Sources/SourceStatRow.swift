@@ -1,26 +1,11 @@
 import SwiftUI
 
-/// Compact native row for a source detail metric.
+/// Card row for one source detail metric: muted title and caption on the
+/// left, tabular value on the right.
 struct SourceStatRow: View {
     let stat: SourceStat
 
     var body: some View {
-        LabeledContent {
-            Text(stat.value)
-                .font(.body.weight(.semibold))
-                .monospacedDigit()
-        } label: {
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
-                Text(stat.title)
-                    .font(.body)
-                if let caption = stat.caption {
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, Tokens.Spacing.small)
-        .accessibilityElement(children: .combine)
+        RunnerKeyValueRow(label: stat.title, caption: stat.caption, value: stat.value)
     }
 }

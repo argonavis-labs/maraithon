@@ -181,6 +181,8 @@ defmodule MaraithonWeb.MobileChatController do
     end
   end
 
+  defp status_for_error(:assistant_queue_full), do: :too_many_requests
+  defp status_for_error(:client_message_id_conflict), do: :conflict
   defp status_for_error(:message_too_long), do: :unprocessable_entity
   defp status_for_error(:missing_client_message_id), do: :unprocessable_entity
   defp status_for_error(:empty_message), do: :unprocessable_entity

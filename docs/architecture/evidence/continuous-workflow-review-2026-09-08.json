@@ -1,0 +1,120 @@
+{
+  "at": "2026-09-08T21:27:25.181178Z",
+  "jobs": [
+    {
+      "id": "2dbf0326-ac2d-4ff7-aeb9-36923c5a1ce4",
+      "status": "completed",
+      "inserted_at": "2026-09-08T21:26:26.180891Z",
+      "scheduled_at": "2026-09-08T21:26:25.492893Z",
+      "completed_at": "2026-09-08T21:26:39.600553Z",
+      "attempts": 0,
+      "last_error": null,
+      "partition_role": "backstop",
+      "summary": {
+        "checked": 33,
+        "completed": 0,
+        "degraded_sources": [],
+        "model_calls": 1,
+        "no_new_evidence": 0,
+        "outcome": "reviewed",
+        "pending_reviews": 0,
+        "unchanged": 0
+      },
+      "memo_todos": 33,
+      "calendar_items": 241,
+      "calendar_reused": true,
+      "calendar_refreshed_at": "2026-09-08T21:23:37.142889Z"
+    },
+    {
+      "id": "074671e2-7a80-4f22-9ebc-f585ffd3ce40",
+      "status": "completed",
+      "inserted_at": "2026-09-08T21:25:24.835944Z",
+      "scheduled_at": "2026-09-08T21:25:24.377665Z",
+      "completed_at": "2026-09-08T21:25:26.688035Z",
+      "attempts": 0,
+      "last_error": null,
+      "partition_role": "backstop",
+      "summary": {
+        "checked": 0,
+        "completed": 0,
+        "degraded_sources": [],
+        "model_calls": 0,
+        "no_new_evidence": 0,
+        "outcome": "unchanged_context",
+        "pending_reviews": 0,
+        "unchanged": 33
+      },
+      "memo_todos": 33,
+      "calendar_items": 241,
+      "calendar_reused": true,
+      "calendar_refreshed_at": "2026-09-08T21:23:37.142889Z"
+    },
+    {
+      "id": "1626722e-9061-431a-a977-4a62a2609fe2",
+      "status": "completed",
+      "inserted_at": "2026-09-08T21:24:23.697093Z",
+      "scheduled_at": "2026-09-08T21:24:23.102455Z",
+      "completed_at": "2026-09-08T21:24:25.305306Z",
+      "attempts": 0,
+      "last_error": null,
+      "partition_role": "backstop",
+      "summary": {
+        "checked": 0,
+        "completed": 0,
+        "degraded_sources": [],
+        "model_calls": 0,
+        "no_new_evidence": 0,
+        "outcome": "unchanged_context",
+        "pending_reviews": 0,
+        "unchanged": 33
+      },
+      "memo_todos": 33,
+      "calendar_items": 241,
+      "calendar_reused": true,
+      "calendar_refreshed_at": "2026-09-08T21:23:37.142889Z"
+    },
+    {
+      "id": "1419515e-48ff-4fa0-99bb-9803bb1349ad",
+      "status": "completed",
+      "inserted_at": "2026-09-08T21:23:22.576087Z",
+      "scheduled_at": "2026-09-08T21:23:22.263957Z",
+      "completed_at": "2026-09-08T21:23:49.889931Z",
+      "attempts": 0,
+      "last_error": null,
+      "partition_role": "backstop",
+      "summary": {
+        "checked": 33,
+        "completed": 0,
+        "degraded_sources": [],
+        "model_calls": 1,
+        "no_new_evidence": 0,
+        "outcome": "reviewed",
+        "pending_reviews": 0,
+        "unchanged": 0
+      },
+      "memo_todos": 33,
+      "calendar_items": 241,
+      "calendar_reused": false,
+      "calendar_refreshed_at": "2026-09-08T21:23:37.142889Z"
+    }
+  ],
+  "workflow": [
+    {
+      "owner": "You",
+      "revision": "4",
+      "state": "working",
+      "status": "open"
+    }
+  ],
+  "recurring": [
+    {
+      "job_type": "runtime_recurring:todo_completion_sweep",
+      "last_error": null,
+      "scheduled_at": "2026-09-08T21:27:26.272872",
+      "status": "pending"
+    }
+  ],
+  "source_revision": "maraithon-00280-t9h",
+  "execution": "maraithon-todo-validation-lkk2r",
+  "scope": "Read-only job summaries and workflow state; this is not a full runtime health audit."
+}

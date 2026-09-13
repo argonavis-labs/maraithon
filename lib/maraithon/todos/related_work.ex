@@ -1,6 +1,6 @@
 defmodule Maraithon.Todos.RelatedWork do
   @moduledoc """
-  Retrieves older open work for the intake model without a provider round trip.
+  Retrieves related open and closed work without a provider round trip.
 
   Text overlap only selects context: the model still decides whether the owner,
   request, and source evidence describe the same outstanding work. In particular,
@@ -13,14 +13,12 @@ defmodule Maraithon.Todos.RelatedWork do
   alias Maraithon.Repo
   alias Maraithon.Todos.Todo
 
-  @candidate_limit 8
-  @matches_per_candidate 5
+  @matches_per_candidate 12
   @text_bytes 4_000
 
   def find(user_id, candidates) when is_binary(user_id) and is_list(candidates) do
     texts =
       candidates
-      |> Enum.take(@candidate_limit)
       |> Enum.map(&candidate_text/1)
       |> Enum.reject(&(&1 == ""))
       |> Enum.uniq()
@@ -30,7 +28,7 @@ defmodule Maraithon.Todos.RelatedWork do
 
   defp retrieve(user_id, texts) do
     # Compute the user's compact search documents once for the whole handoff.
-    # Only IDs leave this query; hydrate at most five matches per candidate.
+    # Only IDs leave this query; hydrate a bounded set per candidate.
     # Weight overlap by inverse document frequency: distinctive people/ticket
     # references must outrank boilerplate repeated across hundreds of reminders.
     # Round-robin rank keeps every candidate represented ahead of recent work
@@ -44,7 +42,7 @@ defmodule Maraithon.Todos.RelatedWork do
       SELECT id, inserted_at,
         tsvector_to_array(to_tsvector('english', concat_ws(' ', title, summary, next_action))) AS lexemes
       FROM todos
-      WHERE user_id = $1 AND status IN ('open', 'snoozed')
+      WHERE user_id = $1 AND coalesce(metadata->>'duplicate_of_todo_id', '') = ''
     ), matches AS MATERIALIZED (
       SELECT id, inserted_at, lexeme
       FROM documents CROSS JOIN LATERAL unnest(lexemes) AS lexeme

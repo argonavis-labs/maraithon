@@ -17,8 +17,8 @@ struct TodoFilterStrip: View {
             },
             accessibilityNoun: "work items"
         )
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.vertical, Runner.Spacing.small)
+        .background(Runner.Palette.background)
     }
 
     private func tint(for filter: TodoFilter) -> Color {

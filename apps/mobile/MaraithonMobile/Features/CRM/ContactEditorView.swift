@@ -33,47 +33,74 @@ struct ContactEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(ContactEditorCopy.personSectionTitle) {
+                Section {
+                    RunnerPageHeader(
+                        eyebrow: "People",
+                        title: contact == nil ? ContactEditorCopy.newNavigationTitle : ContactEditorCopy.editNavigationTitle
+                    )
+                    .crmListBlock(top: Runner.Spacing.small)
+                }
+
+                Section {
+                    RunnerSectionLabel(ContactEditorCopy.personSectionTitle)
+                        .crmSectionLabelRow()
                     TextField(ContactEditorCopy.namePlaceholder, text: $name)
                         .accessibilityIdentifier("contact-name-field")
+                        .editorField()
                     TextField(ContactEditorCopy.contextPlaceholder, text: $company)
                         .accessibilityIdentifier("contact-company-field")
+                        .editorField()
                     TextField(ContactEditorCopy.emailPlaceholder, text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("contact-email-field")
+                        .editorField()
                     TextField(ContactEditorCopy.phonePlaceholder, text: $phone)
                         .keyboardType(.phonePad)
                         .accessibilityIdentifier("contact-phone-field")
+                        .editorField()
                 }
 
-                Section(ContactEditorCopy.relationshipSectionTitle) {
+                Section {
+                    RunnerSectionLabel(ContactEditorCopy.relationshipSectionTitle)
+                        .crmSectionLabelRow()
                     Picker(ContactEditorCopy.statusPickerTitle, selection: $status) {
                         ForEach(ContactStatus.allCases) { status in
                             Text(status.title).tag(status)
                         }
                     }
+                    .pickerStyle(.menu)
+                    .editorField()
                     Picker(ContactEditorCopy.circlePickerTitle, selection: $dealStage) {
                         ForEach(DealStage.allCases) { stage in
                             Text(stage.title).tag(stage)
                         }
                     }
+                    .pickerStyle(.menu)
+                    .editorField()
                 }
 
-                Section(ContactEditorCopy.notesSectionTitle) {
+                Section {
+                    RunnerSectionLabel(ContactEditorCopy.notesSectionTitle)
+                        .crmSectionLabelRow()
                     TextField(ContactEditorCopy.notesPlaceholder, text: $notes, axis: .vertical)
                         .lineLimit(3...8)
                         .accessibilityIdentifier("contact-notes-field")
+                        .editorField()
                 }
 
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.destructiveText)
+                            .crmListBlock(top: Runner.Spacing.medium)
                     }
                 }
             }
-            .navigationTitle(contact == nil ? ContactEditorCopy.newNavigationTitle : ContactEditorCopy.editNavigationTitle)
+            .listStyle(.plain)
+            .runnerPage()
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -165,6 +192,16 @@ struct ContactEditorView: View {
         } catch {
             errorMessage = MobileErrorCopy.message(for: error)
         }
+    }
+}
+
+private extension View {
+    /// Editor field row: workspace body type on the ground with hairlines.
+    func editorField() -> some View {
+        self
+            .font(Runner.Typography.body)
+            .foregroundStyle(Runner.Palette.foreground)
+            .crmListRow()
     }
 }
 

@@ -1,21 +1,21 @@
 import SwiftUI
 
-/// Desktop Recall panel. Cross-source semantic + substring search over
+/// Desktop Recall page. Cross-source semantic + substring search over
 /// every mirror the user has paired (iMessage, Notes, Voice Memos,
 /// Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM,
 /// deep memory) in one input box.
 ///
 /// UX choices:
-///   - Single `TextField` at the top with a magnifying-glass prompt.
-///   - Results render as a clean `List` with one row per hit, ordered
-///     by descending recall score (the server's blended recency +
+///   - Workspace page header, then one `RunnerSearchField` and a Search
+///     button.
+///   - Results render as hairline-separated rows in a card, ordered by
+///     descending recall score (the server's blended recency +
 ///     substring + source-trust signal).
-///   - Each row shows the source icon, title, snippet, and a relative
-///     date so the user can verify provenance at a glance.
-///   - Tapping a row opens the underlying record in the native macOS
+///   - Each row shows the source glyph, title, snippet, and the source
+///     name plus a relative date so the user can verify provenance.
+///   - Clicking a row opens the underlying record in the native macOS
 ///     app via URL scheme when possible (notes://, reminders://,
-///     ical://, voicememos://, messages://) and falls back to a
-///     read-only in-app preview otherwise.
+///     ical://, voicememos://, messages://) and is a no-op otherwise.
 struct RecallView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -24,73 +24,82 @@ struct RecallView: View {
     @State private var isSearching: Bool = false
     @State private var lastError: String? = nil
     @State private var lastQuery: String = ""
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
-            searchField
-
-            if let lastError {
-                Label(lastError, systemImage: "exclamationmark.triangle")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            if isSearching {
-                ProgressView(RecallCopy.searchingLabel)
-                    .progressViewStyle(.linear)
-                    .frame(maxWidth: 240)
-            } else if !lastQuery.isEmpty && results.isEmpty {
-                ContentUnavailableView(
-                    RecallCopy.noMatchesTitle,
-                    systemImage: "magnifyingglass",
-                    description: Text(RecallCopy.noMatchesDescription(for: lastQuery))
-                )
-            } else if results.isEmpty {
-                placeholder
-            } else {
-                resultsList
-            }
+        RunnerPage {
+            RunnerPageHeader(
+                eyebrow: RecallCopy.eyebrow,
+                title: RecallCopy.title,
+                subtitle: RecallCopy.subtitle
+            )
+            searchRow
+                .padding(.vertical, Tokens.Spacing.large)
+            resultsCard
         }
-        .padding(Tokens.Spacing.large)
-        .navigationTitle("Recall")
     }
 
     // MARK: - Search field
 
-    private var searchField: some View {
+    private var searchRow: some View {
         HStack(spacing: Tokens.Spacing.small) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Ask anything across your Mac…", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { submit() }
+            RunnerSearchField(
+                placeholder: RecallCopy.searchPlaceholder,
+                text: $query,
+                focused: $searchFocused,
+                onSubmit: { submit() },
+                onClear: { query = "" }
+            )
+            .frame(maxWidth: Tokens.Layout.searchFieldMaxWidth)
+
             Button(RecallCopy.searchButtonTitle) { submit() }
                 .keyboardShortcut(.return, modifiers: [])
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RunnerButtonStyle(.primary))
                 .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
 
-    // MARK: - Results list
+    // MARK: - Results
 
-    private var resultsList: some View {
-        List(results) { hit in
-            Button {
-                open(hit)
-            } label: {
-                RecallResultRow(hit: hit)
+    private var resultsCard: some View {
+        RunnerCard {
+            if isSearching {
+                searchingRow
+            } else if let lastError {
+                RunnerEmptyState(title: lastError)
+            } else if !lastQuery.isEmpty && results.isEmpty {
+                RunnerEmptyState(
+                    title: RecallCopy.noMatchesTitle,
+                    description: RecallCopy.noMatchesDescription(for: lastQuery)
+                )
+            } else if results.isEmpty {
+                RunnerEmptyState(
+                    title: RecallCopy.placeholderTitle,
+                    description: RecallCopy.placeholderDescription
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(results.enumerated()), id: \.element.id) { index, hit in
+                        if index > 0 { RunnerHairline() }
+                        RecallResultRow(hit: hit) { open(hit) }
+                    }
+                }
             }
-            .buttonStyle(.plain)
         }
-        .listStyle(.inset)
+        .frame(minHeight: Tokens.SourcesLayout.recallResultsMinHeight, alignment: .top)
     }
 
-    private var placeholder: some View {
-        ContentUnavailableView(
-            "Recall anything",
-            systemImage: "magnifyingglass.circle",
-            description: Text("Notes, Messages, Voice Memos, Calendar, Reminders, Files, Browser History — one search across all of them.")
-        )
+    private var searchingRow: some View {
+        HStack(spacing: Tokens.Spacing.small) {
+            ProgressView()
+                .controlSize(.small)
+            Text(RecallCopy.searchingLabel)
+                .font(Tokens.Typography.small)
+                .foregroundStyle(Tokens.Palette.mutedForeground)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Tokens.SourcesLayout.emptyStateVerticalPadding)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Actions
@@ -152,134 +161,6 @@ struct RecallView: View {
         default:
             return nil
         }
-    }
-}
-
-private struct RecallResultRow: View {
-    let hit: RecallResult
-
-    var body: some View {
-        HStack(alignment: .top, spacing: Tokens.Spacing.medium) {
-            Image(systemName: symbol(for: hit.source))
-                .foregroundStyle(.secondary)
-                .frame(width: Tokens.IconSize.regular)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: Tokens.Spacing.small) {
-                    Text(RecallCopy.resultTitle(for: hit))
-                        .font(.callout)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(relativeDate)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let snippet = hit.snippet, !snippet.isEmpty {
-                    Text(snippet)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                Text(RecallCopy.sourceLabel(for: hit.source))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .contentShape(Rectangle())
-        .padding(.vertical, Tokens.Spacing.xsmall)
-    }
-
-    private var relativeDate: String {
-        guard let ts = hit.timestamp else { return "" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: ts, relativeTo: Date())
-    }
-
-    private func symbol(for source: String) -> String {
-        switch source {
-        case "local_messages": return "message"
-        case "local_notes": return "note.text"
-        case "local_voice_memos": return "waveform"
-        case "local_calendar": return "calendar"
-        case "local_reminders": return "checklist"
-        case "local_files": return "doc.text"
-        case "local_browser_history": return "safari"
-        case "maraithon_memory": return "brain"
-        case "crm_people": return "person.crop.circle"
-        default: return "doc"
-        }
-    }
-
-}
-
-enum RecallCopy {
-    static let searchingLabel = "Searching…"
-    static let searchButtonTitle = "Search"
-    static let noMatchesTitle = "No matching context available"
-
-    static func searchError(_ error: Error) -> String {
-        "Search could not finish. \(CompanionErrorCopy.message(for: error))"
-    }
-
-    static func noMatchesDescription(for query: String) -> String {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = trimmed.isEmpty
-            ? "Maraithon searched context already available to your assistant."
-            : "Maraithon searched context already available to your assistant for \"\(trimmed)\"."
-        return "\(prefix) Try another person, thread, phrase, or date from that context."
-    }
-
-    static func resultTitle(for hit: RecallResult) -> String {
-        if let title = hit.title?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !title.isEmpty {
-            return title
-        }
-
-        switch hit.source {
-        case "local_messages": return "Message"
-        case "local_notes": return "Note"
-        case "local_voice_memos": return "Voice memo"
-        case "local_calendar": return "Calendar event"
-        case "local_reminders": return "Reminder"
-        case "local_files": return "File"
-        case "local_browser_history": return "Browser visit"
-        case "maraithon_memory": return "Memory"
-        case "crm_people": return "Contact"
-        default: return "Search result"
-        }
-    }
-
-    static func sourceLabel(for source: String) -> String {
-        switch source {
-        case "local_messages": return "Messages"
-        case "local_notes": return "Notes"
-        case "local_voice_memos": return "Voice Memos"
-        case "local_calendar": return "Calendar"
-        case "local_reminders": return "Reminders"
-        case "local_files": return "Files"
-        case "local_browser_history": return "Browser History"
-        case "maraithon_memory": return "Memory"
-        case "crm_people": return "Contacts"
-        default: return humanizedSourceLabel(source)
-        }
-    }
-
-    private static func humanizedSourceLabel(_ source: String) -> String {
-        let cleaned = source
-            .replacingOccurrences(of: "local_", with: "")
-            .replacingOccurrences(of: "maraithon_", with: "")
-            .replacingOccurrences(of: "crm_", with: "")
-            .replacingOccurrences(of: "_", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !cleaned.isEmpty else { return "Source" }
-
-        return cleaned
-            .split(separator: " ")
-            .map { word in
-                word.prefix(1).uppercased() + String(word.dropFirst())
-            }
-            .joined(separator: " ")
     }
 }
 

@@ -7,24 +7,25 @@ struct MetricTile: View {
     var tint: Color = .accentColor
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
             Label(title, systemImage: systemImage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
                 .lineLimit(1)
 
             Text(value)
-                .font(.title3.weight(.semibold))
+                .font(Runner.Typography.sectionTitle)
+                .foregroundStyle(Runner.Palette.foreground)
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(Runner.Spacing.tight)
+        .background(Runner.Palette.background, in: RoundedRectangle(cornerRadius: Runner.Radius.control, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(tint.opacity(0.25), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Runner.Radius.control, style: .continuous)
+                .stroke(Runner.Palette.border, lineWidth: Runner.Stroke.hairline)
         }
     }
 }

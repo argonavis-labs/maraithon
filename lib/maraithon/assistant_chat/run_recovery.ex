@@ -1,20 +1,15 @@
 defmodule Maraithon.AssistantChat.RunRecovery do
   @moduledoc """
-  Recovers mobile assistant runs stranded by restarts.
+  Bounded repair for accepted assistant requests and legacy orphan runs.
 
-  `Maraithon.Runtime.RecurringJobs` supplies the durable cadence; this module
-  owns only one bounded recovery pass. Queued runs are dispatched as in-memory
-  casts to per-conversation workers. A deploy between enqueue and execution
-  loses the cast while the queued run row survives. This pass re-dispatches
-  stale queued runs
-  (idempotently — `run_queued_request` skips runs that already advanced)
-  and fails runs stuck "running" far past every server-side wall clock so
-  conversations never wedge.
+  The recurring cadence is a backstop. New requests already have a durable
+  job. Recovery uses the source turn's persisted run identity, never temporal
+  proximity, and leaves owned or termination-pending work to the job runtime.
   """
 
   import Ecto.Query
 
-  alias Maraithon.AssistantChat.ThreadWorker
+  alias Maraithon.AssistantChat.{Execution, ThreadWorker}
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.Run
@@ -58,6 +53,7 @@ defmodule Maraithon.AssistantChat.RunRecovery do
     |> order_by(asc: :inserted_at)
     |> limit(10)
     |> Repo.all()
+    |> Enum.reject(&Execution.job_active?(&1.id))
     |> Enum.count(fn run ->
       case user_turn_for(run) do
         %Turn{} = turn ->
@@ -75,25 +71,22 @@ defmodule Maraithon.AssistantChat.RunRecovery do
             })
 
         _ ->
-          _ = TelegramAssistant.fail_run(run, :queued_run_unrecoverable, "failed")
+          _ = fail_if_unowned(run, :queued_run_source_missing, "failed")
           false
       end
     end)
   end
 
-  # The user turn that triggered a queued run is the newest user turn in its
-  # conversation at enqueue time (runs are created in the same transaction
-  # breath as the turn, and a conversation has one queued run at a time).
   defp user_turn_for(%Run{} = run) do
-    slack = DateTime.add(run.inserted_at, 2, :second)
-
     Turn
     |> where([t], t.conversation_id == ^run.conversation_id and t.role == "user")
-    |> where([t], t.inserted_at <= ^slack)
-    |> order_by(desc: :inserted_at)
-    |> limit(1)
-    |> Repo.one()
-    |> Turn.hydrate()
+    |> where([t], t.assistant_run_id == ^run.id)
+    |> limit(2)
+    |> Repo.all()
+    |> case do
+      [turn] -> Turn.hydrate(turn)
+      _ -> nil
+    end
   end
 
   defp expire_ancient_queued_runs do
@@ -105,7 +98,7 @@ defmodule Maraithon.AssistantChat.RunRecovery do
     |> limit(25)
     |> Repo.all()
     |> Enum.count(fn run ->
-      match?({:ok, _}, TelegramAssistant.fail_run(run, :queued_run_expired, "failed"))
+      match?({:ok, _}, fail_if_unowned(run, :queued_run_expired, "failed"))
     end)
   end
 
@@ -123,8 +116,27 @@ defmodule Maraithon.AssistantChat.RunRecovery do
         started_at: run.started_at
       )
 
-      match?({:ok, _}, TelegramAssistant.fail_run(run, :run_lost_after_restart, "degraded"))
+      match?({:ok, _}, fail_if_unowned(run, :run_lost_after_restart, "degraded"))
     end)
+  end
+
+  defp fail_if_unowned(run, reason, status) do
+    # Enqueue takes this same privacy/user lock. Recheck status and ownership
+    # under the lock so a stale sweep cannot fail newly accepted/owned work.
+    case Repo.transaction(fn ->
+           _ = Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(run.user_id)
+           current = Repo.one(from r in Run, where: r.id == ^run.id, lock: "FOR UPDATE")
+
+           if current && current.status == run.status && current.started_at == run.started_at &&
+                not Execution.job_active?(run.id) do
+             TelegramAssistant.fail_run(current, reason, status)
+           else
+             {:error, :run_advanced_or_owned}
+           end
+         end) do
+      {:ok, result} -> result
+      error -> error
+    end
   end
 
   defp seconds_ago(seconds) do

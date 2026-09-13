@@ -714,7 +714,8 @@ defmodule Maraithon.Connectors.Gmail do
           subject,
           body,
           reply_headers["message_id"],
-          reply_headers["references"]
+          reply_headers["references"],
+          optional_attr(attrs, "message_id_header")
         )
 
       request_body =
@@ -1154,10 +1155,11 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp build_raw_message(to, subject, body, in_reply_to, references) do
+  defp build_raw_message(to, subject, body, in_reply_to, references, message_id_header) do
     [
       "To: #{to}",
       "Subject: #{subject}",
+      Maraithon.Tools.GmailApiHelpers.message_id_header(message_id_header),
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=UTF-8",
       if(present?(in_reply_to), do: "In-Reply-To: #{in_reply_to}"),

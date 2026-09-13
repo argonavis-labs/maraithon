@@ -411,7 +411,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
         |> Map.put("_maraithon_execution_reclaimable", true)
 
       stale_action
-      |> Ecto.Changeset.change(payload: stale_payload)
+      |> PreparedAction.changeset(%{payload: stale_payload})
       |> Repo.update!()
 
       assert {:ok, %{prepared_action: unknown}} =
@@ -438,7 +438,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
        ctx do
     configure_scripted_executor(
       [
-        {:return, {:error, {:http_error, 503, "provider unavailable"}}},
+        {:return, {:error, {:http_error, 429, "rate limited"}}},
         {:return, {:error, {:api_error, 409, "conflict"}}},
         {:return, {:error, %{status: 429, reason: "rate limited"}}}
       ],
@@ -711,7 +711,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
         target_type: "gmail_thread"
       )
 
-    Repo.query!("""
+    fault_ddl("""
     CREATE FUNCTION maraithon_test_fail_mobile_prepared_executed_write()
     RETURNS trigger AS $$
     BEGIN
@@ -723,7 +723,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     $$ LANGUAGE plpgsql
     """)
 
-    Repo.query!("""
+    fault_ddl("""
     CREATE TRIGGER maraithon_test_fail_mobile_prepared_executed_write
     BEFORE UPDATE ON telegram_prepared_actions
     FOR EACH ROW
@@ -736,12 +736,12 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
           "client_message_id" => Ecto.UUID.generate()
         })
       after
-        Repo.query!(
+        fault_ddl(
           "DROP TRIGGER maraithon_test_fail_mobile_prepared_executed_write " <>
             "ON telegram_prepared_actions"
         )
 
-        Repo.query!("DROP FUNCTION maraithon_test_fail_mobile_prepared_executed_write()")
+        fault_ddl("DROP FUNCTION maraithon_test_fail_mobile_prepared_executed_write()")
       end
 
     assert {:ok, %{prepared_action: unknown}} = result
@@ -772,7 +772,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
         target_type: "project"
       )
 
-    Repo.query!("""
+    fault_ddl("""
     CREATE FUNCTION maraithon_test_fail_project_create_executed_write()
     RETURNS trigger AS $$
     BEGIN
@@ -784,7 +784,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     $$ LANGUAGE plpgsql
     """)
 
-    Repo.query!("""
+    fault_ddl("""
     CREATE TRIGGER maraithon_test_fail_project_create_executed_write
     BEFORE UPDATE ON telegram_prepared_actions
     FOR EACH ROW
@@ -795,12 +795,12 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
       try do
         TelegramAssistant.confirm_and_execute(action, durable: true)
       after
-        Repo.query!(
+        fault_ddl(
           "DROP TRIGGER maraithon_test_fail_project_create_executed_write " <>
             "ON telegram_prepared_actions"
         )
 
-        Repo.query!("DROP FUNCTION maraithon_test_fail_project_create_executed_write()")
+        fault_ddl("DROP FUNCTION maraithon_test_fail_project_create_executed_write()")
       end
 
     assert {:error, %PreparedAction{status: "confirmed"} = retryable, _checkpoint_reason} =
@@ -822,7 +822,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
 
   test "frozen payload tampering fails closed before another provider call", ctx do
     configure_scripted_executor([
-      {:return, {:error, {:http_error, 503, "provider unavailable"}}},
+      {:return, {:error, {:http_error, 429, "rate limited"}}},
       {:return, {:ok, %{"message" => "must not run"}}}
     ])
 
@@ -837,7 +837,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     assert is_binary(retryable.payload["_maraithon_confirmed_payload_sha256"])
 
     retryable
-    |> Ecto.Changeset.change(payload: Map.put(retryable.payload, "text", "tampered"))
+    |> PreparedAction.changeset(%{payload: Map.put(retryable.payload, "text", "tampered")})
     |> Repo.update!()
 
     assert {:ok, %{prepared_action: failed}} =
@@ -856,7 +856,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
   test "frozen draft update instruction cannot be flipped or deleted before retry", ctx do
     for mutation <- [:flip, :delete] do
       configure_scripted_executor([
-        {:return, {:error, {:http_error, 503, "provider unavailable"}}},
+        {:return, {:error, {:http_error, 429, "rate limited"}}},
         {:return, {:ok, %{"message" => "must not run"}}}
       ])
 
@@ -887,7 +887,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
         end
 
       retryable
-      |> Ecto.Changeset.change(payload: tampered_payload)
+      |> PreparedAction.changeset(%{payload: tampered_payload})
       |> Repo.update!()
 
       assert {:ok, %{prepared_action: failed}} =
@@ -964,6 +964,18 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     delivered = Repo.get!(PreparedAction, action.id)
     assert delivered.payload["_maraithon_result_delivery_state"] == "delivered"
     assert delivered.payload["_maraithon_result_delivery_attempts"] == 1
+  end
+
+  # Install the failure injector with the local test session's DDL authority,
+  # then run the application itself under the production runtime role.
+  defp fault_ddl(sql) do
+    Repo.query!("SET LOCAL ROLE NONE", [], log: false)
+
+    try do
+      Repo.query!(sql)
+    after
+      Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    end
   end
 
   defp configure_scripted_executor(script, extra_config \\ []) do

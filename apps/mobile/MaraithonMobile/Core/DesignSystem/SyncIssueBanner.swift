@@ -25,45 +25,44 @@ struct SyncIssueBanner: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: Runner.Spacing.snug) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.orange)
-                .frame(width: 20, height: 20)
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.cautionText)
+                .frame(width: Runner.Spacing.roomy, height: Runner.Spacing.roomy)
+                .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.xxsmall) {
                 Text(title)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(Runner.Typography.smallMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
 
                 Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: Runner.Spacing.small)
 
             if let buttonTitle, let retry {
                 Button(buttonTitle, action: retry)
-                    .font(.footnote.weight(.semibold))
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
             }
 
             Button(action: dismiss) {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+                    .frame(width: Runner.Layout.compactControlHeight, height: Runner.Layout.compactControlHeight)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
             .accessibilityLabel(dismissAccessibilityLabel)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
+        .padding(.horizontal, Runner.Spacing.medium)
+        .padding(.vertical, Runner.Spacing.snug)
+        .background(Runner.Palette.badgeFill(Runner.Palette.hueAmber))
+        .overlay(alignment: .bottom) { RunnerHairline() }
     }
 }

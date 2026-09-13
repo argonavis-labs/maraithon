@@ -15,18 +15,21 @@ struct ChatDetailView: View {
     var sourceAction: TodoSourceAction?
     var sourceActionSend: ((String, String?) async throws -> Void)?
     var quickPrompts: [ChiefOfStaffPrompt]
-    @State private var draft = ""
+    var workspaceHeader: ((@escaping (String) -> Void, Bool) -> AnyView)?
+    @Binding var requestedPrompt: String?
+    @SceneStorage private var draft: String
+    @State private var streamPreview: String?
+    @State private var connectionNotice: String?
     @State private var errorMessage: String?
     @State private var lastFailedMessage: String?
     @State private var isSending = false
-    @State private var isPollingRun = false
     @State private var isRenamingThread = false
     @State private var draftThreadTitle = ""
     @State private var didConsumeInitialPrompt = false
     @State private var sendTask: Task<Void, Never>?
     @State private var renameTask: Task<Void, Never>?
     @State private var deleteTask: Task<Void, Never>?
-    @State private var scenePollTask: Task<Void, Never>?
+    @State private var visibleMessageLimit = 60
     @State private var timelineRows: [ChatTimelineRow]
     @FocusState private var isComposerFocused: Bool
 
@@ -42,7 +45,9 @@ struct ChatDetailView: View {
         contextHeader: ChatContextHeader? = nil,
         sourceAction: TodoSourceAction? = nil,
         sourceActionSend: ((String, String?) async throws -> Void)? = nil,
-        quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat
+        quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat,
+        requestedPrompt: Binding<String?> = .constant(nil),
+        workspaceHeader: ((@escaping (String) -> Void, Bool) -> AnyView)? = nil
     ) {
         self.thread = thread
         self.focusComposerOnAppear = focusComposerOnAppear
@@ -53,6 +58,9 @@ struct ChatDetailView: View {
         self.sourceAction = sourceAction
         self.sourceActionSend = sourceActionSend
         self.quickPrompts = quickPrompts
+        self.workspaceHeader = workspaceHeader
+        _requestedPrompt = requestedPrompt
+        _draft = SceneStorage(wrappedValue: "", "chat.composer.\(thread.id.uuidString)")
         // Seed the timeline so the first frame renders without an empty flash;
         // it is kept fresh via onChange(of: thread.messages.count). The body
         // re-runs on every draft keystroke, so the sort must not live in a
@@ -65,132 +73,151 @@ struct ChatDetailView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
+        ScrollViewReader { proxy in
+            ScrollView {
+                // Measure variable-height draft cards before jumping to a
+                // new turn. Lazy height estimation can loop during a long
+                // programmatic scroll on iOS 26; bound the initial history.
+                VStack(spacing: 0) {
+                    if let workspaceHeader {
+                        workspaceHeader(send, isComposerDisabled)
+                            .padding(.bottom, Runner.Spacing.medium)
+                    }
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        if let contextHeader {
-                            ChatContextHeaderView(header: contextHeader)
-                                .padding(.bottom, 12)
+                    if let contextHeader {
+                        ChatContextHeaderView(header: contextHeader)
+                            .padding(.bottom, Runner.Spacing.tight)
+                    }
+
+                    if let sourceAction {
+                        SourceActionCardView(action: sourceAction, onSend: sourceActionSend)
+                            .padding(.bottom, Runner.Spacing.tight)
+                    }
+
+                    if timelineRows.isEmpty {
+                        emptyConversation
+                            .padding(.top, workspaceHeader == nil && contextHeader == nil ? 80 : Runner.Spacing.medium)
+                    } else {
+                        if timelineRows.count > visibleMessageLimit {
+                            Button("Show earlier messages") { visibleMessageLimit += 60 }
+                                .buttonStyle(RunnerButtonStyle(.plain, compact: true))
+                                .padding(.vertical, Runner.Spacing.tight)
                         }
+                        ForEach(timelineRows.suffix(visibleMessageLimit)) { row in
+                            if row.layout.showsDateHeader {
+                                ChatDateHeader(date: row.message.sentAt)
+                                    .padding(.top, Runner.Spacing.small)
+                                    .padding(.bottom, Runner.Spacing.small)
+                            }
 
-                        if let sourceAction {
-                            SourceActionCardView(action: sourceAction, onSend: sourceActionSend)
-                                .padding(.bottom, 12)
-                        }
-
-                        if timelineRows.isEmpty {
-                            emptyConversation
-                                .padding(.top, contextHeader == nil ? 80 : 24)
-                        } else {
-                            ForEach(timelineRows) { row in
-                                if row.layout.showsDateHeader {
-                                    ChatDateHeader(date: row.message.sentAt)
-                                        .padding(.top, 8)
-                                        .padding(.bottom, 8)
+                            MessageBubble(
+                                message: row.message,
+                                startsGroup: row.layout.startsGroup,
+                                endsGroup: row.layout.endsGroup,
+                                actionHandler: decide,
+                                prepareHandler: send,
+                                actionsDisabled: isComposerDisabled
+                            )
+                            .id(row.id)
+                            .padding(.top, row.layout.startsGroup ? Runner.Spacing.medium : Runner.Spacing.compact)
+                            .contextMenu {
+                                Button {
+                                    copy(row.message)
+                                } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
                                 }
 
-                                MessageBubble(
-                                    message: row.message,
-                                    startsGroup: row.layout.startsGroup,
-                                    endsGroup: row.layout.endsGroup,
-                                    actionHandler: decide
-                                )
-                                .id(row.id)
-                                .padding(.top, row.layout.startsGroup ? 8 : 2)
-                                .contextMenu {
-                                    Button {
-                                        copy(row.message)
-                                    } label: {
-                                        Label("Copy", systemImage: "doc.on.doc")
-                                    }
-
-                                    Button(role: .destructive) {
-                                        delete(row.message)
-                                    } label: {
-                                        Label(ChatDetailCopy.deleteMessageTitle, systemImage: "trash")
-                                    }
+                                Button(role: .destructive) {
+                                    delete(row.message)
+                                } label: {
+                                    Label(ChatDetailCopy.deleteMessageTitle, systemImage: "trash")
                                 }
                             }
                         }
-
-                        if thread.pendingRunID != nil {
-                            assistantPendingRow
-                                .padding(.top, 8)
-                        }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id(bottomAnchorID)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 12)
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .defaultScrollAnchor(.bottom)
-                .onChange(of: thread.messages.count) { _, _ in
-                    rebuildTimelineRows()
-                    scrollToBottom(proxy)
-                }
-                .onAppear {
-                    scrollToBottom(proxy, animated: false)
-                    if focusComposerOnAppear || thread.messages.isEmpty {
-                        isComposerFocused = true
+
+                    if thread.pendingRunID != nil {
+                        assistantPendingRow
+                            .padding(.top, Runner.Spacing.medium)
                     }
-                    consumeInitialPromptIfNeeded()
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(bottomAnchorID)
                 }
+                .padding(.horizontal, Runner.Layout.pageInset)
+                .padding(.top, Runner.Spacing.small)
+                .padding(.bottom, Runner.Spacing.tight)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .defaultScrollAnchor(workspaceHeader == nil ? .bottom : .top)
+            .onChange(of: thread.messages.count) { _, _ in
+                rebuildTimelineRows()
+                scrollToBottom(proxy)
+            }
+            .onChange(of: thread.pendingRunID) { _, runID in
+                if runID != nil { scrollToBottom(proxy) }
+            }
+            .onAppear {
+                if workspaceHeader == nil { scrollToBottom(proxy, animated: false) }
+                if focusComposerOnAppear || (workspaceHeader == nil && thread.messages.isEmpty) {
+                    isComposerFocused = true
+                }
+                consumeInitialPromptIfNeeded()
             }
         }
-        .task {
-            await refreshAndPollIfNeeded()
+        .onChange(of: requestedPrompt) { _, _ in consumeRequestedPrompt() }
+        .onChange(of: isComposerDisabled) { _, disabled in
+            if !disabled { consumeRequestedPrompt() }
         }
-        .task(id: thread.pendingRunID) {
-            guard thread.pendingRunID != nil else { return }
-            await pollPendingRunIfNeeded()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            scenePollTask?.cancel()
-            scenePollTask = Task {
-                await pollPendingRunIfNeeded()
+        .task(id: "\(thread.remoteID?.uuidString ?? "local")-\(scenePhase == .active)") {
+            guard scenePhase == .active else { return }
+            await refreshConversation()
+            await chatSyncService.observeThread(thread, modelContext: modelContext, sessionStore: sessionStore,
+                onPreview: { streamPreview = $0 },
+                onFailure: { errorMessage = $0 }) { notice in
+                connectionNotice = notice
+                rebuildTimelineRows()
             }
         }
         .onDisappear {
             sendTask?.cancel()
             renameTask?.cancel()
             deleteTask?.cancel()
-            scenePollTask?.cancel()
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if shouldShowQuickPrompts {
+                if workspaceHeader == nil && shouldShowQuickPrompts {
                     quickPromptBar
                 }
                 if let errorMessage {
                     errorBanner(errorMessage, actionTitle: errorActionTitle)
+                } else if let connectionNotice {
+                    Text(connectionNotice)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Runner.Layout.pageInset)
+                        .padding(.top, Runner.Spacing.small)
                 }
                 composer
             }
-            .background(.bar)
+            .background(Runner.Palette.background)
+            .overlay(alignment: .top) { RunnerHairline() }
         }
-        .navigationTitle(thread.title)
+        .runnerPage()
+        .modifier(ChatNavigationTitle(title: workspaceHeader == nil ? thread.title : nil))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        beginRenameThread()
-                    } label: {
-                        Label(ChatDetailCopy.renameMenuTitle, systemImage: "pencil")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+            if workspaceHeader == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { beginRenameThread() } label: {
+                            Label(ChatDetailCopy.renameMenuTitle, systemImage: "pencil")
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel(ChatDetailCopy.threadOptionsAccessibilityLabel)
                 }
-                .accessibilityLabel(ChatDetailCopy.threadOptionsAccessibilityLabel)
             }
         }
         .alert(ChatDetailCopy.renameAlertTitle, isPresented: $isRenamingThread) {
@@ -205,7 +232,7 @@ struct ChatDetailView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: Runner.Spacing.small) {
             Menu {
                 Section("Prompts") {
                     ForEach(quickPrompts) { prompt in
@@ -218,19 +245,30 @@ struct ChatDetailView: View {
                 }
             } label: {
                 Image(systemName: "plus")
-                    .font(.headline)
-                    .frame(width: 36, height: 36)
-                    .appInteractiveGlassCircle()
+                    .font(Runner.Typography.icon)
+                    .foregroundStyle(Runner.Palette.foreground)
+                    .frame(width: Runner.Layout.compactControlHeight, height: Runner.Layout.compactControlHeight)
+                    .background(Runner.Palette.background, in: Circle())
+                    .overlay { Circle().stroke(Runner.Palette.border, lineWidth: Runner.Stroke.hairline) }
+                    .contentShape(Circle())
             }
+            .padding(.bottom, (Runner.Layout.controlHeight - Runner.Layout.compactControlHeight) / 2)
             .accessibilityLabel(ChatDetailCopy.messageOptionsAccessibilityLabel)
 
-            TextField(ChatDetailCopy.messageFieldPlaceholder, text: $draft, axis: .vertical)
+            TextField(workspaceHeader == nil ? ChatDetailCopy.messageFieldPlaceholder : "Ask about this todo…", text: $draft, axis: .vertical)
                 .focused($isComposerFocused)
                 .lineLimit(1...6)
                 .textFieldStyle(.plain)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .font(Runner.Typography.body)
+                .foregroundStyle(Runner.Palette.foreground)
+                .padding(.horizontal, Runner.Spacing.tight)
+                .padding(.vertical, Runner.Spacing.snug)
+                .frame(minHeight: Runner.Layout.controlHeight)
+                .background(Runner.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Runner.Radius.card, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Runner.Radius.card, style: .continuous)
+                        .stroke(isComposerFocused ? Runner.Palette.ring : Runner.Palette.border, lineWidth: Runner.Stroke.hairline)
+                }
                 .submitLabel(.send)
                 .onSubmit(send)
                 .disabled(isComposerDisabled)
@@ -238,17 +276,15 @@ struct ChatDetailView: View {
 
             Button(action: send) {
                 Image(systemName: "arrow.up")
-                    .font(.headline.weight(.semibold))
-                    .frame(width: 36, height: 36)
             }
-            .appProminentGlassCircleActionStyle()
+            .buttonStyle(RunnerCircleButtonStyle())
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isComposerDisabled)
             .accessibilityLabel(ChatDetailCopy.sendMessageAccessibilityLabel)
             .accessibilityIdentifier("chat-send-button")
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.horizontal, Runner.Layout.pageInset)
+        .padding(.top, Runner.Spacing.small)
+        .padding(.bottom, Runner.Spacing.small)
     }
 
     private var shouldShowQuickPrompts: Bool {
@@ -265,68 +301,74 @@ struct ChatDetailView: View {
 
     private var quickPromptBar: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: Runner.Spacing.small) {
                 ForEach(quickPrompts) { prompt in
                     Button {
                         send(prompt.message)
                     } label: {
                         Label(prompt.title, systemImage: prompt.systemImage)
-                            .font(.caption.weight(.medium))
+                            .font(Runner.Typography.smallMedium)
                             .lineLimit(1)
                     }
-                    .appGlassActionStyle()
-                    .controlSize(.small)
+                    .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, Runner.Layout.pageInset)
         }
         .scrollIndicators(.hidden)
-        .padding(.top, 8)
+        .padding(.top, Runner.Spacing.small)
     }
 
     private var emptyConversation: some View {
-        ContentUnavailableView(
-            ChatDetailCopy.emptyTitle,
-            systemImage: "bubble.left.and.bubble.right",
-            description: Text(ChatDetailCopy.emptyDescription)
+        RunnerEmptyState(
+            title: ChatDetailCopy.emptyTitle,
+            description: ChatDetailCopy.emptyDescription,
+            systemImage: "bubble.left.and.bubble.right"
         )
     }
 
     private var assistantPendingRow: some View {
-        HStack(alignment: .bottom, spacing: 7) {
-            ChatAvatar(title: "Maraithon", systemImage: "sparkles", size: 28, tint: .accentColor)
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+            ChatSpeakerLabel(title: "Maraithon")
 
             ChatPendingWorkSummary(summary: thread.pendingWorkSummary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .accessibilityIdentifier("chat-assistant-pending")
 
-            Spacer(minLength: 56)
+            if let streamPreview, !streamPreview.isEmpty {
+                Text(streamPreview)
+                    .font(Runner.Typography.body)
+                    .foregroundStyle(Runner.Palette.foreground)
+                    .textSelection(.enabled)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("chat-assistant-pending")
     }
 
     private func errorBanner(_ message: String, actionTitle: String) -> some View {
-        HStack(spacing: 10) {
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.red)
-                .lineLimit(2)
+        HStack(alignment: .top, spacing: Runner.Spacing.snug) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.destructiveText)
+                .frame(width: Runner.Spacing.roomy, height: Runner.Spacing.roomy)
+                .accessibilityHidden(true)
 
-            Spacer(minLength: 8)
+            Text(message)
+                .font(Runner.Typography.small)
+                .foregroundStyle(Runner.Palette.foreground)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: Runner.Spacing.small)
 
             Button(actionTitle) {
                 recoverAfterError()
             }
-            .font(.footnote.weight(.semibold))
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.horizontal, Runner.Spacing.medium)
+        .padding(.vertical, Runner.Spacing.snug)
+        .background(Runner.Palette.badgeFill(Runner.Palette.hueRed))
+        .overlay(alignment: .bottom) { RunnerHairline() }
     }
 
     private func send() {
@@ -335,7 +377,7 @@ struct ChatDetailView: View {
 
     private func send(_ text: String) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
+        guard !body.isEmpty, !isComposerDisabled else { return }
 
         if text == draft {
             draft = ""
@@ -343,10 +385,10 @@ struct ChatDetailView: View {
 
         errorMessage = nil
         lastFailedMessage = nil
-        isComposerFocused = true
+        isComposerFocused = false
+        isSending = true
         sendTask?.cancel()
         sendTask = Task {
-            isSending = true
             defer { isSending = false }
 
             do {
@@ -364,16 +406,18 @@ struct ChatDetailView: View {
                 return
             }
 
-            await pollPendingRunIfNeeded()
+            await refreshConversation()
         }
     }
 
     private func decide(_ action: ChatMessageAction) {
-        guard action.decision != nil else { return }
+        guard action.decision != nil, !isComposerDisabled else { return }
+        isSending = true
 
         errorMessage = nil
         sendTask?.cancel()
         sendTask = Task {
+            defer { isSending = false }
             do {
                 try await chatSyncService.decidePreparedAction(
                     action,
@@ -412,15 +456,28 @@ struct ChatDetailView: View {
         }
     }
 
-    private func refreshAndPollIfNeeded() async {
+    private func refreshConversation() async {
         do {
             try await chatSyncService.refreshThread(
                 thread,
                 modelContext: modelContext,
                 sessionStore: sessionStore
             )
-            errorMessage = nil
-            lastFailedMessage = nil
+            // A process killed before receiving the response leaves an
+            // optimistic row in "sending". Reconcile the server first, then
+            // expose a retry using that same persisted client message ID.
+            if !isSending {
+                for message in thread.messages where message.role == .user &&
+                    message.remoteID == nil && message.deliveryState == .sending {
+                    message.deliveryState = .failed
+                }
+                try modelContext.save()
+            }
+            let failed = thread.messages
+                .filter { $0.role == .user && $0.deliveryState == .failed && $0.remoteID == nil }
+                .max { $0.sentAt < $1.sentAt }
+            lastFailedMessage = failed?.body
+            errorMessage = failed == nil ? nil : "Your message was not confirmed. You can safely retry it."
             // A merge can update existing messages without changing the count.
             rebuildTimelineRows()
         } catch is CancellationError {
@@ -432,26 +489,6 @@ struct ChatDetailView: View {
             return
         }
 
-        await pollPendingRunIfNeeded()
-    }
-
-    private func pollPendingRunIfNeeded() async {
-        guard !isPollingRun, thread.pendingRunID != nil else { return }
-        isPollingRun = true
-        defer { isPollingRun = false }
-
-        do {
-            try await chatSyncService.pollPendingRun(
-                in: thread,
-                modelContext: modelContext,
-                sessionStore: sessionStore
-            )
-            errorMessage = nil
-        } catch is CancellationError {
-        } catch ChatSyncError.missingSession {
-        } catch {
-            errorMessage = MobileErrorCopy.message(for: error)
-        }
     }
 
     private func delete(_ message: ChatMessage) {
@@ -474,6 +511,12 @@ struct ChatDetailView: View {
 
     private func copy(_ message: ChatMessage) {
         UIPasteboard.general.string = message.body
+    }
+
+    private func consumeRequestedPrompt() {
+        guard let prompt = requestedPrompt, !isComposerDisabled else { return }
+        requestedPrompt = nil
+        send(prompt)
     }
 
     private func consumeInitialPromptIfNeeded() {
@@ -499,7 +542,7 @@ struct ChatDetailView: View {
             send(lastFailedMessage)
         } else {
             Task {
-                await refreshAndPollIfNeeded()
+                await refreshConversation()
             }
         }
     }
@@ -575,17 +618,40 @@ struct ChatContextHeader {
     let items: [Item]
 }
 
+/// Small muted caption naming who is speaking, used above assistant turns
+/// the way the web transcript labels each reply.
+struct ChatSpeakerLabel: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(Runner.Typography.captionMedium)
+            .foregroundStyle(Runner.Palette.mutedForeground)
+            .accessibilityHidden(true)
+    }
+}
+
 private struct ChatDateHeader: View {
     let date: Date
 
     var body: some View {
-        Text(AppFormatters.chatDayString(for: date))
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            // Solid fill instead of .thinMaterial: material blur is expensive
-            // inside scrolling rows.
-            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+        HStack(spacing: Runner.Spacing.snug) {
+            RunnerHairline()
+
+            Text(AppFormatters.chatDayString(for: date))
+                .font(Runner.Typography.captionMedium)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .lineLimit(1)
+                .fixedSize()
+
+            RunnerHairline()
+        }
+    }
+}
+
+private struct ChatNavigationTitle: ViewModifier {
+    let title: String?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let title { content.navigationTitle(title) } else { content }
     }
 }

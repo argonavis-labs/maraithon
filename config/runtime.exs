@@ -39,6 +39,15 @@ process_role =
 
 config :maraithon, process_role: process_role
 
+todo_tool_protocol =
+  case System.get_env("MARAITHON_TODO_TOOL_PROTOCOL", "native") do
+    "native" -> :native
+    "json" -> :json
+    _ -> raise "MARAITHON_TODO_TOOL_PROTOCOL must be native or json"
+  end
+
+config :maraithon, :todo_tool_protocol, todo_tool_protocol
+
 # Production process ownership follows the selected role. A blank role keeps
 # the single-service default; development and test retain their explicit worker
 # setting (including the test suite's disabled workers).

@@ -1,13 +1,11 @@
 import SwiftUI
 
-/// First-run / signed-out screen. Mirrors Apple's standard onboarding
-/// pattern (Mail.app, Calendar.app first-run): app glyph, title,
-/// supporting sentence, single primary CTA, optional secondary affordance
-/// below.
+/// First-run / signed-out screen, styled like the web welcome page: brand
+/// mark, title, supporting sentence, one primary action, and a quiet footer.
 ///
 /// Layout invariants: vertically centered, max width
-/// `Tokens.Layout.onboardingMaxWidth`, primary CTA is `.borderedProminent`
-/// + `.keyboardShortcut(.defaultAction)`.
+/// `Tokens.Layout.onboardingMaxWidth`, primary CTA is the workspace primary
+/// button + `.keyboardShortcut(.defaultAction)`.
 struct ConnectView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -19,12 +17,14 @@ struct ConnectView: View {
 
             VStack(spacing: Tokens.Spacing.small) {
                 Text(ConnectCopy.title)
-                    .font(.largeTitle.weight(.semibold))
+                    .font(Tokens.Typography.pageTitle)
+                    .tracking(Tokens.Typography.pageTitleTracking)
+                    .foregroundStyle(Tokens.Palette.foreground)
                     .multilineTextAlignment(.center)
 
                 Text(ConnectCopy.body)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.Palette.mutedForeground)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -36,26 +36,37 @@ struct ConnectView: View {
                     Text(ConnectCopy.connectButton)
                         .frame(maxWidth: .infinity)
                 }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RunnerButtonStyle(.primary))
                 .keyboardShortcut(.defaultAction)
                 .accessibilityLabel(ConnectCopy.title)
 
+                if case .awaitingApproval = env.deviceAuth.state {
+                    Text("Sign-in opens in your browser.")
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(Tokens.Palette.mutedForeground)
+                        .transition(.opacity)
+                }
+
                 if case .error(let message) = env.deviceAuth.state {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(StatusTone.error.color)
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(Tokens.Palette.destructiveText)
                         .transition(.opacity)
                 }
             }
             .frame(maxWidth: 280)
 
             Spacer(minLength: 0)
+
+            Text("Your chief of staff, wherever you work.")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.mutedForeground)
         }
         .padding(.horizontal, Tokens.Spacing.xlarge)
         .padding(.vertical, Tokens.Spacing.xlarge)
         .frame(maxWidth: Tokens.Layout.onboardingMaxWidth)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Tokens.Palette.background)
         .animation(.default, value: env.deviceAuth.state)
         .onChange(of: env.deviceAuth.state) { _, newState in
             if case .signedIn = newState, env.onboarding.current == .connect {
@@ -74,12 +85,12 @@ struct ConnectView: View {
     }
 
     private var appGlyph: some View {
-        Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-            .resizable()
-            .renderingMode(.template)
-            .aspectRatio(contentMode: .fit)
+        Text("m")
+            .font(Tokens.Typography.brandMarkLarge)
+            .foregroundStyle(.white)
+            .padding(.bottom, Tokens.Spacing.compact)
             .frame(width: Tokens.IconSize.large, height: Tokens.IconSize.large)
-            .foregroundStyle(.tint)
+            .background(Tokens.Palette.accent, in: RoundedRectangle(cornerRadius: Tokens.CornerRadius.medium))
             .accessibilityHidden(true)
     }
 }

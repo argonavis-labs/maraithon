@@ -95,15 +95,15 @@ defmodule MaraithonWeb.MobileChatJSON do
   @action_card_label_pattern ~r/^(\s*(?:Context used|Context|Decision|Why now|State|Next|Suggested reply|Draft|Prepared|Evidence):\s*)(.*)$/i
 
   def thread_index(threads) when is_list(threads) do
-    %{threads: Enum.map(threads, &thread_summary/1), next_cursor: nil}
+    scrub(%{threads: Enum.map(threads, &thread_summary/1), next_cursor: nil})
   end
 
   def thread(%Conversation{} = conversation) do
-    %{thread: full_thread(conversation)}
+    scrub(%{thread: full_thread(conversation)})
   end
 
   def thread_with_run(%Conversation{} = conversation, %Run{} = run) do
-    %{thread: full_thread(conversation, run), run: run(run)}
+    scrub(%{thread: full_thread(conversation, run), run: run(run)})
   end
 
   def thread_with_run(%Conversation{} = conversation, _run), do: thread(conversation)
@@ -136,11 +136,36 @@ defmodule MaraithonWeb.MobileChatJSON do
   def error(reason), do: ApiErrorCopy.mobile_chat(reason)
 
   def action_result(%PreparedAction{} = prepared_action, %Conversation{} = conversation) do
-    %{
+    scrub(%{
       prepared_action: prepared_action(prepared_action),
       thread: full_thread(conversation)
-    }
+    })
   end
+
+  # Stored assistant text can carry a multibyte character cut at a byte
+  # boundary (a streamed preview truncated mid em dash, for example). Jason
+  # refuses to encode invalid UTF-8 and the whole thread list 500s, so drop
+  # the invalid bytes at the API boundary instead of failing the response.
+  @doc false
+  def scrub(value) when is_binary(value) do
+    if String.valid?(value) do
+      value
+    else
+      value
+      |> String.chunk(:valid)
+      |> Enum.filter(&String.valid?/1)
+      |> Enum.join()
+    end
+  end
+
+  def scrub(%DateTime{} = value), do: value
+  def scrub(%NaiveDateTime{} = value), do: value
+  def scrub(%Date{} = value), do: value
+  def scrub(%Decimal{} = value), do: value
+  def scrub(%{__struct__: _} = value), do: value
+  def scrub(value) when is_map(value), do: Map.new(value, fn {key, item} -> {key, scrub(item)} end)
+  def scrub(value) when is_list(value), do: Enum.map(value, &scrub/1)
+  def scrub(value), do: value
 
   defp thread_summary(%Conversation{} = conversation) do
     latest = latest_turn(conversation)
@@ -164,11 +189,22 @@ defmodule MaraithonWeb.MobileChatJSON do
       title: thread_title(conversation),
       status: conversation.status,
       pending_run: active_run && run(active_run),
+      linked_todo: current_linked_todo(conversation),
       messages:
         conversation
         |> sorted_turns()
         |> Enum.map(&message(&1, conversation))
     }
+  end
+
+  defp current_linked_todo(conversation) do
+    with id when is_binary(id) <- (conversation.metadata || %{})["linked_todo_id"],
+         {:ok, id} <- Ecto.UUID.cast(id),
+         %Todo{} = todo <- Maraithon.Todos.get_for_user(conversation.user_id, id) do
+      PublicPayload.todo(todo)
+    else
+      _ -> nil
+    end
   end
 
   defp message(%Turn{} = turn, %Conversation{} = conversation) do
@@ -389,6 +425,9 @@ defmodule MaraithonWeb.MobileChatJSON do
        when action_type in ["gmail_send", "gmail_draft_send", "slack_post"],
        do: "Send"
 
+  defp prepared_action_confirm_label(%PreparedAction{action_type: "browser_interact"}),
+    do: "Run browser step"
+
   defp prepared_action_confirm_label(_prepared_action), do: "Confirm"
 
   defp draft_card_for_turn(
@@ -399,7 +438,7 @@ defmodule MaraithonWeb.MobileChatJSON do
        ) do
     cond do
       turn.turn_kind in ["action_result", "system_notice"] ->
-        nil
+        MaraithonWeb.TodoActionAccess.enrich(structured_data["draft_card"], conversation.user_id)
 
       is_binary(prepared_action_id) ->
         PreparedAction
@@ -410,7 +449,7 @@ defmodule MaraithonWeb.MobileChatJSON do
         todo_primer_draft_card(conversation.user_id, structured_data)
 
       true ->
-        nil
+        MaraithonWeb.TodoActionAccess.enrich(structured_data["draft_card"], conversation.user_id)
     end
   end
 
@@ -452,6 +491,22 @@ defmodule MaraithonWeb.MobileChatJSON do
         |> Map.merge(base)
         |> compact_public_map()
 
+      type
+      when type in ["calendar_create_event", "calendar_update_event", "calendar_cancel_event"] ->
+        MaraithonWeb.TodoCalendarCard.build(prepared_action, base)
+
+      "browser_interact" ->
+        %{
+          "provider" => "browser",
+          "title" => "Chrome action",
+          "body" => prepared_action.preview_text,
+          "editable" => false,
+          "send_label" => "Run browser step",
+          "action_type" => "browser_interact"
+        }
+        |> Map.merge(base)
+        |> Map.put("send_label", "Run browser step")
+
       "slack_post" ->
         %{
           "provider" => "slack",
@@ -468,6 +523,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       _ ->
         nil
     end
+    |> MaraithonWeb.TodoActionAccess.enrich(prepared_action.user_id, payload)
   end
 
   defp prepared_action_draft_card(_prepared_action), do: nil
@@ -522,6 +578,29 @@ defmodule MaraithonWeb.MobileChatJSON do
   end
 
   defp prepared_action_sendable?(_prepared_action), do: false
+
+  defp prepared_action_status_label(
+         %PreparedAction{action_type: "browser_interact", status: status} = action
+       ) do
+    cond do
+      status == "awaiting_confirmation" and TelegramAssistant.prepared_action_expired?(action) ->
+        "Expired"
+
+      true ->
+        Map.get(
+          %{
+            "executed" => "Completed",
+            "confirmed" => "Running",
+            "failed" => "Could not complete",
+            "execution_unknown" => "Check before retrying",
+            "rejected" => "Cancelled",
+            "expired" => "Expired"
+          },
+          status,
+          "Ready to review"
+        )
+    end
+  end
 
   defp prepared_action_status_label(%PreparedAction{status: "executed"}), do: "Sent"
   defp prepared_action_status_label(%PreparedAction{status: "confirmed"}), do: "Sending"

@@ -36,6 +36,43 @@ defmodule MaraithonWeb.SettingsController do
     |> redirect(to: ~p"/settings#calendar-links")
   end
 
+  def update_assistant_model(conn, %{"assistant_model" => %{"model" => model}}) do
+    case settings_user(conn) do
+      %Accounts.User{} = user ->
+        case Accounts.update_assistant_model(user, model) do
+          {:ok, updated} ->
+            conn
+            |> put_flash(:info, assistant_model_saved_message(updated.assistant_model))
+            |> redirect(to: ~p"/settings#assistant-model")
+
+          {:error, _changeset} ->
+            conn
+            |> put_flash(
+              :error,
+              "That model id is not valid. Use a provider id such as meta/muse-spark-1.3-contributor."
+            )
+            |> redirect(to: ~p"/settings#assistant-model")
+        end
+
+      nil ->
+        conn
+        |> put_flash(:error, "Sign in as a workspace user before choosing a model.")
+        |> redirect(to: ~p"/settings#assistant-model")
+    end
+  end
+
+  def update_assistant_model(conn, _params) do
+    conn
+    |> put_flash(:error, "The model could not be saved.")
+    |> redirect(to: ~p"/settings#assistant-model")
+  end
+
+  defp assistant_model_saved_message(nil),
+    do: "Assistant model cleared. Maraithon uses the workspace default again."
+
+  defp assistant_model_saved_message(model),
+    do: "Assistant model set to #{model}. New chats, briefs, and check-ins use it from now on."
+
   defp render_settings(conn, extra_assigns \\ []) do
     current_user = conn.assigns.current_user
     settings_user = settings_user(conn)
@@ -51,6 +88,8 @@ defmodule MaraithonWeb.SettingsController do
         security_items: security_items(),
         oauth_items: oauth_items(),
         settings_user: settings_user,
+        assistant_model: settings_user && settings_user.assistant_model,
+        default_model: Maraithon.LLM.chat_model() || "not configured",
         calendar_link_rows:
           Keyword.get_lazy(extra_assigns, :calendar_link_rows, fn ->
             if settings_user do

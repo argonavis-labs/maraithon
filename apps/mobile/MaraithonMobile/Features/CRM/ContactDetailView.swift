@@ -13,134 +13,137 @@ struct ContactDetailView: View {
     var body: some View {
         // Sorted once per body pass; the section reads it twice.
         let relatedWork = contact.todos.sorted(by: relatedWorkSort)
-        Form {
+        List {
             if let actionErrorMessage {
-                Section {
-                    SyncIssueBanner(
-                        title: ContactDetailCopy.actionWarningTitle,
-                        message: actionErrorMessage,
-                        buttonTitle: nil,
-                        retry: nil,
-                        dismissAccessibilityLabel: ContactDetailCopy.dismissActionWarningAccessibilityLabel,
-                        dismiss: { self.actionErrorMessage = nil }
-                    )
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                }
+                SyncIssueBanner(
+                    title: ContactDetailCopy.actionWarningTitle,
+                    message: actionErrorMessage,
+                    buttonTitle: nil,
+                    retry: nil,
+                    dismissAccessibilityLabel: ContactDetailCopy.dismissActionWarningAccessibilityLabel,
+                    dismiss: { self.actionErrorMessage = nil }
+                )
+                .crmListRow(insets: EdgeInsets(), separator: .hidden)
             }
 
-            Section {
-                careRecommendation
+            header
+                .crmListBlock(top: Runner.Spacing.small, bottom: Runner.Spacing.medium)
+
+            careRecommendation
+                .crmListBlock(bottom: Runner.Spacing.xsmall)
+
+            RunnerSectionLabel(ContactDetailCopy.contactDetailsSectionTitle)
+                .crmSectionLabelRow()
+            if !contact.email.isEmpty {
+                ContactFactRow(label: "Email", value: contact.email)
+                    .crmListRow()
+            }
+            if !contact.phone.isEmpty {
+                ContactFactRow(label: "Phone", value: contact.phone)
+                    .crmListRow()
+            }
+            if let lastContactedAt = contact.lastContactedAt {
+                ContactFactRow(label: ContactDetailCopy.lastContactedLabel, value: AppFormatters.relativeString(for: lastContactedAt))
+                    .crmListRow()
             }
 
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(contactContext)
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        StatusPill(title: contact.status.title, tint: contact.status.tint)
-                        StatusPill(title: contact.dealStage.title, tint: contact.dealStage.tint)
+            RunnerSectionLabel(ContactDetailCopy.relationshipSectionTitle)
+                .crmSectionLabelRow()
+            Picker(
+                ContactDetailCopy.statusPickerTitle,
+                selection: Binding(
+                    get: { contact.status },
+                    set: {
+                        contact.status = $0
+                        save()
                     }
-                }
-                .padding(.vertical, 4)
-            }
-
-            Section(ContactDetailCopy.contactDetailsSectionTitle) {
-                if !contact.email.isEmpty {
-                    LabeledContent("Email", value: contact.email)
-                }
-                if !contact.phone.isEmpty {
-                    LabeledContent("Phone", value: contact.phone)
-                }
-                if let lastContactedAt = contact.lastContactedAt {
-                    LabeledContent(ContactDetailCopy.lastContactedLabel, value: AppFormatters.relativeString(for: lastContactedAt))
+                )
+            ) {
+                ForEach(ContactStatus.allCases) { status in
+                    Text(status.title).tag(status)
                 }
             }
+            .pickerStyle(.menu)
+            .font(Runner.Typography.body)
+            .foregroundStyle(Runner.Palette.foreground)
+            .crmListRow()
 
-            Section(ContactDetailCopy.relationshipSectionTitle) {
-                Picker(
-                    ContactDetailCopy.statusPickerTitle,
-                    selection: Binding(
-                        get: { contact.status },
-                        set: {
-                            contact.status = $0
-                            save()
-                        }
-                    )
-                ) {
-                    ForEach(ContactStatus.allCases) { status in
-                        Text(status.title).tag(status)
+            Picker(
+                ContactDetailCopy.circlePickerTitle,
+                selection: Binding(
+                    get: { contact.dealStage },
+                    set: {
+                        contact.dealStage = $0
+                        save()
                     }
-                }
-
-                Picker(
-                    ContactDetailCopy.circlePickerTitle,
-                    selection: Binding(
-                        get: { contact.dealStage },
-                        set: {
-                            contact.dealStage = $0
-                            save()
-                        }
-                    )
-                ) {
-                    ForEach(DealStage.allCases) { stage in
-                        Text(stage.title).tag(stage)
-                    }
+                )
+            ) {
+                ForEach(DealStage.allCases) { stage in
+                    Text(stage.title).tag(stage)
                 }
             }
+            .pickerStyle(.menu)
+            .font(Runner.Typography.body)
+            .foregroundStyle(Runner.Palette.foreground)
+            .crmListRow()
 
-            Section(ContactDetailCopy.notesSectionTitle) {
-                TextField(ContactDetailCopy.notesPlaceholder, text: $contact.notes, axis: .vertical)
-                    .lineLimit(5...10)
-                    .onSubmit(save)
-            }
+            RunnerSectionLabel(ContactDetailCopy.notesSectionTitle)
+                .crmSectionLabelRow()
+            TextField(ContactDetailCopy.notesPlaceholder, text: $contact.notes, axis: .vertical)
+                .lineLimit(5...10)
+                .onSubmit(save)
+                .font(Runner.Typography.body)
+                .foregroundStyle(Runner.Palette.foreground)
+                .crmListRow()
 
             if !relatedWork.isEmpty {
-                Section(ContactDetailCopy.relatedWorkSectionTitle) {
-                    ForEach(relatedWork) { todo in
+                RunnerSectionLabel(ContactDetailCopy.relatedWorkSectionTitle)
+                    .crmSectionLabelRow()
+                ForEach(relatedWork) { todo in
+                    Button {
+                        editingTodo = todo
+                    } label: {
+                        ContactLinkedWorkRow(todo: todo)
+                    }
+                    .buttonStyle(.plain)
+                    .crmListRow()
+                    .swipeActions(edge: .leading) {
+                        if !todo.isCompleted {
+                            Button {
+                                completeLinkedWork(todo)
+                            } label: {
+                                Label(
+                                    ContactDetailCopy.completeWorkActionLabel,
+                                    systemImage: "checkmark.circle"
+                                )
+                            }
+                            .tint(Runner.Palette.success)
+                        }
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            dismissLinkedWork(todo)
+                        } label: {
+                            Label(
+                                ContactDetailCopy.dismissWorkActionLabel,
+                                systemImage: "trash"
+                            )
+                        }
+
                         Button {
                             editingTodo = todo
                         } label: {
-                            ContactLinkedWorkRow(todo: todo)
+                            Label(ContactDetailCopy.editWorkActionLabel, systemImage: "pencil")
                         }
-                        .buttonStyle(.plain)
-                        .swipeActions(edge: .leading) {
-                            if !todo.isCompleted {
-                                Button {
-                                    completeLinkedWork(todo)
-                                } label: {
-                                    Label(
-                                        ContactDetailCopy.completeWorkActionLabel,
-                                        systemImage: "checkmark.circle"
-                                    )
-                                }
-                                .tint(.green)
-                            }
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                dismissLinkedWork(todo)
-                            } label: {
-                                Label(
-                                    ContactDetailCopy.dismissWorkActionLabel,
-                                    systemImage: "trash"
-                                )
-                            }
-
-                            Button {
-                                editingTodo = todo
-                            } label: {
-                                Label(ContactDetailCopy.editWorkActionLabel, systemImage: "pencil")
-                            }
-                            .tint(.blue)
-                        }
+                        .tint(Runner.Palette.info)
                     }
                 }
             }
         }
-        .navigationTitle(contact.name)
+        .listStyle(.plain)
+        .runnerPage()
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -176,59 +179,79 @@ struct ContactDetailView: View {
         }
     }
 
+    private var header: some View {
+        HStack(alignment: .top, spacing: Runner.Spacing.medium) {
+            PeopleAvatar(initials: PeopleAvatar.initials(for: contact.name), size: PeopleAvatar.detailSize)
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
+                Text(contact.name)
+                    .font(Runner.Typography.pageTitle)
+                    .tracking(Runner.Typography.pageTitleTracking)
+                    .foregroundStyle(Runner.Palette.foreground)
+                    .accessibilityAddTraits(.isHeader)
+                Text(contactContext)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+                HStack(spacing: Runner.Spacing.compact) {
+                    StatusPill(title: contact.status.title, tint: contact.status.tint)
+                    StatusPill(title: contact.dealStage.title, tint: contact.dealStage.tint)
+                }
+                .padding(.top, Runner.Spacing.xsmall)
+            }
+        }
+    }
+
     private var careRecommendation: some View {
         // Computed once per render; the layout reads several fields and the
         // care signal walks the contact's history each time it is evaluated.
         let careSummary = RelationshipCareSignal.summary(for: contact)
-        let careTint = careTint(for: careSummary.level)
+        let tone = careTone(for: careSummary.level)
 
-        return VStack(alignment: .leading, spacing: 12) {
-            Label {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(careSummary.title)
-                        .font(.headline)
-                    Text(careSummary.subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            } icon: {
+        return RunnerCard {
+            HStack(alignment: .center, spacing: Runner.Spacing.tight) {
                 Image(systemName: careSummary.systemImage)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(careTint)
-                    .frame(width: 34, height: 34)
-                    .background(careTint.opacity(0.12), in: Circle())
+                    .font(Runner.Typography.icon)
+                    .foregroundStyle(tone.text)
+                    .frame(width: Runner.Layout.compactControlHeight, height: Runner.Layout.compactControlHeight)
+                    .background(tone.fill, in: Circle())
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: Runner.Spacing.xxsmall) {
+                    Text(careSummary.title)
+                        .font(Runner.Typography.bodyMedium)
+                        .foregroundStyle(Runner.Palette.foreground)
+                    Text(careSummary.subtitle)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                }
             }
+            .runnerCardRow()
 
-            VStack(spacing: 1) {
-                CommandRow(
-                    title: careSummary.actionTitle,
-                    subtitle: ContactDetailCopy.logContactSubtitle,
-                    systemImage: "phone.arrow.up.right",
-                    tint: .blue
-                ) {
-                    markContacted()
-                }
-                Divider().padding(.leading, 48)
-                CommandRow(
-                    title: ContactDetailCopy.addFollowUpTitle,
-                    subtitle: ContactDetailCopy.addFollowUpSubtitle,
-                    systemImage: "checklist",
-                    tint: .orange
-                ) {
-                    isCreatingFollowUp = true
-                }
+            RunnerHairline()
+            CommandRow(
+                title: careSummary.actionTitle,
+                subtitle: ContactDetailCopy.logContactSubtitle,
+                systemImage: "phone.arrow.up.right",
+                tint: Runner.Palette.accent
+            ) {
+                markContacted()
             }
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            RunnerHairline()
+            CommandRow(
+                title: ContactDetailCopy.addFollowUpTitle,
+                subtitle: ContactDetailCopy.addFollowUpSubtitle,
+                systemImage: "checklist",
+                tint: Runner.Palette.accent
+            ) {
+                isCreatingFollowUp = true
+            }
         }
-        .padding(.vertical, 4)
     }
 
-    private func careTint(for level: RelationshipCareLevel) -> Color {
+    private func careTone(for level: RelationshipCareLevel) -> RunnerBadge.Tone {
         switch level {
-        case .archived: .secondary
-        case .warm: .green
+        case .archived: .zinc
+        case .warm: .emerald
         case .new: .indigo
-        case .due: .orange
+        case .due: .amber
         case .needsCare: .red
         }
     }
@@ -440,6 +463,29 @@ enum ContactDetailCopy {
     }
 }
 
+/// Label on the left, value on the right; the value is selectable so an
+/// email or phone number can be copied.
+private struct ContactFactRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Runner.Spacing.small) {
+            Text(label)
+                .font(Runner.Typography.small)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+            Spacer(minLength: Runner.Spacing.small)
+            Text(value)
+                .font(Runner.Typography.small)
+                .foregroundStyle(Runner.Palette.foreground)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct ContactLinkedWorkRow: View {
     let todo: TodoItem
 
@@ -453,32 +499,37 @@ private struct ContactLinkedWorkRow: View {
     }
 
     var body: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: Runner.Spacing.tight) {
+            Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
+                .font(Runner.Typography.icon)
+                .foregroundStyle(todo.isCompleted ? Runner.Palette.success : RunnerBadge.Tone.from(tint: todo.priority.tint).text)
+                .frame(width: Runner.Spacing.roomy)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: Runner.Spacing.xxsmall) {
                 Text(todo.title)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(todo.isCompleted ? .secondary : .primary)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(todo.isCompleted ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
                     .strikethrough(todo.isCompleted)
 
                 if let nextMove = decisionContext.rowMove {
                     Text("Next: \(nextMove)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .lineLimit(2)
                 }
 
                 if let detail = ContactLinkedWorkRowCopy.detail(for: todo) {
                     Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.micro)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .lineLimit(1)
                 }
             }
-        } icon: {
-            Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(todo.isCompleted ? .green : todo.priority.tint)
         }
-        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .padding(.vertical, Runner.Spacing.xxsmall)
     }
 }
 

@@ -1,16 +1,19 @@
 import SwiftUI
 
-/// Shared status pill used in the sidebar, on the iMessage detail status
-/// card, and anywhere we surface the health of a single source.
+/// Shared status indicator used in the sidebar, on the source detail
+/// status card, and anywhere we surface the health of a single source.
 ///
-/// Invariant: the symbol + tone vocabulary defined here is the only
+/// Invariant: the state + tone vocabulary defined here is the only
 /// status vocabulary in the app. New states must extend the enum, not
-/// invent ad-hoc badges elsewhere.
+/// invent ad-hoc badges elsewhere. `tone` is the traffic-light semantic
+/// (good / attention / error); `dotColor` is the page-level dot color,
+/// which additionally separates "checking" (info) from "paused" (muted).
 struct SourceStatusBadge: View {
     enum Variant {
         /// Icon-only — fits inside dense rows like the sidebar.
         case compact
-        /// Icon + label + subtitle — used in the detail pane status card.
+        /// Dot + label + optional issue line and detail — used on the
+        /// source detail status card.
         case prominent
     }
 
@@ -44,6 +47,28 @@ struct SourceStatusBadge: View {
             }
         }
 
+        /// Dot color on detail pages: ready, checking, needs attention,
+        /// error, and a muted dot for paused or not-updating sources.
+        var dotColor: Color {
+            switch self {
+            case .connected: return Tokens.Palette.success
+            case .syncing: return Tokens.Palette.info
+            case .paused: return Tokens.Palette.mutedForeground
+            case .needsAttention: return Tokens.Palette.caution
+            case .disconnected: return Tokens.Palette.mutedForeground
+            case .error: return Tokens.Palette.destructive
+            }
+        }
+
+        /// Text color for the issue line under the label.
+        var issueTextColor: Color {
+            switch self {
+            case .needsAttention: return Tokens.Palette.cautionText
+            case .error, .disconnected: return Tokens.Palette.destructiveText
+            default: return Tokens.Palette.mutedForeground
+            }
+        }
+
         var label: String {
             switch self {
             case .connected: return "Assistant ready"
@@ -66,6 +91,9 @@ struct SourceStatusBadge: View {
 
     let state: State
     var variant: Variant = .compact
+    /// Extra muted line under the label on the prominent variant (for
+    /// example the page headline such as "Notes context is ready").
+    var detail: String? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -88,17 +116,24 @@ struct SourceStatusBadge: View {
     }
 
     private var prominentBody: some View {
-        HStack(alignment: .center, spacing: Tokens.Spacing.medium) {
-            symbolImage
-                .font(.title)
-                .frame(width: Tokens.IconSize.prominent, height: Tokens.IconSize.prominent)
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.small) {
+            RunnerStatusDot(color: state.dotColor, pulsing: state == .syncing)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Tokens.Spacing.xsmall }
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxsmall) {
                 Text(state.label)
-                    .font(.headline)
+                    .font(Tokens.Typography.bodyMedium)
+                    .foregroundStyle(Tokens.Palette.foreground)
                 if let subtitle = state.subtitle {
                     Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(state.issueTextColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.Palette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -121,10 +156,10 @@ struct SourceStatusBadge: View {
     }
 
     private var accessibilityLabel: String {
-        if let subtitle = state.subtitle {
-            return "\(state.label). \(subtitle)"
-        }
-        return state.label
+        var parts = [state.label]
+        if let subtitle = state.subtitle { parts.append(subtitle) }
+        if let detail, !detail.isEmpty { parts.append(detail) }
+        return parts.joined(separator: ". ")
     }
 }
 
@@ -142,11 +177,12 @@ struct SourceStatusBadge: View {
 
 #Preview("Prominent") {
     VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
-        SourceStatusBadge(state: .connected, variant: .prominent)
+        SourceStatusBadge(state: .connected, variant: .prominent, detail: "Notes context is ready")
         SourceStatusBadge(state: .syncing, variant: .prominent)
         SourceStatusBadge(state: .needsAttention("Full Disk Access required"), variant: .prominent)
         SourceStatusBadge(state: .error("NSURLErrorDomain Code=-1009"), variant: .prominent)
     }
     .padding(Tokens.Spacing.large)
     .frame(width: 420)
+    .background(Tokens.Palette.background)
 }

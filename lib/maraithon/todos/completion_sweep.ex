@@ -77,7 +77,9 @@ defmodule Maraithon.Todos.CompletionSweep do
   def run_for_user(user_id, opts \\ [])
 
   def run_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    Maraithon.Todos.ActionHandoff.recover_for_user(user_id)
     now = Keyword.get(opts, :now) || DateTime.utc_now()
+    Todos.review_waiting_workflows(user_id, now)
     deadline = bounded_deadline(opts)
     opts = Keyword.put(opts, :deadline_ms, deadline)
 
@@ -209,6 +211,12 @@ defmodule Maraithon.Todos.CompletionSweep do
 
       %{empty_user_summary(user_id, 0) | errors: 1}
   end
+
+  # A reply can advance an outcome without completing it. Tracked outcomes
+  # require the cross-source model's grounded completion decision.
+  defp completion_evidence(%Todo{workflow: %{"outcome" => outcome}}, _now, _opts)
+       when is_binary(outcome),
+       do: :open
 
   defp completion_evidence(%Todo{source: "gmail"} = todo, _now, opts) do
     gmail_completion_evidence(todo, opts)

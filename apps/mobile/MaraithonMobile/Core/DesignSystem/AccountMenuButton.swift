@@ -51,7 +51,7 @@ struct AccountMenuButton: View {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
         } label: {
-            Image(systemName: "person.crop.circle")
+            AccountInitialsMark(email: sessionStore.user?.email)
         }
         .accessibilityLabel("Account and settings")
         .confirmationDialog(
@@ -102,6 +102,41 @@ struct AccountMenuButton: View {
         } catch {
             resetError = MobileErrorCopy.message(for: error)
         }
+    }
+}
+
+/// 28pt initials circle for the signed-in account, on the subtle ink wash the
+/// workspace uses for avatars. Falls back to a person glyph when signed out.
+private struct AccountInitialsMark: View {
+    let email: String?
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Runner.Palette.foreground5)
+            Circle()
+                .stroke(Runner.Palette.border, lineWidth: Runner.Stroke.hairline)
+            if let initials = Self.initials(from: email) {
+                Text(initials)
+                    .font(Runner.Typography.captionMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
+            } else {
+                Image(systemName: "person")
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+            }
+        }
+        .frame(width: 28, height: 28)
+    }
+
+    /// "kent.fenwick@…" → "KF", "kent@…" → "K".
+    static func initials(from email: String?) -> String? {
+        guard let email else { return nil }
+        let local = email.split(separator: "@").first.map(String.init) ?? email
+        let parts = local.split(whereSeparator: { ".-_+".contains($0) })
+        let letters = parts.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }
+        guard !letters.isEmpty else { return nil }
+        return letters.joined()
     }
 }
 

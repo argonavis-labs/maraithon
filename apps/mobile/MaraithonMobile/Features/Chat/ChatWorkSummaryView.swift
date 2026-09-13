@@ -5,43 +5,57 @@ struct ChatWorkSummaryDisclosure: View {
     @State private var isExpanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                if let summaryText = summary.summary, !summaryText.isEmpty {
-                    Text(summaryText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: Runner.Spacing.compact) {
+                    if stepCount > 0 {
+                        RunnerBadge(text: "\(stepCount)")
+                    }
 
-                if !summary.toolCalls.isEmpty {
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach(summary.toolCalls) { toolCall in
-                            ChatToolCallRow(toolCall: toolCall)
+                    Text(disclosureTitle)
+                        .font(Runner.Typography.captionMedium)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(Runner.Typography.micro)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(isExpanded ? [.isSelected] : [])
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                    if let summaryText = summary.summary, !summaryText.isEmpty {
+                        Text(summaryText)
+                            .font(Runner.Typography.caption)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if !summary.toolCalls.isEmpty {
+                        VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
+                            ForEach(summary.toolCalls) { toolCall in
+                                ChatToolCallRow(toolCall: toolCall)
+                            }
+                        }
+                    } else if !summary.steps.isEmpty {
+                        VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
+                            ForEach(summary.steps) { step in
+                                ChatWorkStepRow(step: step)
+                            }
                         }
                     }
-                } else if !summary.steps.isEmpty {
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach(summary.steps) { step in
-                            ChatWorkStepRow(step: step)
-                        }
-                    }
                 }
+                .padding(.top, Runner.Spacing.small)
             }
-            .padding(.top, 8)
-        } label: {
-            HStack(spacing: 7) {
-                if stepCount > 0 {
-                    ChatStepCountBadge(count: stepCount)
-                }
-
-                Text(disclosureTitle)
-                    .lineLimit(2)
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
         }
-        .tint(.secondary)
     }
 
     private var stepCount: Int {
@@ -65,23 +79,24 @@ struct ChatPendingWorkSummary: View {
     let summary: ChatWorkSummary?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+            HStack(spacing: Runner.Spacing.small) {
                 ProgressView()
                     .controlSize(.small)
+                    .tint(Runner.Palette.mutedForeground)
 
                 Text(summary?.headline ?? summary?.summary ?? ChatWorkSummaryViewCopy.pendingFallbackTitle)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .lineLimit(2)
             }
 
             if !visibleSteps.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
                     if hiddenStepCount > 0 {
                         Text(ChatWorkSummaryViewCopy.earlierStepsTitle(for: hiddenStepCount))
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
+                            .font(Runner.Typography.micro)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
                     }
 
                     ForEach(visibleSteps) { step in
@@ -89,7 +104,7 @@ struct ChatPendingWorkSummary: View {
                     }
                 }
             } else if let toolCalls = summary?.toolCalls, !toolCalls.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
                     ForEach(toolCalls.suffix(Self.maxVisibleSteps)) { toolCall in
                         ChatToolCallRow(toolCall: toolCall)
                     }
@@ -98,15 +113,15 @@ struct ChatPendingWorkSummary: View {
 
             if let preview = summary?.preview, !preview.isEmpty {
                 Text(preview + " ▍")
-                    .font(.subheadline)
-                    .foregroundStyle(.primary.opacity(0.8))
+                    .font(Runner.Typography.body)
+                    .foregroundStyle(Runner.Palette.foreground80)
                     .fixedSize(horizontal: false, vertical: true)
                     .contentTransition(.interpolate)
             } else if let thinking = summary?.thinking, !thinking.isEmpty {
                 Text(thinking + " ▍")
-                    .font(.caption)
+                    .font(Runner.Typography.caption)
                     .italic()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(4)
                     .contentTransition(.interpolate)
@@ -140,20 +155,18 @@ enum ChatWorkSummaryViewCopy {
     }
 }
 
-private struct ChatStepCountBadge: View {
-    let count: Int
-
-    var body: some View {
-        Text("\(count)")
-            .font(.caption2.weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Color(uiColor: .separator), lineWidth: 1)
-            )
+/// Status dot colors shared by every step row: running is the accent, failed
+/// is destructive, finished steps stay quiet.
+private enum ChatStepDot {
+    static func color(for status: String?) -> Color {
+        switch status {
+        case "running":
+            Runner.Palette.accent
+        case "failed":
+            Runner.Palette.destructive
+        default:
+            Runner.Palette.ring
+        }
     }
 }
 
@@ -161,40 +174,23 @@ private struct ChatLiveStepRow: View {
     let step: ChatWorkStepSummary
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            statusIcon
-                .frame(width: 14)
+        HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.small) {
+            RunnerStatusDot(color: ChatStepDot.color(for: step.status))
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Runner.Spacing.xsmall }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(step.displayTitle)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(step.status == "running" ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(step.status == "running" ? Runner.Palette.foreground : Runner.Palette.mutedForeground)
                     .lineLimit(1)
 
                 if let detail = step.detail, !detail.isEmpty {
                     Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Runner.Typography.micro)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .lineLimit(2)
                 }
             }
-        }
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        switch step.status {
-        case "running":
-            ProgressView()
-                .controlSize(.mini)
-        case "failed":
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-        default:
-            Image(systemName: ChatStepIconography.systemImage(for: step.type))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -203,26 +199,26 @@ private struct ChatToolCallRow: View {
     let toolCall: ChatToolCallSummary
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            statusIcon
-                .frame(width: 14)
+        HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.small) {
+            RunnerStatusDot(color: ChatStepDot.color(for: toolCall.status))
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Runner.Spacing.xsmall }
 
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
+                HStack(spacing: Runner.Spacing.xsmall + 1) {
                     Text(toolCall.label)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Runner.Typography.captionMedium)
+                        .foregroundStyle(toolCall.status == "running" ? Runner.Palette.foreground : Runner.Palette.mutedForeground)
                         .lineLimit(1)
                         .layoutPriority(1)
 
                     if let detail = toolCall.detail, !detail.isEmpty {
                         Text("·")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .font(Runner.Typography.caption)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
 
                         Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(Runner.Typography.caption)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -230,28 +226,11 @@ private struct ChatToolCallRow: View {
 
                 if let summary = toolCall.summary, !summary.isEmpty {
                     Text(summary)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.micro)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-        }
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        switch toolCall.status {
-        case "running":
-            ProgressView()
-                .controlSize(.mini)
-        case "failed":
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-        default:
-            Image(systemName: ChatStepIconography.toolSystemImage(for: toolCall.tool))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -260,21 +239,19 @@ private struct ChatWorkStepRow: View {
     let step: ChatWorkStepSummary
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Image(systemName: step.status == "failed" ? "exclamationmark.triangle.fill" : ChatStepIconography.systemImage(for: step.type))
-                .font(.caption2)
-                .foregroundStyle(step.status == "failed" ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                .frame(width: 14)
+        HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.small) {
+            RunnerStatusDot(color: ChatStepDot.color(for: step.status))
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Runner.Spacing.xsmall }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(step.displayTitle)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .font(Runner.Typography.captionMedium)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
 
                 if let detail = step.detail, !detail.isEmpty {
                     Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.micro)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

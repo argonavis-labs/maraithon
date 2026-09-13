@@ -353,8 +353,22 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
       %{
         count: length(live),
         oldest_age_seconds: age_seconds(oldest, now),
-        reason: "briefs stuck past the 90-minute defensive SLA (notifier not ticking?)"
+        reason: brief_alarm_reason()
       }
+    end
+  end
+
+  defp brief_alarm_reason do
+    case Maraithon.Push.Notifier.configuration_status() do
+      :not_configured ->
+        "brief notifications are overdue because Apple push credentials are missing; " <>
+          "email delivery is independent"
+
+      :disabled ->
+        "brief notifications are overdue while mobile push delivery is disabled"
+
+      :ready ->
+        "brief notifications are past the 90-minute SLA; inspect delivery outcomes and the recurring schedule"
     end
   end
 

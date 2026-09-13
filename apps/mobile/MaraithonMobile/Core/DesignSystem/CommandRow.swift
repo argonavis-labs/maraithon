@@ -10,39 +10,41 @@ struct CommandRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: Runner.Spacing.tight) {
                 Image(systemName: systemImage)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 30, height: 30)
-                    .background(tint.opacity(0.12), in: Circle())
+                    .font(Runner.Typography.smallMedium)
+                    .foregroundStyle(Runner.Palette.accent)
+                    .frame(width: Runner.Layout.compactControlHeight - 4, height: Runner.Layout.compactControlHeight - 4)
+                    .background(Runner.Palette.foreground5, in: RoundedRectangle(cornerRadius: Runner.Radius.control, style: .continuous))
+                    .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: Runner.Spacing.xxsmall) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(Runner.Typography.bodyMedium)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .lineLimit(1)
 
                     Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .lineLimit(1)
                 }
 
-                Spacer(minLength: 8)
+                Spacer(minLength: Runner.Spacing.small)
 
                 if !value.isEmpty {
                     Text(value)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.primary)
+                        .font(Runner.Typography.smallMedium.monospacedDigit())
+                        .foregroundStyle(Runner.Palette.foreground)
                 }
 
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Runner.Spacing.medium)
+            .padding(.vertical, Runner.Spacing.snug)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

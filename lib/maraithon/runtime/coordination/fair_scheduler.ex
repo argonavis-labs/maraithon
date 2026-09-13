@@ -97,8 +97,8 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
         Repo,
         """
         UPDATE public.runtime_tenant_fairness
-        SET max_concurrency = $2, rate_per_minute = $3, burst = $4,
-            available_microunits = LEAST(available_microunits, $4::bigint * #{@microunits}),
+        SET max_concurrency = $2, rate_per_minute = $3, burst = $4::integer,
+            available_microunits = LEAST(available_microunits, ($4::integer)::bigint * #{@microunits}),
             updated_at = timezone('UTC', clock_timestamp())
         WHERE tenant_key = $1
         """,

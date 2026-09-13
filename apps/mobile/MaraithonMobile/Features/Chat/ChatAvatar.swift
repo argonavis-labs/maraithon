@@ -1,19 +1,25 @@
 import SwiftUI
 
+/// Initials or symbol mark on the workspace's selected tint. The transcript
+/// no longer shows avatars; this stays for surfaces that still want a mark.
 struct ChatAvatar: View {
     let title: String
     var systemImage: String?
-    var size: CGFloat = 44
-    var tint: Color = .accentColor
+    var size: CGFloat = Runner.Layout.controlHeight
+    var tint: Color = Runner.Palette.accent
 
     var body: some View {
         Circle()
-            .fill(tint.opacity(0.16))
+            .fill(Runner.Palette.selected)
             .frame(width: size, height: size)
+            .overlay {
+                Circle()
+                    .stroke(Runner.Palette.border, lineWidth: Runner.Stroke.hairline)
+            }
             .overlay {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .font(.system(size: size * 0.42, weight: .medium))
                         .foregroundStyle(tint)
                 } else {
                     Text(initials)

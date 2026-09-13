@@ -21,56 +21,78 @@ struct ChatThreadsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                pageHeader
+                    .listRowInsets(EdgeInsets(
+                        top: Runner.Spacing.small,
+                        leading: Runner.Layout.pageInset,
+                        bottom: Runner.Spacing.small,
+                        trailing: Runner.Layout.pageInset
+                    ))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Runner.Palette.background)
+
                 if let errorMessage {
-                    Section {
-                        SyncIssueBanner(
-                            title: ChatThreadsCopy.refreshWarningTitle,
-                            message: errorMessage,
-                            buttonTitle: ChatThreadsCopy.refreshButtonTitle,
-                            retry: { Task { await refreshThreads() } },
-                            dismiss: { self.errorMessage = nil }
-                        )
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                    }
+                    SyncIssueBanner(
+                        title: ChatThreadsCopy.refreshWarningTitle,
+                        message: errorMessage,
+                        buttonTitle: ChatThreadsCopy.refreshButtonTitle,
+                        retry: { Task { await refreshThreads() } },
+                        dismiss: { self.errorMessage = nil }
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Runner.Palette.background)
                 }
 
                 if let actionErrorMessage {
-                    Section {
-                        SyncIssueBanner(
-                            title: ChatThreadsCopy.actionWarningTitle,
-                            message: actionErrorMessage,
-                            buttonTitle: nil,
-                            retry: nil,
-                            dismissAccessibilityLabel: ChatThreadsCopy.dismissActionWarningAccessibilityLabel,
-                            dismiss: { self.actionErrorMessage = nil }
-                        )
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                    }
+                    SyncIssueBanner(
+                        title: ChatThreadsCopy.actionWarningTitle,
+                        message: actionErrorMessage,
+                        buttonTitle: nil,
+                        retry: nil,
+                        dismissAccessibilityLabel: ChatThreadsCopy.dismissActionWarningAccessibilityLabel,
+                        dismiss: { self.actionErrorMessage = nil }
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Runner.Palette.background)
                 }
 
                 if filteredThreads.isEmpty {
-                    if threads.isEmpty {
-                        emptyChatState
-                    } else {
-                        ContentUnavailableView(
-                            ChatThreadsCopy.noMatchingChatsTitle,
-                            systemImage: "bubble.left.and.bubble.right",
-                            description: Text(ChatThreadsCopy.noMatchingChatsDescription)
-                        )
+                    Group {
+                        if threads.isEmpty {
+                            emptyChatState
+                        } else {
+                            RunnerEmptyState(
+                                title: ChatThreadsCopy.noMatchingChatsTitle,
+                                description: ChatThreadsCopy.noMatchingChatsDescription,
+                                systemImage: "bubble.left.and.bubble.right"
+                            )
+                        }
                     }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Runner.Palette.background)
                 } else {
                     ForEach(filteredThreads) { thread in
                         NavigationLink(value: thread.id) {
                             ChatThreadRow(thread: thread)
                         }
+                        .listRowInsets(EdgeInsets(
+                            top: 0,
+                            leading: Runner.Layout.pageInset,
+                            bottom: 0,
+                            trailing: Runner.Layout.pageInset
+                        ))
+                        .listRowBackground(Runner.Palette.background)
+                        .listRowSeparatorTint(Runner.Palette.border)
                     }
                     .onDelete(perform: deleteThreads)
                 }
             }
-            .navigationTitle("Chat")
-            .searchable(text: $searchText, prompt: "Search chats")
+            .listStyle(.plain)
+            .runnerPage()
+            .toolbar(.hidden, for: .navigationBar)
             .refreshable {
                 await refreshThreads(force: true)
             }
@@ -97,26 +119,46 @@ struct ChatThreadsView: View {
                         pendingPromptByThreadID[threadID] = nil
                     }
                 } else {
-                    ContentUnavailableView(
-                        ChatThreadsCopy.deletedChatTitle,
-                        systemImage: "bubble.left.and.exclamationmark.bubble.right",
-                        description: Text(ChatThreadsCopy.deletedChatDescription)
-                    )
+                    VStack {
+                        RunnerEmptyState(
+                            title: ChatThreadsCopy.deletedChatTitle,
+                            description: ChatThreadsCopy.deletedChatDescription,
+                            systemImage: "bubble.left.and.exclamationmark.bubble.right"
+                        )
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, Runner.Spacing.xlarge)
+                    .runnerPage()
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+        }
+    }
+
+    private var pageHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RunnerPageHeader(
+                eyebrow: "Your workspace",
+                title: "Chat",
+                count: threads.count,
+                subtitle: "Ask your chief of staff anything about your work."
+            ) {
+                HStack(spacing: Runner.Spacing.small) {
                     AccountMenuButton()
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         createThread()
                     } label: {
-                        Image(systemName: "square.and.pencil")
+                        HStack(spacing: Runner.Spacing.compact) {
+                            Image(systemName: "square.and.pencil")
+                                .accessibilityHidden(true)
+                            Text(ChatThreadsCopy.newChatButtonTitle)
+                        }
                     }
+                    .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
                     .accessibilityLabel(ChatThreadsCopy.newChatButtonTitle)
                 }
             }
+
+            RunnerSearchField(placeholder: "Search chats", text: $searchText)
         }
     }
 
@@ -135,26 +177,13 @@ struct ChatThreadsView: View {
     }
 
     private var emptyChatState: some View {
-        VStack(spacing: 18) {
-            ContentUnavailableView {
-                Label(ChatThreadsCopy.emptyChatsTitle, systemImage: "bubble.left.and.bubble.right")
-            } description: {
-                Text(ChatThreadsCopy.emptyChatsDescription)
-            }
-
-            Button {
-                createThread()
-            } label: {
-                Label(ChatThreadsCopy.newChatButtonTitle, systemImage: "square.and.pencil")
-                    .font(.headline)
-            }
-            .appProminentGlassActionStyle()
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-        .listRowSeparator(.hidden)
+        RunnerEmptyState(
+            title: ChatThreadsCopy.emptyChatsTitle,
+            description: ChatThreadsCopy.emptyChatsDescription,
+            systemImage: "bubble.left.and.bubble.right",
+            actionTitle: ChatThreadsCopy.newChatButtonTitle,
+            action: { createThread() }
+        )
     }
 
     private func consumeRequestedPromptIfNeeded() {

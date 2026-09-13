@@ -122,9 +122,24 @@ defmodule Maraithon.Tools.LocalFilesHelpers do
 
   defp cap_full_text(text) when is_binary(text) do
     if byte_size(text) > @full_text_max do
-      {binary_part(text, 0, @full_text_max), true}
+      {utf8_prefix(text, @full_text_max), true}
     else
       {text, false}
+    end
+  end
+
+  # Cuts at a byte budget without leaving a split multibyte character behind;
+  # a dangling partial sequence would later fail JSON encoding downstream.
+  defp utf8_prefix(text, max_bytes) do
+    cut = binary_part(text, 0, max_bytes)
+
+    if String.valid?(cut) do
+      cut
+    else
+      cut
+      |> String.chunk(:valid)
+      |> Enum.filter(&String.valid?/1)
+      |> Enum.join()
     end
   end
 

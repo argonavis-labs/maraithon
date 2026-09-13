@@ -232,15 +232,12 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
             {:ok, empty_user_summary(user_id)}
 
           [_ | _] ->
-            with true <- deliverable?(user_id),
+            with :ok <- Maraithon.Push.Notifier.availability(user_id),
                  :plan <- quiet_hours_gate(user_id, candidates),
                  {:ok, payload, planning_candidates} <-
                    build_payload(user_id, nil, candidates, opts) do
               claim_and_run_plan(user_id, payload, planning_candidates, opts)
             else
-              false ->
-                {:error, :no_push_device}
-
               :defer_quiet_hours ->
                 {:ok, empty_user_summary(user_id)}
 
@@ -1977,13 +1974,6 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     do: Repo.get(Conversation, conversation_id)
 
   defp load_conversation(_conversation_id), do: nil
-
-  # Telegram is retired; planning proceeds only for users whose phone can
-  # receive the result. Candidates for everyone else stay pending until a
-  # device registers (or they expire on the queue's own TTL).
-  defp deliverable?(user_id) do
-    Maraithon.Push.Notifier.enabled_for_user?(user_id)
-  end
 
   defp disposition_counts(planned) do
     %{

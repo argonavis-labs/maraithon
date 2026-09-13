@@ -196,6 +196,14 @@ struct MaraithonClient: Sendable {
     // MARK: - Defaults
 
     static let defaultBaseURL: URL = {
+        #if DEBUG
+        // Local development only: point a debug build at a mock or local
+        // server without editing the bundle. Never read in release builds.
+        if let raw = ProcessInfo.processInfo.environment["MARAITHON_BASE_URL"],
+           let url = URL(string: raw), ["http", "https"].contains(url.scheme ?? "") {
+            return url
+        }
+        #endif
         if let raw = Bundle.main.object(forInfoDictionaryKey: "MaraithonBaseURL") as? String,
            let url = URL(string: raw) {
             return url

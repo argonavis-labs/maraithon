@@ -35,34 +35,19 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     |> Map.merge(overrides)
   end
 
-  defp open_work_items(prompt) do
-    captures =
-      Regex.named_captures(
-        ~r/OPEN_WORK_ITEMS_JSON:\n(?<json>\[.*?\])\n\nRECENT_ACTIVITY_JSON/s,
-        prompt
-      )
-
-    Jason.decode!(captures["json"])
-  end
-
-  defp recent_activity(prompt) do
-    captures =
-      Regex.named_captures(
-        ~r/RECENT_ACTIVITY_JSON \(current time [^)]+\):\n(?<json>\[.*?\])\n\nRespond with only/s,
-        prompt
-      )
-
-    Jason.decode!(captures["json"])
-  end
+  defp open_work_items(prompt), do: prompt_section(prompt, "OPEN_WORK_ITEMS_JSON")
+  defp recent_activity(prompt), do: prompt_section(prompt, "RECENT_ACTIVITY_JSON")
 
   defp exact_recent_activity(prompt) do
-    captures =
-      Regex.named_captures(
-        ~r/RECENT_ACTIVITY_JSON \(current time [^)]+\):\n(?<json>\[.*?\])\n\nThis is an exact closure sweep/s,
-        prompt
-      )
+    assert prompt =~ "This is an exact closure sweep."
+    recent_activity(prompt)
+  end
 
-    Jason.decode!(captures["json"])
+  defp prompt_section(prompt, heading) do
+    # Sections are compact JSON lines. Their order may change for prompt-cache
+    # stability without changing the coverage, evidence or budgeting contract.
+    [_, json] = Regex.run(Regex.compile!("^" <> heading <> ":\\n([^\\n]+)$", "m"), prompt)
+    Jason.decode!(json)
   end
 
   test "an empty complete account delta makes no model call" do
@@ -656,6 +641,7 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     {:ok, [target]} =
       Todos.upsert_many(user_id, [
         open_todo_attrs("Evidence linked newest waiting item", source_at, %{
+          "source" => "gmail",
           "source_item_id" => "thread-evidence-linked-newest",
           "dedupe_key" => "cross-source-bulk:target:#{Ecto.UUID.generate()}"
         })
@@ -1404,14 +1390,19 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       })
 
     llm_complete = fn prompt ->
-      activity =
+      activities =
         prompt
         |> exact_recent_activity()
-        |> Enum.find(&(&1["channel"] == "gmail"))
+        |> Enum.filter(&(&1["channel"] == "gmail"))
 
-      assert activity["source_ref"] == delta_ref
-      assert activity["text"] =~ "Thanks for the update."
-      assert activity["text"] =~ completion_proof
+      current = Enum.find(activities, &(&1["source_item_id"] == "gmail-delta"))
+      historical = Enum.find(activities, &(&1["source_item_id"] == "gmail-history-only"))
+      assert current["source_ref"] == delta_ref
+      assert historical["source_ref"] == delta_ref
+      assert current["text"] == "Thanks for the update."
+      assert historical["text"] == completion_proof
+      assert historical["sender"] == "Elena <elena@example.com>"
+      assert historical["at"] == iso(DateTime.add(now, -60, :second))
 
       {:ok,
        %{

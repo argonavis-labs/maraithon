@@ -1,9 +1,32 @@
 defmodule MaraithonWeb.CoreComponents do
+  # Small outline Heroicons used by action controls; rendered without a runtime dependency.
+  @action_icons %{
+    "hero-arrow-up-right" => "M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25",
+    "hero-arrow-up" => "M12 19.5v-15m0 0l-6.75 6.75M12 4.5l6.75 6.75",
+    "hero-chevron-down" => "M19.5 8.25L12 15.75l-7.5-7.5",
+    "hero-arrow-path" => "M16.023 9.348h4.992V4.356m-.553 10.856A9 9 0 014.038 9.348M3 19.644v-4.992h4.992m-4.44-5.864A9 9 0 0119.962 14.652",
+    "hero-calendar-days" => "M6.75 3v2.25m10.5-2.25v2.25M3.75 9h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v12a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5v-12a1.5 1.5 0 011.5-1.5zM7.5 12h.008v.008H7.5V12zm4.5 0h.008v.008H12V12zm4.5 0h.008v.008H16.5V12zm-9 4.5h.008v.008H7.5V16.5zm4.5 0h.008v.008H12V16.5z",
+    "hero-sparkles" => "M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.091L2.25 12l2.846-.813a4.5 4.5 0 003.091-3.091L9 5.25l.813 2.846a4.5 4.5 0 003.091 3.091L15.75 12l-2.846.813a4.5 4.5 0 00-3.091 3.091zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.456-2.456L14.25 6l1.035-.259a3.375 3.375 0 002.456-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"
+  }
   @moduledoc """
   Core UI components for MaraithonWeb.
   """
 
   use Phoenix.Component
+
+  attr :name, :string, required: true
+  attr :class, :string, default: nil
+
+  def action_icon(assigns) do
+    assigns = assign(assigns, :path, Map.fetch!(@action_icons, assigns.name))
+
+    ~H"""
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class={@class}>
+      <path d={@path} />
+    </svg>
+    """
+  end
 
   @doc """
   Catalyst-inspired page heading.
@@ -136,7 +159,7 @@ defmodule MaraithonWeb.CoreComponents do
   attr :color, :string, default: "dark"
   attr :disabled, :boolean, default: false
   attr :class, :string, default: nil
-  attr :rest, :global, include: ~w(target rel download form)
+  attr :rest, :global, include: ~w(target rel download form formnovalidate)
   slot :inner_block, required: true
 
   def button(assigns) do
@@ -276,7 +299,7 @@ defmodule MaraithonWeb.CoreComponents do
   attr :max, :any, default: nil
   attr :maxlength, :any, default: nil
   attr :required, :boolean, default: false
-  attr :rest, :global
+  attr :rest, :global, include: ~w(readonly)
 
   def c_input(assigns) do
     ~H"""
@@ -308,7 +331,7 @@ defmodule MaraithonWeb.CoreComponents do
   attr :class, :string, default: nil
   attr :maxlength, :any, default: nil
   attr :required, :boolean, default: false
-  attr :rest, :global
+  attr :rest, :global, include: ~w(readonly)
 
   def c_textarea(assigns) do
     ~H"""

@@ -28,7 +28,9 @@ final class AppNavigation {
         switch url.host {
         case "today":
             selectedTab = .today
-        case "todos", "stream", "people", "crm":
+        case "people", "crm":
+            selectedTab = .people
+        case "todos", "stream":
             // Older links to retired tabs still land on the main list.
             selectedTab = .todos
         case "chat":

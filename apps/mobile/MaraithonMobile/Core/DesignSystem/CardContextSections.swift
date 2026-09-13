@@ -9,29 +9,29 @@ struct CardConversationSection: View {
         if messages.isEmpty {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.small) {
                 ForEach(Array(messages.suffix(maxMessages).enumerated()), id: \.offset) { _, message in
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .top, spacing: Runner.Spacing.small) {
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(message.fromUser == true ? Color.accentColor.opacity(0.6) : Color(uiColor: .separator))
+                            .fill(message.fromUser == true ? Runner.Palette.accent : Runner.Palette.foreground10)
                             .frame(width: 2)
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        VStack(alignment: .leading, spacing: Runner.Spacing.xxsmall) {
+                            HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.compact) {
                                 Text(message.speakerLabel)
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .font(Runner.Typography.captionMedium)
+                                    .foregroundStyle(Runner.Palette.foreground80)
 
                                 if let timestamp = message.timestampLabel {
                                     Text(timestamp)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .font(Runner.Typography.caption)
+                                        .foregroundStyle(Runner.Palette.mutedForeground)
                                 }
                             }
 
                             Text(message.text)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
+                                .font(Runner.Typography.small)
+                                .foregroundStyle(Runner.Palette.foreground)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
                         }
@@ -52,17 +52,17 @@ struct CardParticipantsSection: View {
         if participants.isEmpty {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
                 ForEach(groupedRows, id: \.label) { row in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.compact) {
                         Text(row.label)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .font(Runner.Typography.captionMedium)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
                             .frame(width: 34, alignment: .leading)
 
                         Text(row.people)
-                            .font(.caption)
-                            .foregroundStyle(.primary)
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.foreground)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }

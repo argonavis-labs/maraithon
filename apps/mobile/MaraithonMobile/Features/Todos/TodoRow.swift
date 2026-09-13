@@ -1,4 +1,5 @@
 import SwiftUI
+import AssistantProgressKit
 
 struct TodoRow: View {
     let todo: TodoItem
@@ -7,47 +8,82 @@ struct TodoRow: View {
     /// Built once per row construction; the body reads it several times and
     /// each construction runs the copy-cleaning pipeline over ~8 fields.
     private let decisionContext: TodoDecisionContext
+    private let badges: [TodoBadge]
 
     init(todo: TodoItem, onToggle: @escaping () -> Void) {
         self.todo = todo
         self.onToggle = onToggle
         self.decisionContext = TodoDecisionContext(todo: todo)
+        self.badges = TodoBadges.badges(for: todo)
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Button(action: onToggle) {
-                Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.title2)
-                    .foregroundStyle(todo.isCompleted ? .green : .secondary)
-                    .frame(minWidth: 28, minHeight: 44, alignment: .top)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(todo.isCompleted ? "Mark incomplete" : "Mark complete")
+        HStack(alignment: .top, spacing: Runner.Spacing.snug) {
+            RunnerCheckbox(
+                isOn: todo.isCompleted,
+                label: todo.isCompleted ? "Mark incomplete" : "Mark complete",
+                action: onToggle
+            )
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
                 Text(todo.title)
-                    .font(.body)
+                    .font(Runner.Typography.bodyMedium)
                     .strikethrough(todo.isCompleted)
-                    .foregroundStyle(todo.isCompleted ? .secondary : .primary)
+                    .foregroundStyle(todo.isCompleted ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                if let context = decisionContext.rowContext {
+                if !badges.isEmpty {
+                    TodoBadgeRow(badges: badges)
+                }
+
+                if let workflow = todo.workflow {
+                    TodoOwnershipLine(workflow: workflow)
+                }
+
+                if todo.isActive, let next = todo.workflow?.nextAction, !next.isEmpty {
+                    TodoLabeledLine(label: "Next:", text: next, lineLimit: 2)
+                } else if let context = decisionContext.rowContext {
                     Text(context)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .lineLimit(2)
                 }
 
-                if let dueDate = todo.dueDate {
-                    Text(dueText(for: dueDate))
-                        .font(.caption)
-                        .foregroundStyle(dueTint(for: dueDate))
+                if sourceLabel != nil || todo.dueDate != nil {
+                    HStack(spacing: Runner.Spacing.compact) {
+                        if let sourceLabel {
+                            ProviderMark(provider: providerKey, size: Runner.Layout.providerMark)
+                            Text(sourceLabel)
+                                .font(Runner.Typography.caption)
+                                .foregroundStyle(Runner.Palette.mutedForeground)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: Runner.Spacing.small)
+
+                        if let dueDate = todo.dueDate {
+                            Text(dueText(for: dueDate))
+                                .font(Runner.Typography.caption)
+                                .foregroundStyle(dueTint(for: dueDate))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.top, Runner.Spacing.xxsmall)
                 }
             }
+            // Lines the title up with the checkbox's visible box, not its 44pt touch frame.
+            .padding(.top, Runner.Spacing.snug)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 4)
+    }
+
+    private var sourceLabel: String? {
+        let label = (todo.sourceProviderLabel ?? todo.sourceSystem)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return label?.isEmpty == false ? label : nil
+    }
+
+    private var providerKey: String {
+        todo.sourceProvider ?? todo.sourceProviderLabel?.lowercased() ?? todo.sourceSystem ?? ""
     }
 
     private func dueText(for dueDate: Date) -> String {
@@ -55,18 +91,108 @@ struct TodoRow: View {
     }
 
     private func dueTint(for dueDate: Date) -> Color {
-        guard !todo.isCompleted else { return .secondary }
+        guard !todo.isCompleted else { return Runner.Palette.mutedForeground }
         if TodoRowCopy.isStaleKeepClose(todo) {
-            return .secondary
+            return Runner.Palette.mutedForeground
         }
         let calendar = Calendar.current
         if dueDate < Date(), !calendar.isDateInToday(dueDate) {
-            return .orange
+            return Runner.Palette.destructiveText
         }
         if calendar.isDateInToday(dueDate) {
-            return .blue
+            return Runner.Palette.infoText
         }
-        return .secondary
+        return Runner.Palette.mutedForeground
+    }
+}
+
+/// One workspace badge (status, decision, priority) shared by rows and the detail header.
+struct TodoBadge: Identifiable, Equatable {
+    let id: String
+    let text: String
+    let tone: RunnerBadge.Tone
+}
+
+enum TodoBadges {
+    static func badges(for todo: TodoItem) -> [TodoBadge] {
+        var badges: [TodoBadge] = []
+
+        switch todo.status {
+        case .open:
+            break
+        case .snoozed:
+            badges.append(TodoBadge(id: "status", text: todo.status.title, tone: .amber))
+        case .done:
+            badges.append(TodoBadge(id: "status", text: todo.status.title, tone: .blue))
+        case .dismissed:
+            badges.append(TodoBadge(id: "status", text: todo.status.title, tone: .zinc))
+        }
+
+        if let title = TodoDecisionSignals.signalPillTitle(for: todo) {
+            badges.append(TodoBadge(id: "decision", text: title, tone: .indigo))
+        }
+
+        if todo.isActive {
+            switch todo.priority {
+            case .high:
+                badges.append(TodoBadge(id: "priority", text: todo.priority.title, tone: .amber))
+            case .critical:
+                badges.append(TodoBadge(id: "priority", text: todo.priority.title, tone: .red))
+            case .medium, .low:
+                break
+            }
+        }
+
+        return badges
+    }
+}
+
+struct TodoBadgeRow: View {
+    let badges: [TodoBadge]
+
+    var body: some View {
+        HStack(spacing: Runner.Spacing.compact) {
+            ForEach(badges) { badge in
+                RunnerBadge(text: badge.text, tone: badge.tone)
+            }
+        }
+    }
+}
+
+/// Who has the ball, as one muted line: "Your move · You own the action".
+struct TodoOwnershipLine: View {
+    let workflow: TodoWorkflow
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.xsmall) {
+            Image(systemName: "person.2")
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .accessibilityHidden(true)
+            Text("\(workflow.ballLabel) · \(workflow.label)")
+                .font(Runner.Typography.small)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(workflow.ballLabel). State: \(workflow.label)")
+    }
+}
+
+/// "Label: text" as one run of small type: label in foreground80, text in `textColor`.
+struct TodoLabeledLine: View {
+    let label: String
+    let text: String
+    var lineLimit: Int? = nil
+    var textColor: Color = Runner.Palette.mutedForeground
+
+    var body: some View {
+        (Text(label).foregroundStyle(Runner.Palette.foreground80)
+            + Text(" ")
+            + Text(text).foregroundStyle(textColor))
+            .font(Runner.Typography.small)
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

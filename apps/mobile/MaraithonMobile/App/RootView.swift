@@ -10,14 +10,22 @@ struct RootView: View {
         Group {
             switch sessionStore.phase {
             case .checking:
-                ProgressView(AppLaunchCopy.checkingAccount)
-                    .controlSize(.large)
+                VStack(spacing: Runner.Spacing.tight) {
+                    MaraithonBrandMark()
+                    ProgressView()
+                        .tint(Runner.Palette.mutedForeground)
+                    Text(AppLaunchCopy.checkingAccount)
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .signedOut, .magicLinkSent:
                 MagicSigninView()
             case .signedIn:
                 AppShellView()
             }
         }
+        .runnerPage()
         .task {
             guard !didStart else { return }
             didStart = true

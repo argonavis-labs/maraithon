@@ -1,16 +1,39 @@
 import Foundation
+import AssistantProgressKit
 
-/// Least-privilege Todo filters exposed by the paired-device API.
+/// Least-privilege Todo filters exposed by the paired-device API. Raw values
+/// are the server's `status` query values; titles are the tab labels.
 enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
     case active
+    case snoozed
     case done
+    case all
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .active: return "Active"
-        case .done: return "Done"
+        case .snoozed: return "Snoozed"
+        case .done: return "Completed"
+        case .all: return "All tasks"
+        }
+    }
+
+    /// Open work sorts by rank; history sorts by recency.
+    var sortParameter: String {
+        switch self {
+        case .active, .snoozed: return "rank"
+        case .done, .all: return "updated"
+        }
+    }
+
+    func includes(status: String) -> Bool {
+        switch self {
+        case .active: return status == "open" || status == "snoozed"
+        case .snoozed: return status == "snoozed"
+        case .done: return status == "done"
+        case .all: return true
         }
     }
 }
@@ -28,11 +51,19 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     let dueAt: String?
     let priority: Int
     let status: String
+    var workflow: TodoWorkflow? = nil
     let snoozedUntil: String?
     let updatedAt: String?
     let actionCard: CompanionTodoActionCard?
     var closedAt: String? = nil
     var metadata: PublicMetadata? = nil
+    var brief: CompanionTodoBrief? = nil
+    /// `needs_you`, `can_prepare`, or `can_execute`; nil until the server
+    /// projection ships the field, in which case no offer pill is shown.
+    var agentActionability: String? = nil
+    var agentActionLabel: String? = nil
+    /// Server-computed decision signal that drives the "Decision" badge.
+    var decision: Bool? = nil
 
     struct PublicMetadata: Codable, Hashable, Sendable {
         let resolutionNote: String?
@@ -53,14 +84,20 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
         case dueAt = "due_at"
         case priority
         case status
+        case workflow
         case snoozedUntil = "snoozed_until"
         case updatedAt = "updated_at"
         case actionCard = "action_card"
         case closedAt = "closed_at"
         case metadata
+        case brief
+        case agentActionability = "agent_actionability"
+        case agentActionLabel = "agent_action_label"
+        case decision
     }
 
     var recommendedMove: String? {
+        if let next = Self.nonblank(workflow?.nextAction) { return next }
         guard canMarkDone else { return nil }
         if ["manual", "mobile"].contains(source) {
             return Self.nonblank(nextAction) ?? Self.nonblank(actionCard?.nextBestAction)
@@ -72,6 +109,8 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     var updatedDate: Date? { Self.parseDate(updatedAt) }
     var closedDate: Date? { Self.parseDate(closedAt) }
     var resolutionNote: String? { Self.nonblank(metadata?.resolutionNote) }
+
+    var needsDecision: Bool { decision == true }
 
     var canMarkDone: Bool { status == "open" || status == "snoozed" }
     var canReopen: Bool { status == "done" }
@@ -126,11 +165,15 @@ struct CompanionTodoSourceAction: Codable, Hashable, Sendable {
     let openURL: String?
     let openLabel: String?
     let draftText: String?
+    var provider: String? = nil
+    var subject: String? = nil
+    var recipient: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case openURL = "open_url"
         case openLabel = "open_label"
         case draftText = "draft_text"
+        case provider, subject, recipient
     }
 
     var destination: URL? {

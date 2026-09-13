@@ -16,7 +16,7 @@ struct FilterCountStrip<Value: Hashable>: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: Runner.Spacing.small) {
                 ForEach(options) { option in
                     FilterCountButton(
                         option: option,
@@ -44,26 +44,25 @@ private struct FilterCountButton<Value: Hashable>: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 7) {
+            HStack(spacing: Runner.Spacing.compact) {
                 Text(option.title)
-                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                    .font(isSelected ? Runner.Typography.smallMedium : Runner.Typography.small)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
 
                 Text(option.count.formatted())
-                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .font(Runner.Typography.micro.monospacedDigit())
                     .lineLimit(1)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, Runner.Spacing.xsmall + 1)
+                    .padding(.vertical, 1)
                     .background(countBackground, in: Capsule())
             }
-            .foregroundStyle(foregroundStyle)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 38)
-            .background(chipBackground, in: Capsule())
+            .foregroundStyle(isSelected ? Runner.Palette.background : Runner.Palette.foreground)
+            .padding(.horizontal, Runner.Spacing.tight)
+            .frame(minHeight: Runner.Layout.compactControlHeight)
+            .background(isSelected ? Runner.Palette.foreground : Runner.Palette.background, in: Capsule())
             .overlay {
-                Capsule()
-                    .stroke(borderColor, lineWidth: 1)
+                Capsule().stroke(isSelected ? Runner.Palette.foreground : Runner.Palette.border, lineWidth: Runner.Stroke.hairline)
             }
             .contentShape(Capsule())
         }
@@ -73,19 +72,7 @@ private struct FilterCountButton<Value: Hashable>: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var foregroundStyle: Color {
-        isSelected ? .white : .primary
-    }
-
-    private var chipBackground: Color {
-        isSelected ? option.tint : Color(uiColor: .secondarySystemFill)
-    }
-
     private var countBackground: Color {
-        isSelected ? .white.opacity(0.2) : Color(uiColor: .tertiarySystemFill)
-    }
-
-    private var borderColor: Color {
-        isSelected ? option.tint.opacity(0.45) : Color(uiColor: .separator).opacity(0.25)
+        isSelected ? Runner.Palette.background.opacity(0.2) : Runner.Palette.foreground5
     }
 }

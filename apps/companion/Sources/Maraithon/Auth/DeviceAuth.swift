@@ -59,7 +59,12 @@ final class DeviceAuth {
     private let deviceName: String
 
     /// UserDefaults key for the persisted `device_id`.
-    private static let defaultsKey = "com.maraithon.companion.device_id"
+    ///
+    /// The Electron desktop app adopted the original
+    /// `com.maraithon.companion.device_id` value, so the two apps shared one
+    /// device record and revoked each other's token on every pairing. The
+    /// native app now keeps its own identity under a separate key.
+    private static let defaultsKey = "com.maraithon.companion.native_device_id"
 
     init(
         eventLog: EventLog,
@@ -128,6 +133,13 @@ final class DeviceAuth {
     /// signed out. Reads Keychain on every call so a sign-out from another
     /// surface is honoured immediately.
     var currentToken: String? {
+        #if DEBUG
+        // Local design review against a mock server: seed a token without
+        // touching the Keychain. Never read in release builds.
+        if let seeded = ProcessInfo.processInfo.environment["MARAITHON_DEBUG_TOKEN"], !seeded.isEmpty {
+            return seeded
+        }
+        #endif
         do {
             return try keychain.get()
         } catch {

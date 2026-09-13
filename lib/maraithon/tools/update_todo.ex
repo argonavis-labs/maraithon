@@ -16,6 +16,7 @@ defmodule Maraithon.Tools.UpdateTodo do
           {:ok,
            %{
              source: "maraithon_todos",
+             workflow: Maraithon.Todos.Workflow.current(todo),
              todo: TodoHelpers.serialize_todo(todo)
            }}
 

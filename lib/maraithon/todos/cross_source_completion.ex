@@ -158,6 +158,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       open_todos == [] ->
         {:skip, :no_open_todos}
 
+      Keyword.has_key?(opts, :review_memo) ->
+        review_changed_todos(user_id, open_todos, now, opts)
+
       true ->
         # Evidence before candidate selection (SPEC 05 R2): live acquisition
         # is independent of which todos are checked (`build_live_source_bundle/4`
@@ -201,6 +204,160 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           end
         end
     end
+  end
+
+  # The durable backstop remembers successful decisions, not transient task
+  # state. Hash only semantic inputs: a new fetch timestamp is not new evidence.
+  # Exact account closure keeps its independent, exhaustive coverage protocol.
+  defp review_changed_todos(user_id, open_todos, now, opts) do
+    evidence = collect_evidence(user_id, open_todos, now, opts)
+
+    if review_source_failure?(evidence) do
+      {:error, :workflow_review_source_unavailable}
+    else
+      memo = Keyword.fetch!(opts, :review_memo)
+
+      evidence_hash =
+        evidence
+        |> Enum.flat_map(&stable_review_evidence/1)
+        |> Enum.uniq()
+        |> Enum.sort()
+        |> review_hash()
+
+      fingerprints =
+        Map.new(open_todos, &{&1.id, review_hash({1, prompt_todo(&1), evidence_hash})})
+
+      changed = Enum.reject(open_todos, &(memo[&1.id] == fingerprints[&1.id]))
+      unchanged = open_todos -- changed
+      {eligible, no_new_evidence} = exact_model_candidates(changed, evidence)
+      candidates = select_candidates(user_id, eligible, evidence)
+
+      evaluation =
+        if candidates == [] do
+          {:ok, %{checked: 0, completed: 0, model_calls: 0}, []}
+        else
+          evaluate_fitting(user_id, candidates, evidence, now, opts)
+        end
+
+      case evaluation do
+        {:ok, result, evaluated} ->
+          decided = unchanged ++ no_new_evidence ++ evaluated
+          # Only a full scan needs unchanged rows rotated to expose its tail.
+          # Ordinary idle reviews should not rewrite every open todo.
+          rotation =
+            if length(open_todos) == @max_open_todo_scan,
+              do: decided,
+              else: no_new_evidence ++ evaluated
+
+          stamp_completion_checked(user_id, rotation, now)
+          decided_ids = Enum.map(decided, & &1.id)
+
+          result
+          |> Map.put(:outcome, if(changed == [], do: "unchanged_context", else: "reviewed"))
+          |> Map.put(:unchanged, length(unchanged))
+          |> Map.put(:no_new_evidence, length(no_new_evidence))
+          |> Map.put(:pending_reviews, length(open_todos) - length(decided))
+          |> Map.put(:decision_refs, Enum.map(evaluated, & &1.id))
+          |> Map.put(:review_memo, Map.take(fingerprints, decided_ids))
+          |> Map.put(:calendar_evidence, calendar_review_evidence(evidence))
+          |> Map.put(:degraded_sources, degraded_review_sources(evidence))
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp review_hash(value) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(value, [:deterministic]))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp stable_review_evidence(%{"channel" => "source_health", "text" => text}) do
+    case Jason.decode(text) do
+      {:ok, health} when is_map(health) ->
+        Enum.map(health, fn {source, details} ->
+          {"source_health", source, strip_review_clock(details)}
+        end)
+
+      _ ->
+        [{"source_health", text}]
+    end
+  end
+
+  defp stable_review_evidence(item), do: [item]
+
+  defp strip_review_clock(value) when is_map(value) do
+    value
+    |> Map.drop(["fetched_at", "counts"])
+    |> Map.new(fn {key, nested} -> {key, strip_review_clock(nested)} end)
+  end
+
+  defp strip_review_clock(value) when is_list(value), do: Enum.map(value, &strip_review_clock/1)
+  defp strip_review_clock(value), do: value
+
+  defp review_source_failure?(evidence) do
+    Enum.any?(evidence, fn
+      %{"channel" => "source_health", "text" => text} ->
+        case Jason.decode(text) do
+          {:ok, health} ->
+            Map.has_key?(health, "live_sources")
+
+          _ ->
+            true
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  # Partial coverage is explicit in the prompt. Keep using valid evidence
+  # while retrying acquisition on every wake; recovery changes its fingerprint.
+  defp degraded_review_sources(evidence) do
+    evidence
+    |> Enum.flat_map(fn
+      %{"channel" => "source_health", "text" => text} ->
+        case Jason.decode(text) do
+          {:ok, health} ->
+            Enum.flat_map(health, fn {source, details} ->
+              if Enum.any?(nested_statuses(details), &(&1 in ["error", "partial", "unavailable"])) and
+                   read_string(details, "reason", "") != "google_calendar_not_connected" do
+                [source]
+              else
+                []
+              end
+            end)
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp calendar_review_evidence(evidence) do
+    Enum.flat_map(evidence, fn
+      %{"channel" => "google_calendar", "kind" => "calendar event"} = item ->
+        [item]
+
+      %{"channel" => "source_health", "text" => text} = item ->
+        case Jason.decode(text) do
+          {:ok, %{"calendar" => calendar}} ->
+            [Map.put(item, "text", Jason.encode!(%{"calendar" => calendar}))]
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end)
+    |> Enum.take(@max_live_evidence_per_source + 1)
   end
 
   defp actionable_evidence?(evidence) when is_list(evidence) do
@@ -307,7 +464,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp rotating_todo_pool(user_id, now, run_opts) do
-    age_cutoff = DateTime.add(now, -@min_todo_age_minutes * 60, :second)
+    min_age = if Keyword.has_key?(run_opts, :review_memo), do: 0, else: @min_todo_age_minutes
+    age_cutoff = DateTime.add(now, -min_age * 60, :second)
 
     # Rotate before bounding the database scan. An updated-at prefix would
     # permanently exclude the tail because check stamps do not update it.
@@ -475,6 +633,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     persisted_evidence
     |> Enum.concat(live_source_evidence(user_id, todos, now, opts))
+    |> Enum.concat(Keyword.get(opts, :cached_calendar_evidence, []))
     |> dedupe_evidence()
   end
 
@@ -631,7 +790,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         # An explicit evidence sweep, not a scheduled scan — keep the deep
         # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
         acquisition_deep_lookback: true,
-        skip_account_message_sources: Keyword.get(opts, :skip_account_message_sources, false)
+        skip_account_message_sources: Keyword.get(opts, :skip_account_message_sources, false),
+        skip_calendar_sources: Keyword.has_key?(opts, :cached_calendar_evidence)
       }
       |> maybe_put_context_source_scope(Keyword.get(opts, :source_scope))
 
@@ -876,7 +1036,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         "subject" => read_string(message, "subject", nil),
         "text" => current_text,
         "sender" => read_string(message, "from", nil),
-        "at" => evidence_time(message, ["internal_date", "date"]),
+        "at" => gmail_evidence_time(message),
         "source_item_id" => read_string(message, "message_id", read_string(message, "id", nil)),
         "source_ref" => gmail_source_ref(message),
         "thread_id" => read_string(message, "thread_id", nil),
@@ -922,6 +1082,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     text =
       [
+        calendar_time_text(event, "start", "Starts"),
+        calendar_time_text(event, "end", "Ends"),
         read_string(event, "description", nil),
         read_string(event, "notes", nil),
         read_string(event, "location", nil),
@@ -941,6 +1103,17 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         read_string(event, "event_id", read_string(event, "id", read_string(event, "guid", nil))),
       "account" => read_string(event, "account", read_string(event, "google_account_email", nil))
     })
+  end
+
+  defp calendar_time_text(event, key, label) do
+    time =
+      case read_value(event, key) do
+        %{date: date} when is_binary(date) -> date
+        %{"date" => date} when is_binary(date) -> date
+        value -> normalize_evidence_time(value)
+      end
+
+    if is_binary(time), do: "#{label}: #{time}", else: nil
   end
 
   defp slack_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
@@ -1320,7 +1493,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
             exact_acknowledgement_resolution?(todo, resolution, authorized_evidence)
           end)
 
-        case completion || acknowledgement do
+        progress = latest_exact_workflow_resolution(todo, candidates)
+
+        case completion || progress || acknowledgement do
           {resolution, _authorized_evidence} ->
             resolution
 
@@ -1342,7 +1517,55 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp exact_completion_resolution?(%Todo{} = todo, resolution, evidence) do
     resolution["completed"] == true and
+      (not Maraithon.Todos.Workflow.outcome_tracked?(todo) or
+         resolution["outcome_confirmed"] == true) and
       authorized_resolution_evidence?(todo, resolution, evidence)
+  end
+
+  # Account deltas can span several model requests. Keep an intermediate
+  # handoff as well as completion/acknowledgment decisions. Input chunk order
+  # is not chronology, so the latest quoted source controls the next move.
+  # Conflicting plans at the same timestamp need another review.
+  defp latest_exact_workflow_resolution(todo, candidates) do
+    proposals =
+      Enum.flat_map(candidates, fn
+        {%{"completed" => false, "workflow_transition" => %{} = transition} = resolution,
+         evidence} = candidate ->
+          if transition["state"] in ~w(you_own working waiting they_own) do
+            case matching_evidence(todo, resolution, evidence, fn _ -> true end) do
+              %{"at" => at} -> [{parse_datetime(at), transition, candidate}]
+              _ -> []
+            end
+          else
+            []
+          end
+
+        _ ->
+          []
+      end)
+
+    case Enum.max_by(proposals, fn {at, _, _} -> DateTime.to_unix(at, :microsecond) end, fn ->
+           nil
+         end) do
+      nil ->
+        nil
+
+      {latest, _, _} ->
+        proposals
+        |> Enum.filter(fn {at, _, _} -> DateTime.compare(at, latest) == :eq end)
+        |> Enum.uniq_by(fn {_, transition, _} ->
+          transition
+          |> Map.take(~w(state owner next_action waiting_until))
+          |> Map.update("owner", nil, fn
+            owner when is_map(owner) -> Map.take(owner, ~w(kind id))
+            _ -> nil
+          end)
+        end)
+        |> case do
+          [{_, _, candidate}] -> candidate
+          _conflicting -> nil
+        end
+    end
   end
 
   defp exact_acknowledgement_resolution?(
@@ -1540,7 +1763,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp build_prompt(user_id, todos, evidence, now, opts) do
-    exhaustive? = Keyword.get(opts, :exhaustive_completion, false)
+    exhaustive? = require_decision_coverage?(opts)
     todos_json = todos |> Enum.map(&prompt_todo/1) |> Jason.encode!()
     empty_prompt = render_prompt(todos_json, "[]", now, exhaustive?)
     base_bytes = prompt_request_bytes(empty_prompt)
@@ -1640,24 +1863,35 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "title" => bounded_prompt_string(todo.title, 240),
       "summary" => bounded_prompt_string(todo.summary, 480),
       "next_action" => bounded_prompt_string(todo.next_action, 320),
+      "people" => workflow_people(todo),
+      "workflow" =>
+        Maraithon.Todos.Workflow.current(todo) |> Map.take(~w(state owner outcome revision)),
       "captured_at" => DateTime.to_iso8601(Todo.completion_evidence_after(todo)),
       # SPEC 05 R5: structured linkage so the model can match a specific piece
       # of inbound evidence to a specific waiting-on item.
       "direction" => bounded_prompt_string(todo.direction, 64),
       "counterparty_label" => bounded_prompt_string(todo.counterparty_label, 200),
+      "counterparty_person_id" => todo.counterparty_person_id,
       "source_item_id" => bounded_prompt_string(todo.source_item_id, 256),
       "source_account_label" => bounded_prompt_string(todo.source_account_label, 200)
     }
     |> compact_map()
     |> PromptBudget.project_fields(
-      ~w(todo_id source_channel title summary next_action captured_at direction counterparty_label source_item_id source_account_label),
-      900,
-      string_bytes: 480,
+      ~w(todo_id source_channel workflow people title summary next_action captured_at direction counterparty_label counterparty_person_id source_item_id source_account_label),
+      4_500,
+      string_bytes: 2_000,
       list_items: 5,
-      map_entries: 12,
-      max_depth: 2,
+      map_entries: 16,
+      max_depth: 5,
       key_bytes: 64
     )
+  end
+
+  defp workflow_people(todo) do
+    ((Maraithon.Todos.Brief.stored(todo) || %{})["people"] || [])
+    |> Enum.filter(fn person -> Ecto.UUID.cast(person["id"]) != :error end)
+    |> Enum.take(8)
+    |> Enum.map(&Map.take(&1, ~w(id name)))
   end
 
   defp select_prompt_evidence(todos, evidence) do
@@ -1878,6 +2112,39 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp render_prompt(todos_json, evidence_json, now, exhaustive?) do
     """
+    Evaluate progress toward the workflow outcome, not just the latest next_action.
+    A proposed time, a sent availability reply, a calendar booking, or the clock
+    passing a meeting's end does not prove that a meeting actually happened.
+    When an outcome is achieved, include outcome_confirmed:true alongside the
+    completed:true decision and quote the source evidence that proves it.
+    When fresh evidence moves the work forward without completing it, return
+    completed:false and workflow_transition:{state,owner:{kind,id},next_action,reason}.
+    Use you_own when the operator must act next; working for active work; they_own
+    when a verified person has the next move; waiting for a date or condition.
+    Preserve the goal through these handoffs. Use only person IDs supplied in the
+    work item's workflow, people or counterparty fields. If identity is not established,
+    keep responsibility with the user; do not invent a person or group owner.
+    A draft or intent is not a delivered handoff.
+    Include the same confidence, evidence_quote and evidence source fields as a
+    completion decision. Do not propose a transition without fresh grounded evidence.
+
+    Match completion to the scope of this particular outcome:
+    - Resolving a balance needs a settled payment or an agreed resolution. Asking
+      a question or promising to pay is progress, not a resolved balance.
+    - Granting access needs the requested permission to be active. Sending an
+      invitation is only progress when acceptance or another permission step remains.
+    - Fixing a service needs evidence the fault is resolved. A deployed change or
+      an investigation update alone does not prove recovery.
+    - Sending a requested URL, delivering a draft, or answering a specific question
+      can finish that narrow outcome once the requested content is delivered. Do
+      not turn every reply into an indefinite relationship or meeting goal.
+    - Monitoring several conversations or filling several positions stays open
+      after one reply, booking, or filled position. Keep one accountable owner and
+      track independent follow-on outcomes separately; do not close the whole batch.
+    - Use waiting with a verified person or the user as owner when an explicit
+      date/condition is pending. Include waiting_until only for a grounded review
+      date. A review date returns follow-up to the user; it never proves completion.
+
     You are the completion checker for a chief-of-staff product. The user has
     saved open work items. Below is current source material from every connected
     source this sweep could access: Gmail, Slack, Google Calendar, local
@@ -1923,9 +2190,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       counterparty (not from the user — check the evidence item's `kind`,
       e.g. `email received`, `slack message`, `message received`, never
       `... sent by the user`) that actually answers or resolves what the
-      item's `next_action`/`summary` describes is completion for that item,
-      exactly like the user doing the work — return it with
-      "completed": true and "reply_outcome": "answered". A reply that only
+      workflow outcome describes is completion for that item, exactly like
+      the user doing the work. Return "completed": true, "outcome_confirmed": true
+      and "reply_outcome": "answered" only when that outcome is fulfilled.
+      If their answer only unlocks the user's next step, return a workflow_transition
+      to you_own with completed:false instead. A reply that only
       acknowledges ("got your message, will look at it") or defers ("will
       get back to you Friday") is NOT completion — return that item with
       "completed": false and "reply_outcome": "acknowledged_only", still
@@ -1974,7 +2243,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     work with no counterparty acknowledgment, return only
     {"todo_id": "the item's uuid", "completed": false}; omit reasoning,
     confidence, and empty evidence fields. Keep the full cited resolution for
-    completed work and acknowledged_only replies. Do not omit any item. The
+    completed work, workflow transitions and acknowledged_only replies. Do not omit any item. The
     response is rejected unless its todo_id set exactly matches the input set.
     """
   end
@@ -1985,7 +2254,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     do: "Never return an empty resolutions list when work items were supplied."
 
   defp empty_resolution_instruction(false),
-    do: ~s(Return {"resolutions": []} when nothing is provably complete.)
+    do:
+      ~s(Return {"resolutions": []} only when there is no grounded completion, workflow transition or acknowledgment.)
 
   defp default_llm_complete(prompt, opts) when is_binary(prompt) do
     config = Application.get_env(:maraithon, :todos, [])
@@ -2031,8 +2301,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     end
   end
 
+  defp require_decision_coverage?(opts),
+    do: Keyword.get(opts, :exhaustive_completion, false) or Keyword.has_key?(opts, :review_memo)
+
   defp validate_resolution_coverage(resolutions, todos, opts) do
-    if Keyword.get(opts, :exhaustive_completion, false) do
+    if require_decision_coverage?(opts) do
       expected_ids = todos |> Enum.map(& &1.id) |> Enum.sort()
 
       actual_ids =
@@ -2097,6 +2370,42 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # acknowledged-only reply is not a completion event worth a push).
   defp apply_resolution(
          user_id,
+         %Todo{} = todo,
+         %{"completed" => false, "workflow_transition" => %{} = transition} = resolution,
+         evidence,
+         _opts,
+         count
+       ) do
+    with confidence when is_number(confidence) and confidence >= @min_confidence <-
+           resolution["confidence"],
+         quote when is_binary(quote) and quote != "" <- resolution["evidence_quote"],
+         matched when is_map(matched) <-
+           matching_evidence(todo, resolution, evidence, fn _ -> true end),
+         true <- transition["state"] in ~w(you_own working waiting they_own) do
+      attrs =
+        transition
+        |> Map.take(~w(state owner next_action waiting_until))
+        |> Map.put("expected_revision", Maraithon.Todos.Workflow.current(todo)["revision"])
+        |> Map.put("reason", bounded_prompt_string(quote, 500))
+
+      case Todos.transition_workflow(user_id, todo.id, attrs,
+             actor_type: "agent",
+             actor_label: "Maraithon",
+             expected_todo: todo
+           ) do
+        {:ok, _} -> {:ok, count}
+        {:error, :stale_workflow} -> {:ok, count}
+        {:error, :stale_todo} -> {:ok, count}
+        {:error, :invalid_workflow_owner} -> {:ok, count}
+        {:error, _} -> {:error, :workflow_transition_failed}
+      end
+    else
+      _ -> {:ok, count}
+    end
+  end
+
+  defp apply_resolution(
+         user_id,
          %Todo{direction: "owed_to_me"} = todo,
          %{"reply_outcome" => "acknowledged_only"} = resolution,
          evidence,
@@ -2129,6 +2438,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp apply_resolution(user_id, %Todo{} = todo, resolution, evidence, opts, count) do
     with true <- resolution["completed"] == true,
+         true <-
+           not Maraithon.Todos.Workflow.outcome_tracked?(todo) or
+             resolution["outcome_confirmed"] == true,
          confidence when is_number(confidence) and confidence >= @min_confidence <-
            resolution["confidence"],
          quote_text when is_binary(quote_text) and quote_text != "" <-
@@ -2139,6 +2451,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
       provenance = %{
         "method" => "cross_source_llm",
+        "outcome_confirmed" => resolution["outcome_confirmed"] == true,
         "confidence" => confidence,
         "evidence_quote" => bounded_prompt_string(quote_text, 500),
         "relationship_anchor" => bounded_prompt_string(resolution["relationship_anchor"], 200),
@@ -2437,6 +2750,29 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp evidence_sort_key(_item), do: 0
+
+  # Gmail's raw internalDate is milliseconds, unlike Slack's seconds. Sealed
+  # account deltas may retain the raw integer/string or the connector's ISO
+  # timestamp. Losing this time would incorrectly rule out later evidence.
+  defp gmail_evidence_time(message) do
+    value = read_value(message, "internal_date") || read_value(message, "internalDate")
+    normalize_gmail_time(value) || evidence_time(message, ["date"])
+  end
+
+  defp normalize_gmail_time(value) when is_integer(value) and value >= 0 do
+    case DateTime.from_unix(value, :millisecond) do
+      {:ok, datetime} -> DateTime.to_iso8601(datetime)
+      _ -> nil
+    end
+  end
+
+  defp normalize_gmail_time(value) when is_binary(value) and byte_size(value) <= 15 do
+    if Regex.match?(~r/^\d+$/, value),
+      do: value |> String.to_integer() |> normalize_gmail_time(),
+      else: normalize_evidence_time(value)
+  end
+
+  defp normalize_gmail_time(value), do: normalize_evidence_time(value)
 
   defp evidence_time(map, keys) when is_map(map) and is_list(keys) do
     keys

@@ -4,7 +4,7 @@ defmodule Maraithon.UserIdentity do
 
   The user shows up in connected data under many handles — their account
   email, OAuth account emails, the phone numbers and Apple IDs their own
-  iMessages send from, and any CRM person records that hold those handles.
+  iMessages send from, and the names and handles they explicitly confirmed.
   Conversation-reading intelligence (todo detectors, chief-of-staff skills,
   the assistant context, relationship learning) must know all of them, or a
   group chat where the user already answered reads like someone asking the
@@ -16,9 +16,6 @@ defmodule Maraithon.UserIdentity do
 
   use GenServer
 
-  import Ecto.Query
-
-  alias Maraithon.Crm.Person
   alias Maraithon.Repo
   alias Maraithon.UserIdentity.Profile
 
@@ -94,7 +91,7 @@ defmodule Maraithon.UserIdentity do
 
     """
     USER IDENTITY: The user is #{name} (#{user_id}).#{if handles != "", do: " Their own #{handles}."}
-    Messages sent from any of the user's own handles (or marked from_user/is_from_me) are the USER speaking — never treat them as someone contacting or asking the user. In group conversations, only treat something as a request for the user when it is directed AT the user; if the user already answered, committed, or resolved it in the conversation, it is handled, not an open ask.
+    Messages sent from any of the user's own handles (or marked from_user/is_from_me) are the USER speaking — never treat them as someone contacting or asking the user. In group conversations, only treat something as a request for the user when it is directed AT the user; channel membership alone is not responsibility. Implicit responsibility requires source evidence or an explicit user instruction connecting the user to the outcome. A user commitment remains open until fulfilled; an answered question or resolved request is handled.
     """
     |> String.trim()
   end
@@ -226,12 +223,10 @@ defmodule Maraithon.UserIdentity do
 
     seeds = MapSet.new(confirmed_handles ++ seed_emails)
 
-    {self_people_handles, derived_names} = self_person_data(user_id, seeds)
-
-    all = MapSet.union(seeds, self_people_handles)
+    all = seeds
 
     names =
-      ([profile && profile.display_name] ++ derived_names)
+      [(profile && profile.display_name) || name_from_email(user_id)]
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
@@ -268,41 +263,8 @@ defmodule Maraithon.UserIdentity do
   defp provider_email("google:" <> email), do: email
   defp provider_email(_provider), do: nil
 
-  # CRM person records holding any seed handle are the user; absorb their
-  # other handles and their display names.
-  defp self_person_data(user_id, seeds) do
-    Person
-    |> where([p], p.user_id == ^user_id and p.status == "active")
-    |> select([p], %{display_name: p.display_name, contact_details: p.contact_details})
-    |> Repo.all()
-    |> Enum.reduce({MapSet.new(), []}, fn person, {handles, names} ->
-      person_handles =
-        person.contact_details
-        |> contact_handles()
-        |> Enum.map(&normalize_handle/1)
-        |> Enum.reject(&is_nil/1)
-
-      if Enum.any?(person_handles, &MapSet.member?(seeds, &1)) do
-        {
-          Enum.into(person_handles, handles),
-          names ++ List.wrap(person.display_name)
-        }
-      else
-        {handles, names}
-      end
-    end)
-    |> then(fn {handles, names} -> {handles, Enum.uniq(names)} end)
-  rescue
-    _ -> {MapSet.new(), []}
-  end
-
-  defp contact_handles(details) when is_map(details) do
-    [Map.get(details, "emails"), Map.get(details, "phones")]
-    |> Enum.flat_map(&List.wrap/1)
-    |> Enum.filter(&is_binary/1)
-  end
-
-  defp contact_handles(_details), do: []
+  # CRM enrichment may associate unrelated handles with a contact. Those
+  # associations never expand authenticated or explicitly confirmed identity.
 
   # ---------------------------------------------------------------------------
   # Normalization (shared semantics with Crm.CommunicationScore)

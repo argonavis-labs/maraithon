@@ -33,6 +33,12 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   # `Retry-After` header.
   @default_rate_limit_retry_seconds 30
 
+  def execute(%BackgroundJob{job_type: "assistant_action_reconcile"} = job),
+    do: Maraithon.TelegramAssistant.ActionReconciliation.execute(job)
+
+  def execute(%BackgroundJob{job_type: "assistant_chat_request"} = job),
+    do: Maraithon.AssistantChat.Execution.execute(job)
+
   def execute(%BackgroundJob{
         job_type: "privacy_erasure",
         payload: %{"request_id" => request_id}
@@ -149,10 +155,19 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       )
       when is_binary(todo_id) do
     with {:ok, user_id} <- require_user_id(job) do
-      case TodoBrief.generate_and_store(user_id, todo_id) do
+      todo = Maraithon.Todos.get_for_user(user_id, todo_id)
+      current_generation = (TodoBrief.stored(todo) || %{})["generated_at"]
+
+      force? =
+        job.payload["refresh"] == true && current_generation == job.payload["refresh_after"]
+
+      case TodoBrief.generate_and_store(user_id, todo_id, force: force?) do
         {:ok, todo} ->
           status = if todo && todo.status in ~w(open snoozed), do: "ready", else: "not_needed"
           {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: status}}
+
+        {:error, :in_progress} ->
+          {:error, {:retry_after, 15, :brief_already_running}}
 
         {:error, reason} ->
           defer_model_capacity(reason)
@@ -217,8 +232,8 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         # Failed attempts and replays of completed windows have no new result.
         with {:ok, %{observations_count: count}} when count > 0 <- result,
              {:ok, user_id} <- require_user_id(job) do
-          _ = Maraithon.Runtime.BackgroundJobs.enqueue_communication_score_refresh(user_id)
-          _ = Maraithon.Runtime.BackgroundJobs.enqueue_relationship_graph_refresh(user_id)
+          # People discovery runs independently every ten minutes. Ingestion
+          # never fans source-wide graph scans into the relationship lane.
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_person_dedupe(user_id)
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_goal_people_discovery(user_id)
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_person_enrichment(user_id)
@@ -233,17 +248,21 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   def execute(%BackgroundJob{job_type: "communication_score_refresh"} = job) do
     with {:ok, user_id} <- require_user_id(job) do
-      case Maraithon.Crm.CommunicationScore.refresh_for_user(user_id) do
-        {:ok, summary} -> {:ok, Map.put(summary, :source, "communication_score_refresh")}
+      case Maraithon.PeopleNetwork.enqueue(user_id) do
+        {:ok, _} -> {:ok, %{source: "people_network", delegated: true}}
         {:error, reason} -> {:error, reason}
       end
     end
   end
 
+  def execute(%BackgroundJob{job_type: "people_network_refresh"} = job) do
+    Maraithon.PeopleNetwork.Builder.run(job)
+  end
+
   def execute(%BackgroundJob{job_type: "relationship_graph_refresh"} = job) do
     with {:ok, user_id} <- require_user_id(job) do
-      case Maraithon.Crm.RelationshipGraph.refresh_for_user(user_id) do
-        {:ok, summary} -> {:ok, Map.put(summary, :source, "relationship_graph_refresh")}
+      case Maraithon.PeopleNetwork.enqueue(user_id) do
+        {:ok, _} -> {:ok, %{source: "people_network", delegated: true}}
         {:error, reason} -> {:error, reason}
       end
     end
@@ -435,9 +454,21 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       })
       |> put_calendar_sync_dedupe_key(job)
 
-    case Connector.publish("calendar:#{user_id}", event) do
-      :ok -> :ok
+    # A failed wake retries through the existing sync job. Both the wake and
+    # connector publication are deduplicated if the worker restarts here.
+    with :ok <- wake_calendar_todo_workflows(user_id),
+         :ok <- Connector.publish("calendar:#{user_id}", event) do
+      :ok
+    else
       {:error, reason} -> {:error, {:calendar_sync_completion_publish_failed, reason}}
+    end
+  end
+
+  defp wake_calendar_todo_workflows(user_id) do
+    case Maraithon.Runtime.PeriodicJobs.wake_todo_workflows(user_id) do
+      {:ok, _job} -> :ok
+      {:skip, :no_open_todos} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 

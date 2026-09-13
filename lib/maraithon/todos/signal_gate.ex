@@ -338,19 +338,25 @@ defmodule Maraithon.Todos.SignalGate do
 
   def partition_candidates(_candidates), do: {[], []}
 
-  def skip_reason(candidate, proposed_attrs \\ %{}) do
-    case allow_candidate?(candidate, proposed_attrs) do
+  def skip_reason(candidate, proposed_attrs \\ %{}, opts \\ []) do
+    case allow_candidate?(candidate, proposed_attrs, opts) do
       {:ok, _attrs} -> nil
       {:skip, reason} -> reason
     end
   end
 
-  def allow_candidate?(candidate, proposed_attrs \\ %{})
+  def allow_candidate?(candidate, proposed_attrs \\ %{}, opts \\ [])
 
-  def allow_candidate?(candidate, proposed_attrs)
+  def allow_candidate?(candidate, proposed_attrs, opts)
       when is_map(candidate) and is_map(proposed_attrs) do
     source_attrs = stringify_keys(candidate)
     attrs = deep_merge(source_attrs, stringify_keys(proposed_attrs))
+
+    personal_obligation? =
+      case Keyword.get(opts, :personal_involvement) do
+        {:ok, %{"kind" => kind}} when kind in ["direct", "implicit"] -> true
+        _ -> false
+      end
 
     cond do
       completed_or_closed?(source_attrs) ->
@@ -365,11 +371,11 @@ defmodule Maraithon.Todos.SignalGate do
         {:skip,
          "Skipped by executive signal gate: no explicit source reconciliation proves this loop is still open."}
 
-      weak_local_message_chatter?(source_attrs) ->
+      weak_local_message_chatter?(source_attrs) and not personal_obligation? ->
         {:skip,
          "Skipped by executive signal gate: local-message source evidence does not contain an explicit operator ask, promise, deadline, or concrete logistics action."}
 
-      weak_local_pattern?(source_attrs) ->
+      weak_local_pattern?(source_attrs) and not personal_obligation? ->
         {:skip,
          "Skipped by executive signal gate: local pattern detectors stay out of durable work unless promoted by explicit source-backed action evidence."}
 
@@ -385,18 +391,21 @@ defmodule Maraithon.Todos.SignalGate do
         {:skip,
          "Skipped by executive signal gate: routine transactional, delivery, engagement, or reminder notification with no important action."}
 
-      content_consumption?(source_attrs) and not protected_source_action?(source_attrs) ->
+      content_consumption?(source_attrs) and not protected_source_action?(source_attrs) and
+          not personal_obligation? ->
         {:skip,
          "Skipped by executive signal gate: content or educational material without a direct obligation."}
 
-      passive_status_monitor?(source_attrs) and not protected_source_action?(source_attrs) ->
+      passive_status_monitor?(source_attrs) and not protected_source_action?(source_attrs) and
+          not personal_obligation? ->
         {:skip,
          "Skipped by executive signal gate: passive status/FYI update with no concrete operator action."}
 
       high_impact_operational_risk?(source_attrs) ->
         {:ok, attrs}
 
-      source_requires_action?(source_attrs) and executive_grade?(attrs, source_attrs) ->
+      (source_requires_action?(source_attrs) or personal_obligation?) and
+          executive_grade?(attrs, source_attrs) ->
         {:ok, attrs}
 
       true ->
@@ -405,7 +414,7 @@ defmodule Maraithon.Todos.SignalGate do
     end
   end
 
-  def allow_candidate?(_candidate, _proposed_attrs) do
+  def allow_candidate?(_candidate, _proposed_attrs, _opts) do
     {:skip, "Skipped by executive signal gate: invalid candidate."}
   end
 

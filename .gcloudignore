@@ -21,3 +21,6 @@ test/
 
 # Built-in Agent skills are runtime inputs bundled into the OTP release.
 !priv/agents/skills/**/*.md
+
+# Local, separately pinned agent-framework comparison.
+experiments/

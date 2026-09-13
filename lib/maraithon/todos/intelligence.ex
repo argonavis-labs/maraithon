@@ -11,7 +11,16 @@ defmodule Maraithon.Todos.Intelligence do
   alias Maraithon.LLM.RequestBudget
   alias Maraithon.PromptBudget
   alias Maraithon.Todos
-  alias Maraithon.Todos.{SignalGate, SurfaceQuality, UserFacingCopy}
+
+  alias Maraithon.Todos.{
+    Consolidation,
+    IntakeSnapshot,
+    PersonalInvolvement,
+    SignalGate,
+    SurfaceQuality,
+    UserFacingCopy
+  }
+
   alias Maraithon.Todos.Todo
 
   require Logger
@@ -96,14 +105,18 @@ defmodule Maraithon.Todos.Intelligence do
       {:ok, %{todos: [], skipped: [], skipped_count: 0, decisions: [], summary: nil}}
     else
       shared_seed = prompt_shared_seed(user_id, opts)
+      opts = Keyword.put(opts, :involvement_context, shared_seed)
 
       with :ok <- validate_required_prompt(shared_seed, candidates, opts),
-           existing <-
-             user_id
-             |> existing_work(candidates, opts)
-             |> augment_with_semantic_candidates(user_id, candidates, opts),
+           snapshot <- IntakeSnapshot.current(user_id),
+           {saved_work, related_ids} <- existing_work(user_id, candidates, opts),
+           existing <- augment_with_semantic_candidates(saved_work, user_id, candidates, opts),
+           required_ids <-
+             Enum.uniq(
+               related_ids ++ (Enum.map(existing, & &1.id) -- Enum.map(saved_work, & &1.id))
+             ),
            {:ok, prompt, admitted_existing} <-
-             build_prompt(user_id, candidates, existing, opts, shared_seed),
+             build_prompt(user_id, candidates, existing, opts, shared_seed, required_ids),
            llm_complete when is_function(llm_complete, 1) <- llm_complete(opts),
            {:ok, decisions, summary, usage, model_calls} <-
              complete_decisions(
@@ -113,25 +126,90 @@ defmodule Maraithon.Todos.Intelligence do
                admitted_existing,
                opts
              ),
-           {:ok, result} <- apply_decisions(user_id, decisions, summary) do
+           {:ok, result} <- apply_decisions(user_id, decisions, summary, snapshot) do
         {:ok, result |> Map.put(:usage, usage) |> Map.put(:model_calls, model_calls)}
       else
-        {:error, reason} -> {:error, reason}
-        _other -> {:error, :todo_intelligence_failed}
+        {:error, :todo_intelligence_existing_work_did_not_fit} when length(candidates) > 1 ->
+          ingest_smaller_batches(user_id, candidates, opts)
+
+        {:error, :todo_intake_changed} ->
+          if Keyword.get(opts, :dedupe_refreshes_remaining, 1) > 0 do
+            ingest_many(user_id, candidates, Keyword.put(opts, :dedupe_refreshes_remaining, 0))
+          else
+            {:error, :todo_intake_changed}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+
+        _other ->
+          {:error, :todo_intelligence_failed}
       end
     end
   end
 
   def ingest_many(_user_id, _candidates, _opts), do: {:error, :invalid_todo_candidates}
 
+  # Keep the original candidate-index contract across smaller model requests.
+  # Each child reconciles against the writes from the preceding child. A later
+  # failure is safe to retry through the durable intake path.
+  defp ingest_smaller_batches(user_id, candidates, opts) do
+    Logger.info("Splitting todo intake to preserve related-work context",
+      candidate_count: length(candidates)
+    )
+
+    candidates
+    |> Enum.chunk_every(div(length(candidates) + 1, 2))
+    |> Enum.reduce_while({:ok, [], 0}, fn batch, {:ok, results, offset} ->
+      case ingest_many(user_id, batch, opts) do
+        {:ok, result} ->
+          shift = fn items ->
+            Enum.map(items, &Map.update!(&1, :candidate_index, fn index -> index + offset end))
+          end
+
+          result = result |> Map.update!(:decisions, shift) |> Map.update!(:skipped, shift)
+          {:cont, {:ok, results ++ [result], offset + length(batch)}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, results, _offset} ->
+        {:ok,
+         %{
+           todos: results |> Enum.flat_map(& &1.todos) |> Enum.uniq_by(& &1.id),
+           skipped: Enum.flat_map(results, & &1.skipped),
+           skipped_count: Enum.sum(Enum.map(results, & &1.skipped_count)),
+           decisions: Enum.flat_map(results, & &1.decisions),
+           summary:
+             results |> Enum.map(& &1.summary) |> Enum.filter(&is_binary/1) |> Enum.join("\n"),
+           model_calls: Enum.sum(Enum.map(results, &Map.get(&1, :model_calls, 0))),
+           usage:
+             Enum.reduce(results, %{}, fn result, usage ->
+               Map.merge(usage, Map.get(result, :usage, %{}), fn _key, left, right ->
+                 if is_number(left) and is_number(right), do: left + right, else: right
+               end)
+             end)
+         }}
+
+      error ->
+        error
+    end
+  end
+
   defp existing_work(user_id, candidates, opts) do
     limit = Keyword.get(opts, :existing_limit, 80)
     related = Maraithon.Todos.RelatedWork.find(user_id, candidates)
     recent = Todos.list_recent_for_user(user_id, limit: limit)
 
-    (related ++ recent)
-    |> Enum.uniq_by(& &1.id)
-    |> Enum.take(limit)
+    existing =
+      (related ++ recent)
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.reject(&Consolidation.alias?/1)
+      |> Enum.take(limit)
+
+    {existing, Enum.map(related, & &1.id)}
   end
 
   # SPEC 05 R5: embedding-similarity dedupe fallback. `existing` (recent
@@ -240,6 +318,8 @@ defmodule Maraithon.Todos.Intelligence do
   defp prompt_shared_seed(user_id, opts) do
     %{
       "user_id" => user_id,
+      "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
+      "operator_identity" => PersonalInvolvement.identity_context(user_id),
       "source" => Keyword.get(opts, :source, "todo_intelligence"),
       "todo_instructions" => explicit_todo_instructions(user_id),
       "generated_at" => Keyword.get(opts, :now, DateTime.utc_now()) |> normalize_json_value()
@@ -272,7 +352,7 @@ defmodule Maraithon.Todos.Intelligence do
     end
   end
 
-  defp build_prompt(user_id, candidates, existing, opts, shared_seed) do
+  defp build_prompt(user_id, candidates, existing, opts, shared_seed, required_ids) do
     payload =
       Map.merge(shared_seed, %{
         "existing_todos" => Enum.map(existing, &existing_todo_for_prompt/1),
@@ -283,8 +363,34 @@ defmodule Maraithon.Todos.Intelligence do
         "candidate_todos" => candidates
       })
 
-    fit_bounded_prompt(payload, existing, opts)
+    result = fit_bounded_prompt(payload, existing, opts)
+
+    if complete_existing_context?(result, existing, required_ids) do
+      result
+    else
+      # Related work is required deduplication evidence. Shed unrelated recent
+      # work before sacrificing those matches; split the source batch if its
+      # evidence still leaves too little room. Never quietly reason over a few
+      # copies while hiding the rest from the model.
+      required = Enum.filter(existing, &(&1.id in required_ids))
+
+      result =
+        payload
+        |> Map.put("existing_todos", Enum.map(required, &existing_todo_for_prompt/1))
+        |> fit_bounded_prompt(required, opts)
+
+      if required_ids != [] and complete_existing_context?(result, required, required_ids),
+        do: result,
+        else: {:error, :todo_intelligence_existing_work_did_not_fit}
+    end
   end
+
+  defp complete_existing_context?({:ok, _prompt, admitted}, existing, required_ids) do
+    admitted_ids = Enum.map(admitted, & &1.id)
+    (existing == [] or admitted != []) and required_ids -- admitted_ids == []
+  end
+
+  defp complete_existing_context?(_result, _existing, _required_ids), do: false
 
   defp render_prompt(
          shared_context,
@@ -325,6 +431,24 @@ defmodule Maraithon.Todos.Intelligence do
          instruction to the work it describes. If it requires explicit personal
          involvement, a team-owned alert cannot become personal work without
          source evidence establishing that involvement.
+       - Before writing a todo, classify involvement as direct, implicit, bystander,
+         or uncertain. Direct means the user is the actual addressee, made the
+         promise, or personally owes the obligation. Match Slack IDs against the
+         connected account's authed_user_id/slack_user_id; a mention of a different
+         person does not mean "you". Use USER_IDENTITY/operator_identity across
+         sources. Bot identity and shared channel membership are not human identity.
+       - Implicit involvement is welcome when the source or an explicit user
+         instruction connects the user to the required decision, responsibility,
+         dependency, or follow-up. A literal @mention is not required. Quote that
+         connection separately. Generic seniority, company affiliation, being in
+         a channel, or an AI-generated relationship does not establish it.
+       - For every create/update return involvement with kind (direct or implicit),
+         source_quote (a verbatim quote of the outstanding ask from candidate source
+         evidence), connection (why this is the user's action), and connection_quote
+         (required for implicit: a verbatim source or explicit todo instruction
+         establishing that link). Bystander or uncertain means skip. Keep this
+         assessment separate from generated todo wording. Do not turn the other
+         person's obligation into a new promise for the user.
        - Return one decision for every candidate_todos item. `candidate_todos`,
          `existing_todo_id`, and the `todo` response object are internal JSON contract names.
        - Executive bar: admit a candidate only if a competent chief of staff
@@ -399,6 +523,37 @@ defmodule Maraithon.Todos.Intelligence do
          reminder supplies only a generic label; revise them only with new evidence.
        - For update decisions, use the existing saved work item's current
          dedupe_key exactly. Do not invent a new dedupe_key for an update.
+       - Reconcile the full obligation, not each notification. A batch request
+         (for example, accept an organization's updated policies in one portal)
+         already covers individual notices within that same batch. Add the new
+         detail to that todo; do not create a separate task for a covered substep.
+         Keep different organizations, people, invoices, policy rounds/versions,
+         and genuinely independent deliverables separate.
+       - If multiple saved todos cover the same obligation, choose the oldest
+         matching open/snoozed todo as the canonical existing_todo_id and return
+         every redundant saved ID in merge_existing_todo_ids. Merge only work
+         wholly covered by the canonical outcome; retain all useful details.
+         This is an update, not a dismissal of the underlying obligation.
+         An FYI copy may be absorbed into its matching actionable obligation.
+         Keep opposing owed_by_me/owed_to_me obligations separate, and preserve
+         an existing obligation's direction unless new evidence changes who owes whom.
+       - Existing done/dismissed items are memory of work already handled or
+         declined. Repeated reminders, rewording, or new message IDs do not
+         justify recreating them. Skip unless the source establishes a genuinely
+         new occurrence after closure (new invoice, deadline cycle, policy version,
+         or explicit renewed request). Explain that difference in reasoning.
+         If open copies of that same closed obligation already exist, update
+         the closed canonical item with merge_existing_todo_ids to retire those
+         copies while preserving its closed status. Never fold a new occurrence
+         into an older completed one merely because their titles resemble each other.
+         inserted_at is when Maraithon saved a todo, not when its source message
+         was sent. Use source_occurred_at and the original evidence timestamps
+         to distinguish occurrences. A late import of an old message does not
+         establish a new policy round or renewed request after completion.
+       - Compare candidates with each other as well as saved todos. For one new
+         obligation in this batch, create it once and skip covered candidates.
+         A create dedupe_key must describe stable work scope and occurrence,
+         never the discovery run or the date/ID of a reminder.
        - Use action "skip" only when no write should happen.
        - For create/update, provide a complete work item object in the `todo` field
          with source, title, summary, next_action, and dedupe_key.
@@ -614,7 +769,9 @@ defmodule Maraithon.Todos.Intelligence do
              "action": "create | update | skip",
              "existing_todo_id": null,
              "dedupe_key": "stable semantic key for create/update",
+             "merge_existing_todo_ids": [],
              "reasoning": "short explanation",
+             "involvement": {"kind": "direct | implicit | bystander | uncertain", "source_quote": "verbatim source evidence", "connection": "why this user needs to act", "connection_quote": "verbatim link for implicit responsibility"},
              "todo": {
                "source": "slack | gmail | calendar | telegram | chief_of_staff_morning_briefing | ...",
                "kind": "general | gmail_triage",
@@ -797,10 +954,10 @@ defmodule Maraithon.Todos.Intelligence do
   end
 
   # Candidate order and structure are the model's index contract, so candidates
-  # are never projected. Existing work and recall are optional evidence: fit
-  # those structurally and validate the complete escaped provider request at
-  # every descending context budget. If the candidates themselves cannot fit,
-  # fail closed before invoking any provider.
+  # are never projected. Fit other context structurally and validate the whole
+  # escaped provider request at each budget. The caller requires every related
+  # work ID to survive fitting, and splits the batch when that is impossible.
+  # Candidates that cannot fit on their own fail before any provider call.
   defp project_prompt_context(payload, existing, context_bytes) do
     existing_bytes = div(context_bytes * 55, 100)
     shared_bytes = div(context_bytes * 35, 100)
@@ -928,12 +1085,14 @@ defmodule Maraithon.Todos.Intelligence do
               {"priority", 24},
               {"source_item_id", 180},
               {"source_account_label", 140},
+              {"source_occurred_at", 80},
+              {"inserted_at", 80},
+              {"closed_at", 80},
               {"summary", 220},
               {"next_action", 220},
               {"counterparty_label", 140},
               {"due_at", 80},
               {"direction", 40},
-              {"source_occurred_at", 80},
               {"metadata", 260},
               {"updated_at", 80},
               {"kind", 60},
@@ -972,7 +1131,15 @@ defmodule Maraithon.Todos.Intelligence do
   end
 
   defp project_shared_context(shared_context, max_bytes) when is_map(shared_context) do
-    required = Map.take(shared_context, ["user_id", "source", "todo_instructions", "generated_at"])
+    required =
+      Map.take(shared_context, [
+        "user_id",
+        "user_identity",
+        "operator_identity",
+        "source",
+        "todo_instructions",
+        "generated_at"
+      ])
 
     if max_bytes <= PromptBudget.encoded_bytes(required) do
       required
@@ -1097,7 +1264,8 @@ defmodule Maraithon.Todos.Intelligence do
       "id" => Map.get(memory, :id) || Map.get(memory, "id"),
       "kind" => Map.get(memory, :kind) || Map.get(memory, "kind"),
       "source" => Map.get(memory, :source) || Map.get(memory, "source"),
-      "source_ref_type" => Map.get(memory, :source_ref_type) || Map.get(memory, "source_ref_type"),
+      "source_ref_type" =>
+        Map.get(memory, :source_ref_type) || Map.get(memory, "source_ref_type"),
       "source_ref_id" => Map.get(memory, :source_ref_id) || Map.get(memory, "source_ref_id"),
       "evidence_scope" => "learned_relevance_only",
       "title" => Map.get(memory, :title) || Map.get(memory, "title"),
@@ -1370,6 +1538,17 @@ defmodule Maraithon.Todos.Intelligence do
     existing_todo_id = read_string(decision, "existing_todo_id", nil)
     proposed_todo_attrs = proposed_todo_attrs(decision)
 
+    involvement =
+      if is_map(candidate) do
+        PersonalInvolvement.assess(
+          decision,
+          candidate,
+          Keyword.get(opts, :involvement_context, %{})
+        )
+      else
+        {:skip, "Invalid candidate."}
+      end
+
     family_policy_skip_reason =
       if is_map(candidate) and is_map(proposed_todo_attrs) do
         family_policy_skip_reason(candidate, proposed_todo_attrs)
@@ -1377,7 +1556,7 @@ defmodule Maraithon.Todos.Intelligence do
 
     signal_gate_skip_reason =
       if is_map(candidate) and is_map(proposed_todo_attrs) do
-        SignalGate.skip_reason(candidate, proposed_todo_attrs)
+        SignalGate.skip_reason(candidate, proposed_todo_attrs, personal_involvement: involvement)
       end
 
     cond do
@@ -1394,6 +1573,18 @@ defmodule Maraithon.Todos.Intelligence do
            candidate_index: candidate_index,
            existing_todo_id: existing_todo_id,
            reasoning: reasoning,
+           todo_attrs: nil
+         }}
+
+      match?({:skip, _}, involvement) ->
+        {:skip, reason} = involvement
+
+        {:ok,
+         %{
+           action: "skip",
+           candidate_index: candidate_index,
+           existing_todo_id: nil,
+           reasoning: reason,
            todo_attrs: nil
          }}
 
@@ -1419,7 +1610,7 @@ defmodule Maraithon.Todos.Intelligence do
 
       true ->
         normalize_persist_decision(
-          decision,
+          Map.put(decision, "validated_involvement", elem(involvement, 1)),
           candidate_index,
           action,
           existing_todo_id,
@@ -1639,6 +1830,13 @@ defmodule Maraithon.Todos.Intelligence do
         Map.get(existing_by_id, existing_todo_id)
       end
 
+    merge_ids = fetch_attr(decision, "merge_existing_todo_ids") || []
+
+    valid_merge? =
+      is_list(merge_ids) and
+        (merge_ids == [] or action == "update") and
+        Enum.all?(merge_ids, &(Map.has_key?(existing_by_id, &1) and &1 != existing_todo_id))
+
     dedupe_key =
       if existing_todo do
         existing_todo.dedupe_key
@@ -1649,6 +1847,14 @@ defmodule Maraithon.Todos.Intelligence do
     todo_attrs =
       todo_attrs
       |> Map.put("dedupe_key", dedupe_key)
+      |> Map.update(
+        "metadata",
+        %{"personal_involvement" => decision["validated_involvement"]},
+        fn metadata ->
+          metadata = if is_map(metadata), do: metadata, else: %{}
+          Map.put(metadata, "personal_involvement", decision["validated_involvement"])
+        end
+      )
       |> preserve_candidate_completion_check(candidate)
       |> preserve_candidate_source_identifiers(candidate)
       |> preserve_candidate_source_context(candidate)
@@ -1666,7 +1872,10 @@ defmodule Maraithon.Todos.Intelligence do
       |> UserFacingCopy.polish_attrs()
       |> SurfaceQuality.annotate_attrs()
 
-    signal_gate_skip_reason = SignalGate.skip_reason(candidate, todo_attrs)
+    signal_gate_skip_reason =
+      SignalGate.skip_reason(candidate, todo_attrs,
+        personal_involvement: {:ok, decision["validated_involvement"]}
+      )
 
     cond do
       is_binary(signal_gate_skip_reason) ->
@@ -1682,6 +1891,9 @@ defmodule Maraithon.Todos.Intelligence do
       action == "update" and is_nil(existing_todo) ->
         {:error, :todo_intelligence_existing_todo_not_found}
 
+      not valid_merge? ->
+        {:error, :todo_intelligence_invalid_consolidation}
+
       missing_required_fields(todo_attrs) != [] ->
         {:error, {:todo_intelligence_missing_todo_fields, missing_required_fields(todo_attrs)}}
 
@@ -1695,6 +1907,7 @@ defmodule Maraithon.Todos.Intelligence do
            candidate_index: candidate_index,
            existing_todo_id: existing_todo_id,
            reasoning: reasoning,
+           merge_existing_todo_ids: Enum.uniq(merge_ids),
            todo_attrs: todo_attrs
          }}
     end
@@ -1721,20 +1934,41 @@ defmodule Maraithon.Todos.Intelligence do
     end
   end
 
-  defp apply_decisions(user_id, decisions, summary) do
+  defp apply_decisions(user_id, decisions, summary, snapshot) do
     attrs_list =
       decisions
       |> Enum.filter(&(&1.action in @persist_actions))
       |> Enum.map(& &1.todo_attrs)
 
+    consolidations =
+      Enum.flat_map(decisions, fn decision ->
+        case Map.get(decision, :merge_existing_todo_ids, []) do
+          [] ->
+            []
+
+          ids ->
+            [
+              %{
+                dedupe_key: decision.todo_attrs["dedupe_key"],
+                duplicate_ids: ids,
+                reason: decision.reasoning
+              }
+            ]
+        end
+      end)
+
     persisted_result =
-      case attrs_list do
-        [] -> {:ok, []}
-        attrs -> Todos.upsert_many(user_id, attrs, model_selected?: true)
-      end
+      Todos.upsert_many(user_id, attrs_list,
+        model_selected?: true,
+        expected_intake_snapshot: snapshot,
+        consolidations: consolidations
+      )
 
     with {:ok, persisted} <- persisted_result do
-      persisted_by_dedupe_key = Map.new(persisted, &{&1.dedupe_key, &1})
+      persisted_by_dedupe_key =
+        Enum.zip(attrs_list, persisted)
+        |> Map.new(fn {attrs, todo} -> {attrs["dedupe_key"], todo} end)
+
       persisted_by_id = Map.new(persisted, &{&1.id, &1})
 
       decision_summaries =
@@ -1748,7 +1982,7 @@ defmodule Maraithon.Todos.Intelligence do
 
       {:ok,
        %{
-         todos: persisted,
+         todos: Enum.uniq_by(persisted, & &1.id),
          skipped: skipped,
          skipped_count: length(skipped),
          decisions: decision_summaries,
@@ -2054,7 +2288,9 @@ defmodule Maraithon.Todos.Intelligence do
       "direction" => todo.direction,
       "counterparty_label" => todo.counterparty_label,
       "metadata" => existing_metadata_for_prompt(todo.metadata),
-      "updated_at" => normalize_json_value(todo.updated_at)
+      "updated_at" => normalize_json_value(todo.updated_at),
+      "inserted_at" => normalize_json_value(todo.inserted_at),
+      "closed_at" => normalize_json_value(todo.closed_at)
     }
     |> compact_map()
   end

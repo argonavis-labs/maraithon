@@ -4,18 +4,21 @@ import SwiftUI
 @main
 struct MaraithonApp: App {
     @State private var environment = AppEnvironment()
+    @NSApplicationDelegateAdaptor(TerminationDiagnostics.self) private var terminationDiagnostics
 
     var body: some Scene {
         Window("Maraithon", id: "main") {
             RootWindow()
                 .environment(environment)
-                .frame(minWidth: 720, minHeight: 500)
+                .frame(minWidth: Tokens.Layout.windowMinWidth, minHeight: Tokens.Layout.windowMinHeight)
                 .onAppear {
                     environment.eventLog.info(
                         "app.launched",
                         source: .system,
                         payload: ["version": Bundle.main.shortVersion]
                     )
+                    DebugSnapshot.scheduleIfRequested(eventLog: environment.eventLog)
+                    terminationDiagnostics.eventLog = environment.eventLog
                 }
                 .onOpenURL { url in
                     environment.handleIncomingURL(url)
@@ -53,7 +56,10 @@ struct MaraithonApp: App {
                     environment.handleIncomingURL(route.url)
                 }
         }
-        .defaultSize(width: 880, height: 620)
+        .defaultSize(width: Tokens.Layout.windowDefaultWidth, height: Tokens.Layout.windowDefaultHeight)
+        // The workspace draws its own chrome; the traffic lights float over
+        // the sidebar like the web desktop shell.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {

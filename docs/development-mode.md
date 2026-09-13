@@ -39,7 +39,10 @@ notes are historical evidence, not authorization to run them now.
 
 ## Default Deployment Loop
 
-- `make deploy` is the normal path.
+- `make deploy` is the normal path, and CI runs it: a push to `main` triggers
+  `.github/workflows/deploy-gcp.yml` under the deployer service account's
+  workload identity. Nothing on a developer machine needs `gcloud` access to
+  ship a change; commit and push instead of deploying locally.
 - It uses the shared Docker layer cache, runs migrations only when migration
   files changed, deploys one combined Phoenix/runtime Cloud Run service, and
   performs one `/health` request.

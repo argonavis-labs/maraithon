@@ -4,6 +4,7 @@ import AppKit
 /// Inspector for a Todo. Completed work leads with its recorded resolution,
 /// while active work retains its next action and source context.
 struct TodoDetailView: View {
+    @State private var selectedSection = "Summary"
     let todo: CompanionTodo?
     let isWorking: Bool
     let isLoadingDetails: Bool
@@ -15,29 +16,36 @@ struct TodoDetailView: View {
     var body: some View {
         if let todo {
             Form {
+                Picker("Todo section", selection: $selectedSection) {
+                    Text("Summary").tag("Summary")
+                    Text("Details").tag("Details")
+                }.pickerStyle(.segmented)
                 Section {
-                    VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-                        Text(todo.title)
-                            .font(.title2.weight(.semibold))
-                        if let move = todo.recommendedMove {
-                            Text(move)
-                                .font(.body)
-                            .foregroundStyle(.secondary)
-                        }
+                    HStack {
+                        TodoProviderMark(provider: todo.source)
+                        Text(TodosCopy.sourceLabel(todo.source)).foregroundStyle(.secondary)
                     }
-
-                    if todo.canMarkDone, let summary = todo.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.body)
+                    Text(todo.title).font(.title2.weight(.semibold))
+                    if selectedSection == "Summary", todo.canMarkDone {
+                        Text(todo.brief?.summary ?? todo.summary ?? todo.recommendedMove ?? "Preparing your summary.")
+                            .textSelection(.enabled)
                     }
                 }
-
+                if selectedSection == "Summary" {
+                    TodoSourceActionsView(todo: todo).id(todo.id)
+                    if isLoadingDetails { ProgressView("Preparing summary").controlSize(.small) }
+                    if let detailError {
+                        Label(detailError, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                        Button("Retry", action: retryDetails)
+                    }
+                }
                 if !todo.canMarkDone, let note = todo.resolutionNote {
                     Section(todo.canReopen ? "Completion" : "Resolution") {
                         Text(note).textSelection(.enabled)
                     }
                 }
 
+                if selectedSection == "Details" {
                 Section("Details") {
                     LabeledContent("Status", value: TodosCopy.statusLabel(todo.status))
                     if todo.canReopen, let closedDate = todo.closedDate {
@@ -64,6 +72,13 @@ struct TodoDetailView: View {
                 }
 
                 sourceContext(for: todo)
+                if let brief = todo.brief {
+                    if let situation = brief.situation { Section("Context") { Text(situation).textSelection(.enabled) } }
+                    if let recommendation = brief.recommendation { Section("Next move") { Text(recommendation) } }
+                    if let steps = brief.steps, !steps.isEmpty { Section("Steps") { ForEach(Array(steps.enumerated()), id: \.offset) { _, step in Text(step) } } }
+                    if let questions = brief.openQuestions, !questions.isEmpty { Section("Open questions") { ForEach(Array(questions.enumerated()), id: \.offset) { _, question in Text(question) } } }
+                }
+                }
 
                 Section("Actions") {
                     HStack(spacing: Tokens.Spacing.small) {
@@ -88,6 +103,7 @@ struct TodoDetailView: View {
                 }
             }
             .formStyle(.grouped)
+            .onChange(of: todo.id) { _, _ in selectedSection = "Summary" }
         } else {
             ContentUnavailableView(
                 "No Todo selected",
@@ -117,17 +133,6 @@ struct TodoDetailView: View {
                         Link(destination: destination) {
                             Label(action.openLabel ?? "Open source", systemImage: "arrow.up.right")
                         }
-                    }
-                }
-            }
-            if todo.canMarkDone, let draft = card.sourceAction?.draftText ?? card.draftPreview, !draft.isEmpty {
-                Section("Suggested reply") {
-                    Text(draft).textSelection(.enabled)
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(draft, forType: .string)
-                    } label: {
-                        Label("Copy reply", systemImage: "doc.on.doc")
                     }
                 }
             }

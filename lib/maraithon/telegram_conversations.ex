@@ -255,6 +255,7 @@ defmodule Maraithon.TelegramConversations do
 
       {:ok, {conversation, turn, status, operator_event}} ->
         :ok = OperatorBus.broadcast(operator_event)
+        Maraithon.AssistantChat.Progress.changed(conversation.user_id, conversation.id)
         {:ok, {conversation, turn, status}}
 
       {:error, reason} ->
@@ -450,7 +451,7 @@ defmodule Maraithon.TelegramConversations do
         |> Repo.update!()
       end)
       |> case do
-        {:ok, updated_conversation} -> {:ok, Conversation.hydrate(updated_conversation)}
+        {:ok, updated_conversation} -> hydrate_conversation_result({:ok, updated_conversation})
         {:error, reason} -> {:error, reason}
       end
     else
@@ -957,8 +958,10 @@ defmodule Maraithon.TelegramConversations do
     stale? or resolved?
   end
 
-  defp hydrate_conversation_result({:ok, %Conversation{} = conversation}),
-    do: {:ok, Conversation.hydrate(conversation)}
+  defp hydrate_conversation_result({:ok, %Conversation{} = conversation}) do
+    Maraithon.AssistantChat.Progress.changed(conversation.user_id, conversation.id)
+    {:ok, Conversation.hydrate(conversation)}
+  end
 
   defp hydrate_conversation_result(other), do: other
 

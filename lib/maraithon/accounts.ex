@@ -26,6 +26,23 @@ defmodule Maraithon.Accounts do
   def get_user(id) when is_binary(id), do: Repo.get(User, id)
   def get_user(_), do: nil
 
+  @doc "The model id this user chose in Settings, or nil for the workspace default."
+  def assistant_model(user_id) when is_binary(user_id) do
+    case Repo.get(User, user_id) do
+      %User{assistant_model: model} -> model
+      _ -> nil
+    end
+  end
+
+  def assistant_model(_), do: nil
+
+  @doc "Sets or clears the user's model id. Every assistant call for the user follows it."
+  def update_assistant_model(%User{} = user, value) do
+    user
+    |> User.assistant_model_changeset(%{assistant_model: value})
+    |> Repo.update()
+  end
+
   def get_user_by_email(email) when is_binary(email) do
     normalized = normalize_email(email)
 

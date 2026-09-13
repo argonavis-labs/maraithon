@@ -1,37 +1,41 @@
 import MessageUI
 import SwiftUI
 
-/// Square provider badge used on draft cards and source action cards.
+/// Small square provider mark used on rows, draft cards, and source action
+/// cards: a hairline tile with the provider logo and no colored fill.
 struct ProviderMark: View {
     let provider: String
+    var size: CGFloat = 20
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(background)
+            RoundedRectangle(cornerRadius: Runner.Radius.checkbox, style: .continuous)
+                .fill(assetName == nil ? Runner.Palette.foreground5 : Runner.Palette.background)
 
-            if let assetName = assetName {
+            if let assetName {
                 Image(assetName)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 24, height: 24)
+                    .frame(width: size - 6, height: size - 6)
                     .accessibilityHidden(true)
             } else {
                 Image(systemName: iconName)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: size * 0.55, weight: .medium))
+                    .foregroundStyle(Runner.Palette.foreground80)
             }
         }
-        .frame(width: 34, height: 34)
+        .frame(width: size, height: size)
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(borderColor, lineWidth: 1)
+            RoundedRectangle(cornerRadius: Runner.Radius.checkbox, style: .continuous)
+                .stroke(Runner.Palette.border, lineWidth: Runner.Stroke.hairline)
         )
         .accessibilityHidden(true)
     }
 
     private var assetName: String? {
         switch provider {
+        case "browser":
+            return "ProviderChromeLogo"
         case "gmail":
             return "ProviderGmailLogo"
         case "slack":
@@ -50,27 +54,7 @@ struct ProviderMark: View {
         case "calendar":
             return "calendar"
         default:
-            return "paperplane.fill"
-        }
-    }
-
-    private var background: Color {
-        switch provider {
-        case "gmail", "slack", "imessage":
-            return Color.white
-        case "whatsapp":
-            return Color(red: 0.15, green: 0.72, blue: 0.36)
-        default:
-            return Color.accentColor
-        }
-    }
-
-    private var borderColor: Color {
-        switch provider {
-        case "gmail", "slack", "imessage":
-            return Color(uiColor: .separator).opacity(0.35)
-        default:
-            return .clear
+            return "sparkles"
         }
     }
 }

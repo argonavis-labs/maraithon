@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// Lightweight section header modifier that matches macOS `Form` section
-/// headings: uppercase, footnote weight, secondary tone, with a single
-/// unit of bottom padding. Reach for this whenever a custom `VStack`
-/// pretends to be a Form section.
+/// Section heading modifier for operational pages: 11pt medium,
+/// uppercase, 0.5 tracking, muted, with 8pt below before the section
+/// body. Reach for this whenever a `VStack` acts as a page section.
 ///
 /// Invariant: never introduce a parallel header style. If a screen needs
 /// a different label rhythm, add a case here instead of writing
@@ -11,17 +10,17 @@ import SwiftUI
 struct SectionHeaderStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .font(Tokens.Typography.captionMedium)
+            .foregroundStyle(Tokens.Palette.mutedForeground)
             .textCase(.uppercase)
-            .tracking(0.5)
-            .padding(.bottom, Tokens.Spacing.xsmall)
+            .tracking(Tokens.SourcesLayout.sectionHeadingTracking)
+            .padding(.bottom, Tokens.Spacing.small)
             .accessibilityAddTraits(.isHeader)
     }
 }
 
 extension View {
-    /// Applies the standard macOS-style section header treatment.
+    /// Applies the standard workspace section header treatment.
     func sectionHeaderStyle() -> some View {
         modifier(SectionHeaderStyle())
     }
@@ -43,17 +42,20 @@ struct SectionHeader: View {
 
 #Preview {
     VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 0) {
             SectionHeader("Status")
-            Text("● Syncing — 47 new, 0 errors")
-                .foregroundStyle(.primary)
+            Text("Checking. 47 new, 0 errors")
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.Palette.foreground)
         }
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 0) {
             SectionHeader("Recent activity")
-            Text("14:23 — 47 messages")
-                .foregroundStyle(.primary)
+            Text("14:23. 47 messages")
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.Palette.foreground)
         }
     }
     .padding(Tokens.Spacing.large)
     .frame(width: 360, alignment: .leading)
+    .background(Tokens.Palette.background)
 }

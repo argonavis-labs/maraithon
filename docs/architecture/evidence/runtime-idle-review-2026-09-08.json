@@ -1,0 +1,22 @@
+{
+  "kind": "controlled_unchanged_context_review",
+  "model_calls": 0,
+  "iterations": 51,
+  "unchanged_iterations": 50,
+  "unchanged_todos": 50,
+  "elapsed_us": 814012,
+  "first_pass_queries": {
+    "queries": 4,
+    "writes": 1,
+    "total_us": 35930
+  },
+  "unchanged_queries": {
+    "queries": 150,
+    "writes": 0,
+    "total_us": 464920
+  },
+  "memo_entries": 1,
+  "fixture_rolled_back": true,
+  "synthetic_source_bundle": true,
+  "execution": "maraithon-todo-validation-szf2c"
+}

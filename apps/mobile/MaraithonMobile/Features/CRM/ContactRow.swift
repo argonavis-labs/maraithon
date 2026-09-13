@@ -4,37 +4,27 @@ struct ContactRow: View {
     let contact: CRMContact
 
     var body: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(contact.status.tint.opacity(0.18))
-                .frame(width: 44, height: 44)
-                .overlay {
-                    Text(initials)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(contact.status.tint)
-                }
-                .accessibilityHidden(true)
+        HStack(spacing: Runner.Spacing.tight) {
+            PeopleAvatar(initials: PeopleAvatar.initials(for: contact.name))
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text(contact.name)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Spacer()
-                }
-
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
+                Text(contact.name)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
                     .lineLimit(1)
 
-                HStack {
+                Text(subtitle)
+                    .font(Runner.Typography.caption)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
+                    .lineLimit(1)
+
+                HStack(spacing: Runner.Spacing.compact) {
                     StatusPill(title: contact.status.title, tint: contact.status.tint)
                     StatusPill(title: careSummary.title, tint: careTint)
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Runner.Spacing.xsmall)
     }
 
     private var careSummary: RelationshipCareSummary {
@@ -49,16 +39,6 @@ struct ContactRow: View {
         case .due: .orange
         case .needsCare: .red
         }
-    }
-
-    private var initials: String {
-        contact.name
-            .split(separator: " ")
-            .prefix(2)
-            .compactMap(\.first)
-            .map(String.init)
-            .joined()
-            .uppercased()
     }
 
     private var subtitle: String {

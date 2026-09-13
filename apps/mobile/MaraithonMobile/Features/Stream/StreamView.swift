@@ -16,23 +16,47 @@ struct StreamView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    VStack(alignment: .leading, spacing: 0) {
+                        RunnerPageHeader(title: StreamCopy.title, count: events.isEmpty ? nil : events.count)
+                            .padding(.horizontal, Runner.Layout.pageInset)
+
+                        RunnerTabs(
+                            items: StreamFilter.allCases.map { RunnerTabs.Item(id: $0, title: $0.title) },
+                            selection: $filter
+                        )
+                        .accessibilityLabel(StreamCopy.filterLabel)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: Runner.Spacing.small, leading: 0, bottom: 0, trailing: 0))
+                }
+
                 if isLoading && events.isEmpty {
-                    loadingRow
+                    ThemedListSection {
+                        ThemedLoadingRow(title: StreamCopy.loadingTitle)
+                    }
                 } else if let errorMessage, events.isEmpty {
-                    ContentUnavailableView(
-                        StreamCopy.loadFailedTitle,
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(errorMessage)
-                    )
+                    ThemedListSection {
+                        RunnerEmptyState(
+                            title: StreamCopy.loadFailedTitle,
+                            description: errorMessage,
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 } else if filteredDays.isEmpty {
-                    ContentUnavailableView(
-                        StreamCopy.emptyTitle,
-                        systemImage: "wave.3.right",
-                        description: Text(StreamCopy.emptyDescription)
-                    )
+                    ThemedListSection {
+                        RunnerEmptyState(
+                            title: StreamCopy.emptyTitle,
+                            description: StreamCopy.emptyDescription,
+                            systemImage: "wave.3.right"
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 } else {
                     ForEach(filteredDays) { day in
-                        Section(day.title) {
+                        ThemedListSection(day.title) {
                             ForEach(day.events) { event in
                                 StreamRow(event: event)
                             }
@@ -40,18 +64,9 @@ struct StreamView: View {
                     }
                 }
             }
-            .navigationTitle(StreamCopy.title)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Picker(StreamCopy.filterLabel, selection: $filter) {
-                        ForEach(StreamFilter.allCases) { option in
-                            Text(option.title).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 280)
-                }
-            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .runnerPage()
             .task {
                 await loadActivity()
             }
@@ -61,14 +76,6 @@ struct StreamView: View {
             .onChange(of: filter) { _, _ in
                 rebuildFilteredDays()
             }
-        }
-    }
-
-    private var loadingRow: some View {
-        HStack(spacing: 12) {
-            ProgressView()
-            Text(StreamCopy.loadingTitle)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -149,25 +156,27 @@ private struct StreamRow: View {
     let event: MobileAPIClient.RemoteTodoActivity
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Runner.Spacing.tight) {
             Image(systemName: TodoActivityLogCopy.systemImage(for: event))
-                .font(.title3)
+                .font(Runner.Typography.icon)
                 .foregroundStyle(TodoActivityLogCopy.tint(for: event))
-                .frame(width: 28)
+                .frame(width: Runner.Spacing.large)
+                .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
                 Text(TodoActivityLogCopy.todoTitle(for: event))
-                    .font(.subheadline.weight(.medium))
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
                     .lineLimit(2)
 
                 if let note = StreamCopy.note(for: event) {
                     Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: Runner.Spacing.compact) {
                     Label(
                         StreamCopy.actorPhrase(for: event),
                         systemImage: TodoActivityLogCopy.actorSystemImage(for: event)
@@ -177,12 +186,12 @@ private struct StreamRow: View {
 
                     Text(event.occurredAt.formatted(date: .omitted, time: .shortened))
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
                 .lineLimit(1)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, Runner.Spacing.xxsmall)
     }
 }
 

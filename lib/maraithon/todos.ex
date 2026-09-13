@@ -29,6 +29,7 @@ defmodule Maraithon.Todos do
   }
 
   alias Maraithon.Todos.UserFacingCopy
+  alias Maraithon.Todos.Workflow
   alias Maraithon.Todos.Todo
 
   require Logger
@@ -255,7 +256,7 @@ defmodule Maraithon.Todos do
   defp maybe_filter_activity_event_type(query, nil), do: query
 
   defp maybe_filter_activity_event_type(query, event_type)
-       when event_type in ["created", "deleted", "marked_done"] do
+       when event_type in ["created", "deleted", "marked_done", "workflow_changed"] do
     where(query, [event], event.event_type == ^event_type)
   end
 
@@ -361,17 +362,31 @@ defmodule Maraithon.Todos do
 
   def upsert_many(user_id, attrs_list, opts)
       when is_binary(user_id) and is_list(attrs_list) and is_list(opts) do
-    attrs_list
-    |> Enum.reduce({:ok, []}, fn attrs, {:ok, acc} ->
-      case upsert_one(user_id, attrs, opts) do
-        {:ok, todo} -> {:ok, [todo | acc]}
-        {:error, reason} -> {:error, reason}
+    Maraithon.Todos.IntakeSnapshot.transaction(
+      user_id,
+      Keyword.get(opts, :expected_intake_snapshot),
+      fn ->
+        todos =
+          Enum.map(attrs_list, fn attrs ->
+            case upsert_one(user_id, attrs, opts) do
+              {:ok, todo} -> todo
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end)
+
+        Maraithon.Todos.Consolidation.apply!(user_id, Keyword.get(opts, :consolidations, []))
+        Enum.map(todos, &(Repo.reload!(&1) |> Maraithon.Todos.Consolidation.canonical()))
       end
-    end)
+    )
     |> case do
       {:ok, todos} ->
-        todos = Enum.reverse(todos)
-        Enum.each(todos, &enqueue_brief/1)
+        # Provider work runs after the short intake transaction releases its lock.
+        todos
+        |> Enum.uniq_by(& &1.id)
+        |> Enum.each(fn todo ->
+          _ = safe_refresh_embedding(todo)
+          enqueue_brief(todo)
+        end)
 
         {:ok, todos}
 
@@ -410,14 +425,18 @@ defmodule Maraithon.Todos do
   def mark_done_if_current(%Todo{} = todo, provenance, opts \\ []) when is_map(provenance) do
     provenance = Map.put(provenance, "recorded_at", DateTime.to_iso8601(DateTime.utc_now()))
 
-    update_status(
-      todo.user_id,
-      todo.id,
-      "done",
-      Keyword.get(opts, :note),
-      %{"automatic_completion" => provenance},
-      opts |> Keyword.put(:expected_todo, todo) |> Keyword.put(:actor_type, "agent")
-    )
+    if Workflow.outcome_tracked?(todo) and provenance["outcome_confirmed"] != true do
+      {:error, :outcome_not_confirmed}
+    else
+      update_status(
+        todo.user_id,
+        todo.id,
+        "done",
+        Keyword.get(opts, :note),
+        %{"automatic_completion" => provenance},
+        opts |> Keyword.put(:expected_todo, todo) |> Keyword.put(:actor_type, "agent")
+      )
+    end
   end
 
   def dismiss(user_id, todo_id, opts \\ [])
@@ -444,7 +463,7 @@ defmodule Maraithon.Todos do
     source = Keyword.get(opts, :source)
 
     Repo.transaction(fn ->
-      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+      with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
            {:ok, updated} <-
              todo
              |> Todo.changeset(%{
@@ -454,7 +473,8 @@ defmodule Maraithon.Todos do
                snoozed_until: nil,
                metadata: put_importance_override(todo.metadata || %{}, source)
              })
-             |> Repo.update() do
+             |> Repo.update(),
+           {:ok, _} <- maybe_record_status_activity(todo, updated, updated.status, opts) do
         updated
       else
         nil -> Repo.rollback(:not_found)
@@ -477,7 +497,7 @@ defmodule Maraithon.Todos do
     note = Keyword.get(opts, :note)
 
     Repo.transaction(fn ->
-      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+      with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
            {:ok, updated} <-
              todo
              |> Todo.changeset(%{
@@ -487,7 +507,8 @@ defmodule Maraithon.Todos do
                metadata: put_resolution_note(todo.metadata || %{}, note)
              })
              |> Repo.update(),
-           {:ok, _insight} <- sync_linked_insight(updated) do
+           {:ok, _insight} <- sync_linked_insight(updated),
+           {:ok, _} <- maybe_record_status_activity(todo, updated, updated.status, opts) do
         updated
       else
         nil -> Repo.rollback(:not_found)
@@ -561,6 +582,148 @@ defmodule Maraithon.Todos do
   end
 
   def see_less_like(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
+  @doc "Apply one versioned state/owner handoff and record its history atomically."
+  def transition_workflow(user_id, todo_id, attrs, opts \\ [])
+
+  def transition_workflow(user_id, todo_id, attrs, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) do
+    attrs = stringify_top_level_keys(attrs)
+
+    with {:ok, _} <- Ecto.UUID.cast(todo_id),
+         true <- Workflow.valid_request_id?(attrs["request_id"]) do
+      do_transition_workflow(user_id, todo_id, attrs, opts)
+    else
+      _ -> {:error, :invalid_workflow_request}
+    end
+  end
+
+  def transition_workflow(_, _, _, _), do: {:error, :invalid_workflow_request}
+
+  defp do_transition_workflow(user_id, todo_id, attrs, opts) do
+    request_id = attrs["request_id"]
+
+    request_hash =
+      :crypto.hash(:sha256, Maraithon.AssistantHarness.PromptStability.encode!(attrs))
+      |> Base.encode16(case: :lower)
+
+    Repo.transaction(fn ->
+      case get_todo_for_update(user_id, todo_id) do
+        %Todo{} = todo ->
+          stored = todo.workflow || %{}
+
+          cond do
+            is_binary(request_id) and stored["request_id"] == request_id and
+                stored["request_hash"] == request_hash ->
+              todo
+
+            is_binary(request_id) and stored["request_id"] == request_id ->
+              Repo.rollback(:workflow_request_conflict)
+
+            true ->
+              with :ok <- validate_todo_snapshot(todo, Keyword.get(opts, :expected_todo)),
+                   {:ok, owner} <- workflow_owner(todo, attrs["owner"]),
+                   {:ok, workflow} <- Workflow.transition(todo, attrs, owner),
+                   changes <- workflow_changes(todo, workflow, request_id, request_hash),
+                   {:ok, updated} <- todo |> Todo.changeset(changes) |> Repo.update(),
+                   {:ok, _} <- sync_linked_insight(updated),
+                   {:ok, _} <- maybe_record_status_activity(todo, updated, updated.status, opts) do
+                updated
+              else
+                {:error, reason} -> Repo.rollback(reason)
+              end
+          end
+
+        nil ->
+          Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, todo} ->
+        enqueue_brief(todo)
+        {:ok, todo}
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Return due waiting work to its user for review, without claiming completion."
+  def review_waiting_workflows(user_id, now) do
+    Todo
+    |> where([t], t.user_id == ^user_id and t.status in ["open", "snoozed"])
+    |> where([t], fragment("?->>'state' = 'waiting'", t.workflow))
+    |> where([t], fragment("(?->>'waiting_until')::timestamptz <= ?", t.workflow, ^now))
+    |> order_by([t], asc: t.updated_at)
+    |> limit(20)
+    |> Repo.all()
+    |> Enum.each(fn todo ->
+      workflow = Workflow.current(todo)
+
+      transition_workflow(
+        user_id,
+        todo.id,
+        %{
+          "state" => "you_own",
+          "owner" => %{"kind" => "user"},
+          "expected_revision" => workflow["revision"],
+          "request_id" => "waiting-review:#{todo.id}:#{workflow["revision"]}",
+          "next_action" =>
+            Maraithon.PromptBudget.truncate_utf8(
+              "Review progress: " <> workflow["next_action"],
+              1_000
+            ),
+          "reason" =>
+            "The waiting review date arrived. Check what happened and choose the next move."
+        },
+        actor_type: "agent",
+        actor_label: "Maraithon",
+        expected_todo: todo
+      )
+    end)
+  end
+
+  @doc "Validate a planned transition without changing the todo."
+  def preview_workflow(%Todo{} = todo, attrs) when is_map(attrs) do
+    with {:ok, owner} <- workflow_owner(todo, attrs["owner"]) do
+      Workflow.transition(todo, attrs, owner)
+    end
+  end
+
+  defp workflow_owner(todo, nil), do: workflow_owner(todo, Workflow.current(todo)["owner"])
+  defp workflow_owner(todo, %{"kind" => "user"}), do: {:ok, Workflow.user_owner(todo)}
+
+  defp workflow_owner(todo, %{"kind" => "person", "id" => id}) do
+    with {:ok, id} <- Ecto.UUID.cast(id),
+         %{display_name: label, status: status} <-
+           Maraithon.Crm.get_person_for_user(todo.user_id, id),
+         true <- status != "merged" do
+      {:ok, %{"kind" => "person", "id" => id, "label" => label}}
+    else
+      _ -> {:error, :invalid_workflow_owner}
+    end
+  end
+
+  defp workflow_owner(_, _), do: {:error, :invalid_workflow_owner}
+
+  defp workflow_changes(_todo, workflow, request_id, request_hash) do
+    person? = workflow["owner"]["kind"] == "person"
+
+    %{
+      "workflow" =>
+        Map.merge(workflow, %{"request_id" => request_id, "request_hash" => request_hash}),
+      "status" => Workflow.status(workflow["state"]),
+      "next_action" => workflow["next_action"],
+      "attention_mode" =>
+        if(workflow["state"] in ["waiting", "they_own"], do: "monitor", else: "act_now"),
+      "direction" => if(person?, do: "owed_to_me", else: "owed_by_me"),
+      "counterparty_person_id" => if(person?, do: workflow["owner"]["id"]),
+      "counterparty_label" => if(person?, do: workflow["owner"]["label"]),
+      "snoozed_until" => nil,
+      "closed_at" => if(workflow["state"] in ["done", "cancelled"], do: DateTime.utc_now()),
+      "last_completion_checked_at" => nil
+    }
+  end
 
   def update_for_user(user_id, todo_id, attrs, opts \\ [])
 
@@ -802,11 +965,13 @@ defmodule Maraithon.Todos do
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       status: todo.status,
+      workflow: Workflow.current(todo),
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,
       due_at: todo.due_at,
       notes: todo.notes,
+      current_brief: Brief.public(todo),
       action_plan: todo.action_plan,
       action_draft: todo.action_draft || %{},
       owner_user_id: todo.owner_user_id,
@@ -1421,6 +1586,7 @@ defmodule Maraithon.Todos do
       |> UserFacingCopy.polish_attrs()
       |> ActionDrafts.ensure()
       |> maybe_put_model_selected_at(opts)
+      |> Map.update!("metadata", &Maraithon.Todos.Consolidation.strip_metadata/1)
 
     case existing_todo_for_upsert(user_id, normalized_attrs) do
       {%Todo{} = todo, matched_attrs} ->
@@ -1464,7 +1630,6 @@ defmodule Maraithon.Todos do
     todo
     |> Todo.changeset(merge_upsert_attrs(todo, matched_attrs, attrs))
     |> Repo.update()
-    |> tap_refresh_embedding()
   end
 
   defp insert_upserted_todo(normalized_attrs, opts) do
@@ -1476,7 +1641,6 @@ defmodule Maraithon.Todos do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> tap_refresh_embedding()
   end
 
   defp dedupe_key_conflict?(%Ecto.Changeset{errors: errors}) do
@@ -1489,12 +1653,14 @@ defmodule Maraithon.Todos do
   defp existing_todo_for_upsert(user_id, attrs) do
     case Repo.get_by(Todo, user_id: user_id, dedupe_key: attrs["dedupe_key"]) do
       %Todo{} = todo ->
-        {todo, attrs}
+        canonical = Maraithon.Todos.Consolidation.canonical(todo)
+        {canonical, Map.put(attrs, "dedupe_key", canonical.dedupe_key)}
 
       nil ->
         case existing_source_item_todo(user_id, attrs) do
           %Todo{} = todo ->
-            {todo, Map.put(attrs, "dedupe_key", todo.dedupe_key)}
+            canonical = Maraithon.Todos.Consolidation.canonical(todo)
+            {canonical, Map.put(attrs, "dedupe_key", canonical.dedupe_key)}
 
           nil ->
             nil
@@ -1534,7 +1700,7 @@ defmodule Maraithon.Todos do
 
     case Repo.get_by(Todo, user_id: insight.user_id, dedupe_key: attrs.dedupe_key) do
       %Todo{} = todo ->
-        if preserve_closed_synced_todo?(todo, attrs) do
+        if Workflow.outcome_tracked?(todo) or preserve_closed_synced_todo?(todo, attrs) do
           {:ok, todo}
         else
           todo
@@ -1617,12 +1783,30 @@ defmodule Maraithon.Todos do
     end
   end
 
-  defp maybe_record_status_activity(%Todo{status: status}, %Todo{}, status, _opts), do: {:ok, nil}
+  defp maybe_record_status_activity(previous, %Todo{} = updated, status, opts) do
+    with {:ok, _} <- maybe_record_workflow_activity(previous, updated, opts) do
+      if previous.status == status do
+        {:ok, nil}
+      else
+        case activity_event_type_for_status(status) do
+          nil -> {:ok, nil}
+          event_type -> record_activity_event(updated, event_type, opts)
+        end
+      end
+    end
+  end
 
-  defp maybe_record_status_activity(_previous, %Todo{} = updated, status, opts) do
-    case activity_event_type_for_status(status) do
-      nil -> {:ok, nil}
-      event_type -> record_activity_event(updated, event_type, opts)
+  defp maybe_record_workflow_activity(previous, updated, opts) do
+    if previous.workflow == updated.workflow do
+      {:ok, nil}
+    else
+      transition = %{"from" => Workflow.current(previous), "to" => Workflow.current(updated)}
+
+      record_activity_event(
+        updated,
+        "workflow_changed",
+        Keyword.put(opts, :workflow_transition, transition)
+      )
     end
   end
 
@@ -1673,6 +1857,7 @@ defmodule Maraithon.Todos do
 
   defp activity_event_metadata(%Todo{} = todo, opts) do
     %{"todo_status" => todo.status}
+    |> maybe_put("workflow_transition", Keyword.get(opts, :workflow_transition))
     |> maybe_put("note", normalize_optional_string(Keyword.get(opts, :note)))
   end
 
@@ -1761,7 +1946,10 @@ defmodule Maraithon.Todos do
   defp merge_upsert_attrs(%Todo{} = existing, attrs, raw_attrs) do
     incoming_status = Map.get(attrs, "status", "open")
 
-    status = merge_status(existing.status, incoming_status)
+    status =
+      if Workflow.outcome_tracked?(existing),
+        do: existing.status,
+        else: merge_status(existing.status, incoming_status)
 
     closed_at =
       if status in ["done", "dismissed"] do
@@ -1780,6 +1968,10 @@ defmodule Maraithon.Todos do
     direction = preserved_update_direction(existing, raw_attrs)
 
     attrs
+    |> Map.put(
+      "metadata",
+      Maraithon.Todos.Consolidation.preserve_metadata(existing, attrs["metadata"])
+    )
     |> Map.put("status", status)
     |> Map.put("model_selected_at", merged_model_selected_at(existing, attrs))
     |> Map.put("closed_at", closed_at)
@@ -1791,6 +1983,20 @@ defmodule Maraithon.Todos do
     )
     |> Map.put("counterparty_label", preserved_update_counterparty_label(existing, raw_attrs))
     |> Map.put("next_nudge_at", preserved_update_next_nudge_at(existing, attrs, direction))
+    |> preserve_owned_workflow(existing)
+  end
+
+  defp preserve_owned_workflow(attrs, existing) do
+    if Workflow.outcome_tracked?(existing) do
+      # Discovery may refresh evidence, but cannot replace an explicit handoff.
+      Enum.reduce(
+        ~w(workflow next_action attention_mode direction counterparty_person_id counterparty_label)a,
+        attrs,
+        fn key, acc -> Map.put(acc, Atom.to_string(key), Map.get(existing, key)) end
+      )
+    else
+      attrs
+    end
   end
 
   # SPEC 01 R1, mirroring preserved_update_direction/2 above: on the upsert

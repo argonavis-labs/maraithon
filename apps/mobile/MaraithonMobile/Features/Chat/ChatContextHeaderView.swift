@@ -4,49 +4,52 @@ struct ChatContextHeaderView: View {
     let header: ChatContextHeader
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
+        RunnerCard {
+            HStack(alignment: .top, spacing: Runner.Spacing.snug) {
                 Image(systemName: header.systemImage)
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 28, height: 28)
-                    .background(Color.accentColor.opacity(0.12), in: Circle())
+                    .font(Runner.Typography.smallMedium)
+                    .foregroundStyle(Runner.Palette.accent)
+                    .frame(width: Runner.Spacing.large + Runner.Spacing.xsmall, height: Runner.Spacing.large + Runner.Spacing.xsmall)
+                    .background(Runner.Palette.selected, in: RoundedRectangle(cornerRadius: Runner.Radius.control, style: .continuous))
+                    .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
                     Text(header.title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                        .font(Runner.Typography.bodyMedium)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let subtitle = header.subtitle {
                         Text(subtitle)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
-                Spacer(minLength: 8)
+                Spacer(minLength: Runner.Spacing.small)
 
                 if let status = header.status {
                     StatusPill(title: status.title, tint: status.tint)
                 }
             }
+            .runnerCardRow()
 
             ForEach(header.items) { item in
-                VStack(alignment: .leading, spacing: 4) {
+                RunnerHairline()
+
+                VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
                     Label(item.title, systemImage: item.systemImage)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(Runner.Typography.captionMedium)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
 
                     Text(item.body)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
+                        .font(Runner.Typography.small)
+                        .foregroundStyle(Runner.Palette.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .runnerCardRow()
             }
         }
-        .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

@@ -1,0 +1,315 @@
+{
+  "kind": "open_todo_workflow_generalization_review",
+  "inventory": {
+    "at": "2026-09-09T00:49:50.036005Z",
+    "execution": "maraithon-todo-validation-x69vk",
+    "open_todos": 36,
+    "states": {
+      "you_own": 33,
+      "working": 1,
+      "they_own": 1,
+      "waiting": 1
+    },
+    "explicit_workflows": 1,
+    "derived_initial_workflows": 35
+  },
+  "implementation_commit": "1155d25e",
+  "fixes": [
+    "Preserve cited intermediate workflow transitions when combining exact Gmail/Slack review chunks.",
+    "Choose the newest supporting source timestamp; preserve current ownership for conflicting equally recent plans.",
+    "Do not let a completion missing outcome confirmation suppress a valid handoff.",
+    "Clarify narrow delivery, payment, access, recovery and batch-monitoring completion rules in the review prompt."
+  ],
+  "local_verification": {
+    "new_cases": 19,
+    "cohort_tests": 40,
+    "failures": 0,
+    "duration_seconds": 5.6,
+    "compile_warnings_as_errors": "passed",
+    "files": [
+      "test/maraithon/todos/workflow_review_test.exs",
+      "test/maraithon/todos/cross_source_completion_test.exs",
+      "test/maraithon/todos/outcome_workflow_test.exs"
+    ]
+  },
+  "limits": [
+    "Controlled model responses establish transition behavior, not a live-model accuracy rate.",
+    "Most existing titles are provisional outcomes; ambiguous scope still needs source context or user direction.",
+    "A named person must resolve within the user account before delegation.",
+    "Ongoing and batch work retain one accountable owner; this change does not add a parallel-owner or subtask-planning system.",
+    "Production checks preview actual records in memory inside a read-only transaction."
+  ],
+  "release": {
+    "commit": "1155d25e",
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-1155d25e5a58-20260909005303-1",
+    "revision": "maraithon-00290-95f",
+    "cloud_build": "739e0ea1-f68b-423e-8015-3e5ea717098d"
+  },
+  "production_preview": {
+    "execution": "maraithon-todo-validation-f75qd",
+    "at": "2026-09-09T00:58:04.154207Z",
+    "limit": "These are in-memory transition previews against real open todos, not evidence that their work was performed or completed.",
+    "revision": null,
+    "kind": "open_todo_read_only_workflow_previews",
+    "cases": [
+      {
+        "category": "supplier_balance",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "waiting",
+            "revision": 2,
+            "owner_kind": "person",
+            "ball": "Madison Walker owns follow-up"
+          },
+          {
+            "state": "you_own",
+            "revision": 3,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "done",
+            "revision": 4,
+            "owner_kind": "user",
+            "ball": "Owner: You"
+          }
+        ],
+        "todo_id": "8246abd7-2496-4188-995c-34d56192188a",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "access_request",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "waiting",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "You own follow-up"
+          },
+          {
+            "state": "you_own",
+            "revision": 3,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "done",
+            "revision": 4,
+            "owner_kind": "user",
+            "ball": "Owner: You"
+          }
+        ],
+        "todo_id": "1b0d88a2-a67f-4eef-ba1d-f5e5e250ef5d",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "service_recovery",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "waiting",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "You own follow-up"
+          },
+          {
+            "state": "you_own",
+            "revision": 3,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "done",
+            "revision": 4,
+            "owner_kind": "user",
+            "ball": "Owner: You"
+          }
+        ],
+        "todo_id": "4f5bd756-1420-41e6-addd-881f37d2a66a",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "deliver_url",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "done",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "Owner: You"
+          }
+        ],
+        "todo_id": "4dcce72f-1b5f-4174-a033-032847ad5394",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "deliver_draft",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "done",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "Owner: You"
+          }
+        ],
+        "todo_id": "ada7badd-4fc5-499c-96f3-e5b87fbebe5d",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "ongoing_outreach",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "waiting",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "You own follow-up"
+          },
+          {
+            "state": "you_own",
+            "revision": 3,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "working",
+            "revision": 4,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "waiting",
+            "revision": 5,
+            "owner_kind": "user",
+            "ball": "You own follow-up"
+          }
+        ],
+        "todo_id": "b89f931b-90b6-4ab8-94ff-47bf83300f5e",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "batch_staffing",
+        "steps": [
+          {
+            "state": "working",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "waiting",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "You own follow-up"
+          },
+          {
+            "state": "you_own",
+            "revision": 3,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "working",
+            "revision": 4,
+            "owner_kind": "user",
+            "ball": "Your move"
+          }
+        ],
+        "todo_id": "87a55040-1021-48f0-a548-5c11975ca404",
+        "original_state": "you_own",
+        "persisted_unchanged": true
+      },
+      {
+        "category": "investor_follow_up",
+        "steps": [
+          {
+            "state": "you_own",
+            "revision": 1,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "working",
+            "revision": 2,
+            "owner_kind": "user",
+            "ball": "Your move"
+          },
+          {
+            "state": "they_own",
+            "revision": 3,
+            "owner_kind": "person",
+            "ball": "Michele Romanow\u2019s move"
+          },
+          {
+            "state": "waiting",
+            "revision": 4,
+            "owner_kind": "person",
+            "ball": "Michele Romanow owns follow-up"
+          },
+          {
+            "state": "you_own",
+            "revision": 5,
+            "owner_kind": "user",
+            "ball": "Your move"
+          }
+        ],
+        "todo_id": "3bba744b-1b77-4c42-b8bc-21922f0cacec",
+        "original_state": "they_own",
+        "persisted_unchanged": true
+      }
+    ]
+  },
+  "runtime_status": {
+    "phase": "ready",
+    "node_incarnation_id": "48e29d40-4f46-4f46-9364-dbcbf79f2350",
+    "process_role": "combined",
+    "node_fenced": false,
+    "admitting_nodes": 1,
+    "admitting_partitions": 64,
+    "unready_partitions": 0,
+    "owned_partitions": 64,
+    "open_tasks": 0,
+    "unproven_tasks": 0,
+    "local_agent_leases": 1,
+    "agent_leases": 1
+  }
+}

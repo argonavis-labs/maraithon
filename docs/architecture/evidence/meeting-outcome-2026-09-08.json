@@ -1,0 +1,315 @@
+{
+  "at": "2026-09-08T23:09:40.084360Z",
+  "kind": "controlled_meeting_resumed_in_new_process",
+  "source_seed": {
+    "action_id": "2e788695-c2d0-4400-8c3e-2a99e82b2350",
+    "conversation_id": "41719f2d-0b74-47c3-94be-9a234cff9f1e",
+    "people": {
+      "Christina": "32006319-29b9-4ea4-ae8d-2123916faef0",
+      "Michael": "fbd740d0-3dde-4c02-a48c-ff35fa0e0404"
+    },
+    "run_id": "eb5ab37f-424c-44b8-9b01-2ec094409919",
+    "todo_id": "8fb2f6a5-13cd-4f06-a40f-ba84dbbafa44",
+    "user_id": "runtime-outcome-1788908790@example.invalid"
+  },
+  "no_external_mutation_dispatched": true,
+  "synthetic_attendance_confirmation": true,
+  "first_execution_attempts": 1,
+  "first_receipt": {
+    "confirmed_payload_hash": "d9cb02614c92bffad9d6648a91f45951a7fa6088000b932cba224708e0967a50",
+    "message_id": "controlled-2e788695-c2d0-4400-8c3e-2a99e82b2350",
+    "observed_at": "2026-09-08T23:09:38.506452Z",
+    "reconciled": true,
+    "source": "gmail",
+    "thread_id": null
+  },
+  "supporting_action_ids": [
+    "c40927d9-f066-48b6-b8dd-d1dd84b09fbb",
+    "dd3b19a7-02ae-435e-a3f9-9159c4dfe181"
+  ],
+  "observations": [
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:06:32.119467Z",
+        "label": "Working",
+        "next_action": "Ask Christina for availability",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Controlled scenario instruction",
+        "revision": 1,
+        "state": "working",
+        "waiting_until": null
+      },
+      "ball_label": "Your move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:06:32.119467Z",
+        "label": "Working",
+        "next_action": "Ask Christina for availability",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Controlled scenario instruction",
+        "revision": 1,
+        "state": "working",
+        "waiting_until": null
+      },
+      "ball_label": "Your move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:38.864255Z",
+        "label": "They own the action",
+        "next_action": "Christina confirms availability",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "32006319-29b9-4ea4-ae8d-2123916faef0",
+          "kind": "person",
+          "label": "Christina"
+        },
+        "reason": "Confirmed action completed. Wait for Christina after confirmed delivery",
+        "revision": 2,
+        "state": "they_own",
+        "waiting_until": null
+      },
+      "ball_label": "Christina\u2019s move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:38.864255Z",
+        "label": "They own the action",
+        "next_action": "Christina confirms availability",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "32006319-29b9-4ea4-ae8d-2123916faef0",
+          "kind": "person",
+          "label": "Christina"
+        },
+        "reason": "Confirmed action completed. Wait for Christina after confirmed delivery",
+        "revision": 2,
+        "state": "they_own",
+        "waiting_until": null
+      },
+      "ball_label": "Christina\u2019s move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:39.056460Z",
+        "label": "You own the action",
+        "next_action": "Offer Christina's time to Michael",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Controlled source receipt: Christina confirms Tuesday at 10.",
+        "revision": 3,
+        "state": "you_own",
+        "waiting_until": null
+      },
+      "ball_label": "Your move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:39.480937Z",
+        "label": "They own the action",
+        "next_action": "Michael confirms availability",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "fbd740d0-3dde-4c02-a48c-ff35fa0e0404",
+          "kind": "person",
+          "label": "Michael"
+        },
+        "reason": "Confirmed action completed. Controlled action success handoff",
+        "revision": 4,
+        "state": "they_own",
+        "waiting_until": null
+      },
+      "ball_label": "Michael\u2019s move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:39.480937Z",
+        "label": "They own the action",
+        "next_action": "Michael confirms availability",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "fbd740d0-3dde-4c02-a48c-ff35fa0e0404",
+          "kind": "person",
+          "label": "Michael"
+        },
+        "reason": "Confirmed action completed. Controlled action success handoff",
+        "revision": 4,
+        "state": "they_own",
+        "waiting_until": null
+      },
+      "ball_label": "Michael\u2019s move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:39.612280Z",
+        "label": "You own the action",
+        "next_action": "Confirm the time and book the meeting",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Controlled source receipt: Michael accepts Tuesday at 10.",
+        "revision": 5,
+        "state": "you_own",
+        "waiting_until": null
+      },
+      "ball_label": "Your move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:39.965653Z",
+        "label": "Working",
+        "next_action": "Attend the meeting",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Confirmed action completed. Controlled action success handoff",
+        "revision": 6,
+        "state": "working",
+        "waiting_until": null
+      },
+      "ball_label": "Your move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:39.965653Z",
+        "label": "Working",
+        "next_action": "Attend the meeting",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Confirmed action completed. Controlled action success handoff",
+        "revision": 6,
+        "state": "working",
+        "waiting_until": null
+      },
+      "ball_label": "Your move",
+      "todo_status": "open"
+    },
+    {
+      "workflow": {
+        "changed_at": "2026-09-08T23:09:40.067495Z",
+        "label": "Done",
+        "next_action": "Meeting completed",
+        "outcome": "Kent, Christina and Michael have the meeting",
+        "owner": {
+          "id": "runtime-outcome-1788908790@example.invalid",
+          "kind": "user",
+          "label": "You"
+        },
+        "reason": "Controlled user confirmation: all three attended and completed the meeting.",
+        "revision": 7,
+        "state": "done",
+        "waiting_until": null
+      },
+      "ball_label": "Owner: You",
+      "todo_status": "done"
+    }
+  ],
+  "execution": "maraithon-todo-validation-kl8hf",
+  "release": "maraithon-00286-wq4",
+  "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-57190f5a9a57-20260908230357-1",
+  "seed": {
+    "at": "2026-09-08T23:06:32.714765Z",
+    "working": {
+      "changed_at": "2026-09-08T23:06:32.119467Z",
+      "label": "Working",
+      "next_action": "Ask Christina for availability",
+      "outcome": "Kent, Christina and Michael have the meeting",
+      "owner": {
+        "id": "runtime-outcome-1788908790@example.invalid",
+        "kind": "user",
+        "label": "You"
+      },
+      "reason": "Controlled scenario instruction",
+      "revision": 1,
+      "state": "working",
+      "waiting_until": null
+    },
+    "initial": {
+      "changed_at": null,
+      "label": "You own the action",
+      "next_action": "Coordinate availability",
+      "outcome": "Kent, Christina and Michael have the meeting",
+      "owner": {
+        "id": "runtime-outcome-1788908790@example.invalid",
+        "kind": "user",
+        "label": "You"
+      },
+      "reason": null,
+      "revision": 0,
+      "state": "you_own",
+      "waiting_until": null
+    },
+    "kind": "controlled_meeting_seed",
+    "user_id": "runtime-outcome-1788908790@example.invalid",
+    "conversation_id": "41719f2d-0b74-47c3-94be-9a234cff9f1e",
+    "people": {
+      "Christina": "32006319-29b9-4ea4-ae8d-2123916faef0",
+      "Michael": "fbd740d0-3dde-4c02-a48c-ff35fa0e0404"
+    },
+    "run_id": "eb5ab37f-424c-44b8-9b01-2ec094409919",
+    "todo_id": "8fb2f6a5-13cd-4f06-a40f-ba84dbbafa44",
+    "action_id": "2e788695-c2d0-4400-8c3e-2a99e82b2350",
+    "after_lost_response": {
+      "changed_at": "2026-09-08T23:06:32.119467Z",
+      "label": "Working",
+      "next_action": "Ask Christina for availability",
+      "outcome": "Kent, Christina and Michael have the meeting",
+      "owner": {
+        "id": "runtime-outcome-1788908790@example.invalid",
+        "kind": "user",
+        "label": "You"
+      },
+      "reason": "Controlled scenario instruction",
+      "revision": 1,
+      "state": "working",
+      "waiting_until": null
+    },
+    "action_status": "execution_unknown",
+    "no_external_mutation_dispatched": true,
+    "next_phase": "Resume from a separate Cloud Run execution using persisted IDs",
+    "execution": "maraithon-todo-validation-56cx4"
+  },
+  "native_contract": {
+    "result": "passed",
+    "projections": 11,
+    "source": "apps/assistant-progress/Sources/AssistantProgressKit/TodoWorkflow.swift"
+  },
+  "limits": [
+    "All participants and provider receipts are synthetic. No email or calendar event was dispatched.",
+    "The successful terminal transition used explicit synthetic attendance confirmation, not calendar elapsed time."
+  ]
+}

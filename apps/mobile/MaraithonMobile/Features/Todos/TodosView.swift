@@ -17,6 +17,13 @@ struct TodosView: View {
     @State private var refreshTask: Task<Void, Never>?
     @State private var workLists: TodoWorkLists?
 
+    private static let rowInsets = EdgeInsets(
+        top: Runner.Spacing.tight,
+        leading: Runner.Layout.pageInset,
+        bottom: Runner.Spacing.tight,
+        trailing: Runner.Layout.pageInset
+    )
+
     private var isVisible: Bool {
         scenePhase == .active && appNavigation.selectedTab == .todos
     }
@@ -42,9 +49,11 @@ struct TodosView: View {
                 if isRefreshing {
                     ProgressView("Refreshing todos")
                         .controlSize(.small)
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, Runner.Layout.pageInset)
+                        .padding(.vertical, Runner.Spacing.small)
                 }
 
                 if let refreshErrorMessage {
@@ -66,24 +75,61 @@ struct TodosView: View {
                     )
                 }
 
+                RunnerPageHeader(
+                    eyebrow: "Your workspace",
+                    title: "Tasks",
+                    count: lists.filtered.count,
+                    subtitle: "A clear next step for everything on your plate."
+                ) {
+                    HStack(spacing: Runner.Spacing.small) {
+                        AccountMenuButton()
+                        Button {
+                            isAddingTodo = true
+                        } label: {
+                            Label("New task", systemImage: "plus")
+                        }
+                        .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+                        .accessibilityLabel("Add todo")
+                    }
+                }
+                .padding(.horizontal, Runner.Layout.pageInset)
+                .padding(.top, Runner.Spacing.small)
+
+                RunnerTabs(items: filterTabs(counts: lists.counts), selection: $filter)
+
+                RunnerSearchField(placeholder: "Search todos", text: $searchText)
+                    .padding(.horizontal, Runner.Layout.pageInset)
+                    .padding(.vertical, Runner.Spacing.tight)
+
                 List {
                     if filter != .open {
                         HStack {
                             Text(filter.title)
-                                .foregroundStyle(.secondary)
+                                .font(Runner.Typography.small)
+                                .foregroundStyle(Runner.Palette.mutedForeground)
                             Spacer()
                             Button("Show active") { filter = .open }
-                                .font(.subheadline)
+                                .buttonStyle(RunnerButtonStyle(.plain, compact: true))
                         }
                         .listRowSeparator(.hidden)
+                        .listRowBackground(Runner.Palette.background)
+                        .listRowInsets(EdgeInsets(
+                            top: 0,
+                            leading: Runner.Layout.pageInset,
+                            bottom: 0,
+                            trailing: Runner.Layout.pageInset
+                        ))
                     }
 
                     if lists.filtered.isEmpty && !isRefreshing {
-                        ContentUnavailableView(
-                            emptyState.title,
-                            systemImage: emptyState.systemImage,
-                            description: Text(emptyState.description)
+                        RunnerEmptyState(
+                            title: emptyState.title,
+                            description: emptyState.description,
+                            systemImage: emptyState.systemImage
                         )
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Runner.Palette.background)
+                        .listRowInsets(EdgeInsets())
                     } else {
                         ForEach(lists.filtered) { todo in
                             NavigationLink {
@@ -93,6 +139,9 @@ struct TodosView: View {
                                     toggle(todo)
                                 }
                             }
+                            .listRowInsets(Self.rowInsets)
+                            .listRowBackground(Runner.Palette.background)
+                            .listRowSeparatorTint(Runner.Palette.border)
                             .swipeActions(edge: .leading) {
                                 Button {
                                     toggle(todo)
@@ -102,7 +151,7 @@ struct TodosView: View {
                                         systemImage: todo.isCompleted ? "arrow.uturn.backward.circle" : "checkmark.circle"
                                     )
                                 }
-                                .tint(todo.isCompleted ? .orange : .green)
+                                .tint(todo.isCompleted ? Runner.Palette.caution : Runner.Palette.success)
 
                                 if todo.attentionMode == .monitor, todo.isActive {
                                     Button {
@@ -110,7 +159,7 @@ struct TodosView: View {
                                     } label: {
                                         Label("Act now", systemImage: "exclamationmark.circle")
                                     }
-                                    .tint(.blue)
+                                    .tint(Runner.Palette.info)
                                 }
                             }
                             .swipeActions(edge: .trailing) {
@@ -119,13 +168,14 @@ struct TodosView: View {
                                 } label: {
                                     Label(TodosViewCopy.dismissActionLabel, systemImage: "trash")
                                 }
+                                .tint(Runner.Palette.destructive)
 
                                 Button {
                                     editingTodo = todo
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                 }
-                                .tint(.blue)
+                                .tint(Runner.Palette.info)
 
                                 if todo.status == .open {
                                     Button {
@@ -133,7 +183,7 @@ struct TodosView: View {
                                     } label: {
                                         Label("Snooze", systemImage: "clock")
                                     }
-                                    .tint(.orange)
+                                    .tint(Runner.Palette.caution)
                                 }
                             }
                         }
@@ -142,35 +192,8 @@ struct TodosView: View {
                 }
                 .listStyle(.plain)
             }
-            .navigationTitle("Todos")
-            .searchable(text: $searchText, prompt: "Search todos")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    AccountMenuButton()
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Menu {
-                        Picker("Show todos", selection: $filter) {
-                            ForEach([TodoFilter.open] + TodoFilter.allCases) { option in
-                                Text(option.title).tag(option)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: filter == .open
-                              ? "line.3.horizontal.decrease.circle"
-                              : "line.3.horizontal.decrease.circle.fill")
-                    }
-                    .accessibilityLabel("Filter todos")
-                    .accessibilityValue(filter.title)
-
-                    Button {
-                        isAddingTodo = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("Add todo")
-                }
-            }
+            .runnerPage()
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $isAddingTodo) {
                 TodoEditorView()
             }
@@ -200,6 +223,12 @@ struct TodosView: View {
             guard isVisible else { return }
             rebuildWorkLists()
             await refreshLatestWork()
+        }
+    }
+
+    private func filterTabs(counts: TodoFilterCounts) -> [RunnerTabs<TodoFilter>.Item] {
+        ([TodoFilter.open] + TodoFilter.allCases).map { option in
+            RunnerTabs<TodoFilter>.Item(id: option, title: option.title, count: counts.value(for: option))
         }
     }
 
@@ -380,9 +409,12 @@ struct TodosView: View {
 /// search text, or filter changes instead of on every body pass.
 private struct TodoWorkLists {
     let filtered: [TodoItem]
+    /// Single-pass per-filter counts for the tab strip, scoped to the search.
+    let counts: TodoFilterCounts
 
     init(todos: [TodoItem], filter: TodoFilter, searchText: String) {
         filtered = TodoFiltering.filter(todos, by: filter, searchText: searchText)
+        counts = TodoFiltering.counts(in: todos, searchText: searchText)
     }
 }
 

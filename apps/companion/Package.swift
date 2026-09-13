@@ -10,6 +10,8 @@ let package = Package(
         .executable(name: "Maraithon", targets: ["Maraithon"])
     ],
     dependencies: [
+        .package(path: "../people-network"),
+        .package(path: "../assistant-progress"),
         // Async timers built on Clock APIs — replaces ad-hoc Task.sleep loops
         // in the iMessage poller. See AGENTS.md "Background work".
         .package(url: "https://github.com/apple/swift-async-algorithms", from: "1.0.0")
@@ -22,6 +24,8 @@ let package = Package(
         .executableTarget(
             name: "Maraithon",
             dependencies: [
+                .product(name: "PeopleNetworkKit", package: "people-network"),
+                .product(name: "AssistantProgressKit", package: "assistant-progress"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms")
             ],
             path: "Sources/Maraithon",

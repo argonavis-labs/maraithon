@@ -50,6 +50,10 @@ settings:
   # is present (the include in Config.xcconfig is optional).
 
 packages:
+  AssistantProgressKit:
+    path: ../assistant-progress
+  PeopleNetworkKit:
+    path: ../people-network
   AsyncAlgorithms:
     url: https://github.com/apple/swift-async-algorithms
     from: 1.0.0
@@ -69,6 +73,8 @@ targets:
       - path: Sources/Maraithon/Resources
         optional: true
     dependencies:
+      - package: AssistantProgressKit
+      - package: PeopleNetworkKit
       - package: AsyncAlgorithms
         product: AsyncAlgorithms
       - package: Sparkle

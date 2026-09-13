@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Focused detail-pane content shown when a source is in
+/// Focused card shown under the source header when a source is in
 /// `.needsAttention(...)`. Replaces stats / controls / activity entirely
 /// — per AGENTS.md rule 8 and the maraithon-mac convention that blocked
 /// panes should surface only the unblocking action.
@@ -19,113 +19,14 @@ struct SourceUnblockView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ContentUnavailableView {
-            Label(hint.title, systemImage: "exclamationmark.triangle.fill")
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(StatusTone.attention.color)
-        } description: {
-            VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
-                Text(hint.body)
-                if let note = hint.followUpNote {
-                    Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                if let installHint = fullDiskAccessInstallHint {
-                    Label {
-                        Text(installHint.message)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(StatusTone.attention.color)
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: 480, alignment: .leading)
-                    .accessibilityElement(children: .combine)
-                } else if hint.requiresStableFullDiskAccessApp,
-                          let reminder = FullDiskAccessInstallHint.stableGrantReminder {
-                    Label {
-                        Text(reminder)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(StatusTone.attention.color)
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: 480, alignment: .leading)
-                    .accessibilityElement(children: .combine)
-                }
-            }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 480)
-        } actions: {
-            VStack(spacing: Tokens.Spacing.small) {
-                if let installHint = fullDiskAccessInstallHint,
-                   installHint.stableAppInstalled {
-                    Button {
-                        switchToStableApp(installHint.stableAppURL)
-                    } label: {
-                        Label(
-                            FullDiskAccessInstallHint.switchToStableAppButtonTitle,
-                            systemImage: "app.dashed"
-                        )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                } else if let installHint = fullDiskAccessInstallHint,
-                          installHint.canInstallStableApp {
-                    Button {
-                        installStableApp(installHint.stableAppURL)
-                    } label: {
-                        Label(
-                            FullDiskAccessInstallHint.installStableAppButtonTitle,
-                            systemImage: "square.and.arrow.down"
-                        )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                } else if hint.requiresStableFullDiskAccessApp,
-                          FullDiskAccessInstallHint.stableGrantReminder != nil {
-                    Button {
-                        revealStableApp()
-                    } label: {
-                        Label(
-                            FullDiskAccessInstallHint.revealStableAppButtonTitle,
-                            systemImage: "folder"
-                        )
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if fullDiskAccessInstallHint == nil ||
-                    fullDiskAccessInstallHint?.canInstallStableApp == false,
-                   let url = hint.settingsURL {
-                    Button {
-                        NSWorkspace.shared.open(url)
-                        env.eventLog.info(
-                            "\(sourceID).open_settings",
-                            source: .ui
-                        )
-                    } label: {
-                        Label(hint.settingsButtonTitle, systemImage: "gear")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                }
-                Button {
-                    checkAgain()
-                } label: {
-                    Label("Check again", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .keyboardShortcut("r", modifiers: .command)
-            }
-        }
-        .navigationTitle(displayName)
+        SourceIssueCard(
+            dotColor: Tokens.Palette.caution,
+            title: hint.title,
+            message: hint.body,
+            notes: hint.followUpNote.map { [$0] } ?? [],
+            extra: { installReminder },
+            actions: { actionButtons }
+        )
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             checkAgain()
@@ -133,6 +34,93 @@ struct SourceUnblockView: View {
         .task(id: hint.requiresStableFullDiskAccessApp) {
             guard hint.requiresStableFullDiskAccessApp else { return }
             await pollFullDiskAccessGrant()
+        }
+    }
+
+    @ViewBuilder
+    private var installReminder: some View {
+        if let installHint = fullDiskAccessInstallHint {
+            reminderLine(installHint.message)
+        } else if hint.requiresStableFullDiskAccessApp,
+                  let reminder = FullDiskAccessInstallHint.stableGrantReminder {
+            reminderLine(reminder)
+        }
+    }
+
+    private func reminderLine(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: Tokens.Spacing.small) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(Tokens.Typography.small)
+                .foregroundStyle(Tokens.Palette.caution)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(Tokens.Typography.small)
+                .foregroundStyle(Tokens.Palette.cautionText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        if let installHint = fullDiskAccessInstallHint,
+           installHint.stableAppInstalled {
+            Button {
+                switchToStableApp(installHint.stableAppURL)
+            } label: {
+                buttonLabel(FullDiskAccessInstallHint.switchToStableAppButtonTitle, symbol: "app.dashed")
+            }
+            .buttonStyle(RunnerButtonStyle(.primary))
+            .keyboardShortcut(.defaultAction)
+        } else if let installHint = fullDiskAccessInstallHint,
+                  installHint.canInstallStableApp {
+            Button {
+                installStableApp(installHint.stableAppURL)
+            } label: {
+                buttonLabel(FullDiskAccessInstallHint.installStableAppButtonTitle, symbol: "square.and.arrow.down")
+            }
+            .buttonStyle(RunnerButtonStyle(.primary))
+            .keyboardShortcut(.defaultAction)
+        } else if hint.requiresStableFullDiskAccessApp,
+                  FullDiskAccessInstallHint.stableGrantReminder != nil {
+            Button {
+                revealStableApp()
+            } label: {
+                buttonLabel(FullDiskAccessInstallHint.revealStableAppButtonTitle, symbol: "folder")
+            }
+            .buttonStyle(RunnerButtonStyle(.secondary))
+        }
+
+        if fullDiskAccessInstallHint == nil ||
+            fullDiskAccessInstallHint?.canInstallStableApp == false,
+           let url = hint.settingsURL {
+            Button {
+                NSWorkspace.shared.open(url)
+                env.eventLog.info(
+                    "\(sourceID).open_settings",
+                    source: .ui
+                )
+            } label: {
+                buttonLabel(hint.settingsButtonTitle, symbol: "gear")
+            }
+            .buttonStyle(RunnerButtonStyle(.primary))
+            .keyboardShortcut(.defaultAction)
+        }
+
+        Button {
+            checkAgain()
+        } label: {
+            buttonLabel("Check again", symbol: "arrow.clockwise")
+        }
+        .buttonStyle(RunnerButtonStyle(.secondary))
+        .keyboardShortcut("r", modifiers: .command)
+    }
+
+    private func buttonLabel(_ title: String, symbol: String) -> some View {
+        HStack(spacing: Tokens.Spacing.compact) {
+            Image(systemName: symbol)
+                .accessibilityHidden(true)
+            Text(title)
         }
     }
 

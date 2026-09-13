@@ -3,8 +3,10 @@ import SwiftUI
 import AppKit
 #endif
 
-/// The single window that hosts the whole app. Renders either the sidebar
-/// split view (signed in) or the centered Connect screen (signed out).
+/// The single window that hosts the whole app. Renders either the workspace
+/// shell (custom sidebar plus content, signed in) or the centered Connect
+/// screen (signed out). The shell is styled after the web workspace, not
+/// the stock macOS split view, so both apps read as one product.
 ///
 /// v4: when the user explicitly skipped Full Disk Access during
 /// onboarding, or a live source reports that Full Disk Access is blocking
@@ -14,7 +16,12 @@ import AppKit
 struct RootWindow: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selection: SidebarItem? = .todos
+    @State private var selection: SidebarItem? = RootWindow.initialSelection()
+    @State private var requestedTodoID: String? = RootWindow.initialTodoID()
+    /// Bumped by the sidebar's "Find a task" row; the task list consumes it
+    /// by focusing search and resetting it to zero.
+    @State private var searchRequestToken = 0
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw: String = AppearanceMode.system.rawValue
 
     var body: some View {
         Group {
@@ -23,9 +30,11 @@ struct RootWindow: View {
                 if env.onboarding.current != .done {
                     OnboardingView(flow: env.onboarding)
                 } else {
-                    NavigationSplitView {
-                        SidebarView(selection: $selection)
-                    } detail: {
+                    HStack(spacing: 0) {
+                        SidebarView(selection: $selection) {
+                            selection = .todos
+                            searchRequestToken += 1
+                        }
                         VStack(spacing: 0) {
                             let blockedSourceNames = env.sources
                                 .fullDiskAccessBlockedSources()
@@ -37,12 +46,15 @@ struct RootWindow: View {
                             }
                             detailView(for: selection)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             case .signedOut, .connecting, .awaitingApproval, .error:
                 ConnectView()
             }
         }
+        .background(Tokens.Palette.background)
+        .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme)
         .animation(.default, value: env.deviceAuth.state)
         .animation(.default, value: env.onboarding.current)
         .onAppear {
@@ -65,6 +77,33 @@ struct RootWindow: View {
                 break
             }
         }
+    }
+
+    /// DEBUG builds can open on another pane for design review via
+    /// `MARAITHON_START_PANE` (`people`, `recall`, `logs`, `source:<id>`).
+    private static func initialSelection() -> SidebarItem? {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["MARAITHON_START_PANE"] {
+        case "people": return .people
+        case "recall": return .recall
+        case "logs": return .logs
+        case let value? where value.hasPrefix("source:"): return .source(id: String(value.dropFirst("source:".count)))
+        default: return .todos
+        }
+        #else
+        return .todos
+        #endif
+    }
+
+    /// DEBUG builds can open straight into one todo's workspace for design
+    /// review via `MARAITHON_START_TODO=<todo id>`.
+    private static func initialTodoID() -> String? {
+        #if DEBUG
+        let value = ProcessInfo.processInfo.environment["MARAITHON_START_TODO"] ?? ""
+        return value.isEmpty ? nil : value
+        #else
+        return nil
+        #endif
     }
 
     private func refreshPermissionsIfNeeded() {
@@ -97,7 +136,14 @@ struct RootWindow: View {
     private func detailView(for selection: SidebarItem?) -> some View {
         switch selection {
         case .todos:
-            TodosView()
+            TodosView(initialTodoID: requestedTodoID, searchRequestToken: $searchRequestToken)
+        case .people:
+            PeopleView { id in
+                requestedTodoID = id
+                env.todos.filter = .active
+                env.todos.query = ""
+                self.selection = .todos
+            }
         case .recall:
             RecallView()
         case .source(let id) where id == "imessage":
@@ -134,6 +180,7 @@ struct RootWindow: View {
 
 enum SidebarItem: Hashable {
     case todos
+    case people
     case recall
     case source(id: String)
     case logs
@@ -155,10 +202,11 @@ struct TemporaryFullDiskAccessAppBanner: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
                 Text(Self.titleText)
-                    .font(.callout.weight(.medium))
+                    .font(Tokens.Typography.bodyMedium)
+                    .foregroundStyle(Tokens.Palette.foreground)
                 Text(Self.detailText(stableAppInstalled: installHint.stableAppInstalled))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.small)
+                    .foregroundStyle(Tokens.Palette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
@@ -166,20 +214,23 @@ struct TemporaryFullDiskAccessAppBanner: View {
                 Button(FullDiskAccessInstallHint.switchToStableAppButtonTitle) {
                     switchToStableApp(installHint.stableAppURL)
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
             } else if installHint.canInstallStableApp {
                 Button(FullDiskAccessInstallHint.installStableAppButtonTitle) {
                     installStableApp(installHint.stableAppURL)
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
             }
         }
         .padding(.horizontal, Tokens.Spacing.medium)
         .padding(.vertical, Tokens.Spacing.small)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
+        .background(Tokens.Palette.foreground3)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Tokens.Palette.border)
+                .frame(height: Tokens.Stroke.hairline)
+        }
         .accessibilityElement(children: .combine)
     }
 
@@ -228,19 +279,20 @@ struct FullDiskAccessRequiredBanner: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
                 Text("Full Disk Access required")
-                    .font(.callout.weight(.medium))
+                    .font(Tokens.Typography.bodyMedium)
+                    .foregroundStyle(Tokens.Palette.foreground)
                 Text(Self.detailText(blockedSourceNames: blockedSourceNames))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.small)
+                    .foregroundStyle(Tokens.Palette.mutedForeground)
                 if let installHint = FullDiskAccessInstallHint.current() {
                     Text(installHint.message)
-                        .font(.caption)
-                        .foregroundStyle(StatusTone.attention.color)
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(Tokens.Palette.cautionText)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if let reminder = FullDiskAccessInstallHint.stableGrantReminder {
                     Text(reminder)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(Tokens.Palette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -250,40 +302,40 @@ struct FullDiskAccessRequiredBanner: View {
                 Button(FullDiskAccessInstallHint.switchToStableAppButtonTitle) {
                     switchToStableApp(installHint.stableAppURL)
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
             } else if let installHint = FullDiskAccessInstallHint.current(),
                       installHint.canInstallStableApp {
                 Button(FullDiskAccessInstallHint.installStableAppButtonTitle) {
                     installStableApp(installHint.stableAppURL)
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
             } else if FullDiskAccessInstallHint.stableGrantReminder != nil {
                 Button(FullDiskAccessInstallHint.revealStableAppButtonTitle) {
                     revealStableApp()
                 }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
+                .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
             }
             Button("Check again") {
                 checkAgain()
             }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
+            .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
             if FullDiskAccessInstallHint.current() == nil ||
                 FullDiskAccessInstallHint.current()?.canInstallStableApp == false {
                 Button("Open System Settings") {
                     openFullDiskAccess()
                 }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
+                .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
             }
         }
         .padding(.horizontal, Tokens.Spacing.medium)
         .padding(.vertical, Tokens.Spacing.small)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
+        .background(Tokens.Palette.foreground3)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Tokens.Palette.border)
+                .frame(height: Tokens.Stroke.hairline)
+        }
         .accessibilityElement(children: .combine)
         .task {
             await pollFullDiskAccessGrant()

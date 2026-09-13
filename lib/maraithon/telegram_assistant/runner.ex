@@ -24,6 +24,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   alias Maraithon.TelegramAssistant.{
     ConnectedContextPreflight,
+    Continuation,
     ModelRouting,
     PreferenceConfirmationCopy,
     Run,
@@ -61,6 +62,94 @@ defmodule Maraithon.TelegramAssistant.Runner do
     )
   end
 
+  @doc "Resumes saved delivery or a bounded continuation for the exact accepted request."
+  def resume_request(attrs) do
+    if attrs.run.status in ["running", "degraded", "failed"] do
+      case resume_durable_delivery(attrs) do
+        {:error, :delivery_checkpoint_unavailable} -> resume_continuation(attrs)
+        result -> result
+      end
+    else
+      {:error, :request_not_resumable}
+    end
+  end
+
+  defp resume_continuation(attrs) do
+    run = Map.fetch!(attrs, :run) |> Run.hydrate_payloads()
+
+    case Continuation.load(run, attrs) do
+      {:ok, checkpoint, profile, state} ->
+        context = run.prompt_snapshot || %{}
+
+        runtime_context =
+          build_runtime_context(run, attrs, context, profile)
+          |> Map.put(:continuation, checkpoint)
+
+        policy = AssistantHarness.runtime_policy(runner_policy_opts(runtime_context)).loop
+
+        started =
+          System.monotonic_time(:millisecond) - policy.max_wall_clock_ms +
+            min(Continuation.remaining_ms(checkpoint), policy.max_wall_clock_ms)
+
+        result =
+          case checkpoint["phase"] do
+            "decision" ->
+              handle_llm_response(run, runtime_context, checkpoint["response"], state, started)
+
+            _ ->
+              run_loop(run, runtime_context, state, started)
+          end
+
+        finish_continuation(result, run, attrs, profile)
+
+      {:error, reason} ->
+        handle_run_failure(run, reason, AssistantHarness.initial_loop_state(), attrs)
+    end
+  end
+
+  defp finish_continuation({:ok, response, state}, run, attrs, profile) do
+    case deliver_final_response(attrs.conversation, run, response, state, attrs) do
+      {:ok, status, summary} ->
+        case TelegramAssistant.complete_run(run, %{
+               status: status,
+               result_summary: Map.merge(summary, route_summary(profile))
+             }) do
+          {:ok, _} -> :ok
+          error -> error
+        end
+
+      {:error, failed_run, {:final_delivery_failed, reason}, _state} ->
+        _ = fail_run_preserving_summary(failed_run, reason)
+        {:error, reason}
+
+      {:error, _, reason, state} ->
+        handle_run_failure(run, reason, state, attrs)
+    end
+  end
+
+  defp finish_continuation({:error, _, reason, state}, run, attrs, profile) do
+    case escalate_continuation(run, reason, attrs, profile) do
+      :pass -> handle_run_failure(run, reason, state, attrs)
+      result -> result
+    end
+  end
+
+  defp escalate_continuation(run, reason, attrs, profile) do
+    if escalatable_reason?(reason) and profile[:tier] in [:fast, :chat] do
+      run = Repo.get!(Run, run.id) |> Run.hydrate_payloads()
+
+      with {:ok, checkpoint, _, state} <- Continuation.load(run, attrs),
+           upgraded = ModelRouting.escalated_profile_for(profile),
+           opts = runner_policy_opts(%{llm_opts: upgraded.llm_opts}),
+           {:ok, _} <- Continuation.upgrade(run, checkpoint, upgraded, state, opts),
+           {:ok, run} <- TelegramAssistant.update_run(run, %{model_name: upgraded.model}) do
+        resume_continuation(Map.put(attrs, :run, run))
+      end
+    else
+      :pass
+    end
+  end
+
   # SPEC 09 R1: the Run row is minted (with a placeholder prompt_snapshot)
   # and the liveness session started BEFORE the slow context-build +
   # preflight block, so typing/progress feedback covers exactly the turns
@@ -81,6 +170,24 @@ defmodule Maraithon.TelegramAssistant.Runner do
     else
       {:error, reason} ->
         {:fallback, reason}
+    end
+  end
+
+  @doc "Resumes only persisted delivery; never falls through to a new model/tool loop."
+  def resume_durable_delivery(attrs) do
+    conversation = Map.fetch!(attrs, :conversation)
+    source_message_id = Map.fetch!(attrs, :source_message_id)
+
+    case TelegramAssistant.resumable_delivery_run(conversation.id, source_message_id) do
+      %Run{} = run ->
+        case resume_checkpointed_delivery(run, conversation, attrs) do
+          :ok -> {:ok, {:delivery_resumed, run.id}}
+          :pass -> {:error, :delivery_checkpoint_unavailable}
+          other -> other
+        end
+
+      nil ->
+        {:error, :delivery_checkpoint_unavailable}
     end
   end
 
@@ -212,11 +319,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
     runtime_context = build_runtime_context(run, attrs, context, model_profile)
 
     with {:ok, _step_state} <- record_context_fetch(run, context),
+         {:ok, checkpoint} <-
+           Continuation.start(run, attrs, model_profile, runner_policy_opts(runtime_context)),
          :ok <- note_context_loaded(run),
          {:ok, response, state} <-
            run_loop(
              run,
-             runtime_context,
+             Map.put(runtime_context, :continuation, checkpoint),
              AssistantHarness.initial_loop_state(),
              System.monotonic_time(:millisecond)
            ),
@@ -249,14 +358,21 @@ defmodule Maraithon.TelegramAssistant.Runner do
         end
 
       {:error, %Run{} = run, reason, state} ->
-        case maybe_escalate_and_retry(
-               run,
-               reason,
-               attrs,
-               context,
-               conversation,
-               model_profile
-             ) do
+        escalation =
+          if Continuation.enabled?(attrs) do
+            escalate_continuation(run, reason, attrs, model_profile)
+          else
+            maybe_escalate_and_retry(
+              run,
+              reason,
+              attrs,
+              context,
+              conversation,
+              model_profile
+            )
+          end
+
+        case escalation do
           :ok -> :ok
           {:error, _reason} = error -> error
           :pass -> handle_run_failure(run, reason, state, attrs)
@@ -424,6 +540,20 @@ defmodule Maraithon.TelegramAssistant.Runner do
     frozen_payload = prepared_action.payload || %{}
     payload = external_prepared_action_payload(frozen_payload)
 
+    with :ok <-
+           Maraithon.TelegramAssistant.ActionReconciliation.validate_execution_account(
+             prepared_action
+           ) do
+      execute_account_bound_prepared_action(action_type, payload, prepared_action, frozen_payload)
+    end
+  end
+
+  defp execute_account_bound_prepared_action(
+         action_type,
+         payload,
+         prepared_action,
+         frozen_payload
+       ) do
     case action_type do
       "agent_create" ->
         Runtime.start_agent(Map.fetch!(payload, "start_params"))
@@ -471,7 +601,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
       model_provider: TelegramAssistant.model_provider_name(),
       model_name: Map.get(model_profile, :model) || TelegramAssistant.model_name(),
       prompt_snapshot: ContextEngine.prompt_snapshot(context),
-      result_summary: route_summary(model_profile),
+      result_summary:
+        Map.put(route_summary(model_profile), :execution_preparing, Continuation.enabled?(attrs)),
       started_at: Map.get(attrs, :started_at) || DateTime.utc_now()
     }
 
@@ -482,6 +613,23 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp record_context_fetch(run, context) do
+    existing =
+      if run.surface == "mobile",
+        do:
+          Repo.get_by(Maraithon.TelegramAssistant.Step,
+            run_id: run.id,
+            sequence: 1,
+            step_type: "context_fetch"
+          )
+
+    if existing do
+      TelegramAssistant.complete_step(existing, %{response_payload: %{context_loaded: true}})
+    else
+      create_context_fetch(run, context)
+    end
+  end
+
+  defp create_context_fetch(run, context) do
     now = DateTime.utc_now()
 
     with {:ok, step} <-
@@ -557,8 +705,18 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp do_run_loop_step(run, runtime_context, state, started_monotonic_ms, request_payload, now) do
-    with {:ok, llm_request_step} <-
-           build_step(run, "llm_request", state.sequence + 1, request_payload, now),
+    next_state = %{state | llm_turns: state.llm_turns + 1, sequence: state.sequence + 2}
+    checkpoint = runtime_context[:continuation]
+
+    with {:ok, _} <- Continuation.save(run, checkpoint, "model_entered", next_state),
+         {:ok, llm_request_step} <-
+           build_step(
+             run,
+             "llm_request",
+             state.sequence + 1,
+             Map.delete(request_payload, :_native_exchanges),
+             now
+           ),
          {:ok, response} <- TelegramAssistant.client_module().next_step(request_payload),
          {:ok, _completed_request_step} <-
            TelegramAssistant.complete_step(llm_request_step, %{
@@ -566,9 +724,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
              finished_at: DateTime.utc_now()
            }),
          {:ok, _llm_response_step} <-
-           record_llm_response(run, state.sequence + 2, response) do
+           record_llm_response(run, state.sequence + 2, response),
+         {:ok, saved} <- Continuation.save(run, checkpoint, "decision", next_state, response) do
       _ = maybe_record_correction(run, runtime_context, response)
-      next_state = %{state | llm_turns: state.llm_turns + 1, sequence: state.sequence + 2}
+      # Match persisted provider call IDs in both the original and recovered batch.
+      response =
+        if saved,
+          do: Map.put(response, "tool_calls", saved["response"]["tool_calls"]),
+          else: response
+
       handle_llm_response(run, runtime_context, response, next_state, started_monotonic_ms)
     else
       {:error, reason} ->
@@ -625,7 +789,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           run,
           runtime_context,
           Map.get(response, "tool_calls", []),
-          state,
+          Map.put(state, :native_message, Map.get(response, "_native_message")),
           started_monotonic_ms
         )
 
@@ -675,6 +839,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp execute_tool_calls(run, runtime_context, tool_calls, state, started_monotonic_ms) do
     cond do
+      runtime_context[:continuation] &&
+          Continuation.remaining_ms(runtime_context.continuation) == 0 ->
+        {:error, run, :timeout, state}
+
       deeper_analysis_requested?(tool_calls) and escalation_capable?(runtime_context) ->
         {:error, run, :deeper_analysis_requested, state}
 
@@ -711,6 +879,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
     policy = AssistantHarness.runtime_policy(runner_policy_opts(runtime_context))
     deadline = started_monotonic_ms + policy.loop.max_wall_clock_ms
     remaining_ms = max(deadline - System.monotonic_time(:millisecond), 1)
+    authority = Maraithon.AssistantChat.Execution.capture_authority()
 
     # These tasks must stay linked to the Runner owner. Durable ChatWorker
     # timeout/claim-loss kills that owner; linked tool calls then terminate
@@ -721,14 +890,16 @@ defmodule Maraithon.TelegramAssistant.Runner do
         Maraithon.Runtime.ToolCallSupervisor,
         indexed_calls,
         fn {tool_call, sequence} ->
-          try do
-            run_single_tool_call(run, runtime_context, tool_call, sequence)
-          rescue
-            exception ->
-              {:error, {:tool_task_failed, Maraithon.Redaction.error_class(exception)}}
-          catch
-            kind, _reason -> {:error, {:tool_task_failed, to_string(kind)}}
-          end
+          Maraithon.AssistantChat.Execution.with_authority(authority, fn ->
+            try do
+              run_single_tool_call(run, runtime_context, tool_call, sequence)
+            rescue
+              exception ->
+                {:error, {:tool_task_failed, Maraithon.Redaction.error_class(exception)}}
+            catch
+              kind, _reason -> {:error, {:tool_task_failed, to_string(kind)}}
+            end
+          end)
         end,
         ordered: true,
         timeout: remaining_ms,
@@ -744,19 +915,24 @@ defmodule Maraithon.TelegramAssistant.Runner do
           |> Map.update!(:tool_steps, &(&1 + length(history_entries)))
           |> Map.update!(:sequence, &(&1 + length(history_entries)))
           |> Map.update!(:tool_history, fn history -> history ++ history_entries end)
+          |> AssistantHarness.NativeTools.record_exchange(history_entries)
 
-        case AssistantHarness.guard_tool_history(
-               next_state.tool_history,
-               runner_policy_opts(runtime_context)
-             ) do
-          :ok ->
-            run_loop(
-              run,
-              runtime_context,
-              %{next_state | iteration: next_state.iteration + 1},
-              started_monotonic_ms
-            )
+        next_state = %{next_state | iteration: next_state.iteration + 1}
 
+        with {:ok, _} <-
+               Continuation.save(run, runtime_context[:continuation], "ready", next_state),
+             :ok <-
+               AssistantHarness.guard_tool_history(
+                 next_state.tool_history,
+                 runner_policy_opts(runtime_context)
+               ) do
+          run_loop(
+            run,
+            runtime_context,
+            next_state,
+            started_monotonic_ms
+          )
+        else
           {:error, reason} ->
             {:error, run, reason, next_state}
         end
@@ -775,7 +951,20 @@ defmodule Maraithon.TelegramAssistant.Runner do
       "telegram_assistant.tool_call",
       %{run_id: run.id, tool: tool_name, sequence: sequence},
       fn ->
-        do_run_single_tool_call(run, runtime_context, tool_name, arguments, sequence, now)
+        if runtime_context[:continuation] do
+          case Continuation.tool(run, tool_call, sequence) do
+            {:ok, {:receipt, entry}} ->
+              {:ok, entry}
+
+            {:ok, {:execute, step}} ->
+              execute_tool_step(run, runtime_context, tool_name, arguments, step)
+
+            error ->
+              error
+          end
+        else
+          do_run_single_tool_call(run, runtime_context, tool_name, arguments, sequence, now)
+        end
       end
     )
   end
@@ -789,42 +978,57 @@ defmodule Maraithon.TelegramAssistant.Runner do
              %{"tool" => tool_name, "arguments" => arguments},
              now
            ) do
-      _ = TelegramAssistant.note_liveness_tool(run.id, tool_name, arguments)
-
-      case toolbox_module().execute(tool_name, arguments, runtime_context) do
-        {:ok, result} ->
-          bounded_result = bounded_tool_result(result)
-
-          {:ok, _completed_tool_step} =
-            TelegramAssistant.complete_step(tool_step, %{
-              response_payload: bounded_result,
-              finished_at: DateTime.utc_now()
-            })
-
-          {:ok,
-           %{
-             "tool" => tool_name,
-             "arguments" => arguments,
-             "result" => bounded_result
-           }}
-
-        {:error, reason} ->
-          {:ok, _completed_tool_step} =
-            TelegramAssistant.complete_step(tool_step, %{
-              status: "failed",
-              response_payload: %{"error" => normalize_error(reason)},
-              error: normalize_error(reason),
-              finished_at: DateTime.utc_now()
-            })
-
-          {:ok,
-           %{
-             "tool" => tool_name,
-             "arguments" => arguments,
-             "error" => normalize_error(reason)
-           }}
-      end
+      execute_tool_step(run, runtime_context, tool_name, arguments, tool_step)
     end
+  end
+
+  defp execute_tool_step(run, runtime_context, tool_name, arguments, tool_step) do
+    _ = TelegramAssistant.note_liveness_tool(run.id, tool_name, arguments)
+
+    case toolbox_module().execute(tool_name, arguments, runtime_context) do
+      {:ok, result} ->
+        bounded_result = bounded_tool_result(result)
+
+        {:ok, _completed_tool_step} =
+          TelegramAssistant.complete_step(tool_step, %{
+            response_payload: bounded_result,
+            finished_at: DateTime.utc_now()
+          })
+
+        {:ok,
+         %{
+           "tool" => tool_name,
+           "arguments" => arguments,
+           "result" => bounded_result
+         }}
+
+      {:error, reason} when not is_nil(runtime_context.continuation) ->
+        if Toolbox.replayable_read?(tool_name, arguments) do
+          record_failed_tool(tool_step, tool_name, arguments, reason)
+        else
+          {:error, {:tool_outcome_unknown, tool_step.id}}
+        end
+
+      {:error, reason} ->
+        record_failed_tool(tool_step, tool_name, arguments, reason)
+    end
+  end
+
+  defp record_failed_tool(tool_step, tool_name, arguments, reason) do
+    {:ok, _completed_tool_step} =
+      TelegramAssistant.complete_step(tool_step, %{
+        status: "failed",
+        response_payload: %{"error" => normalize_error(reason)},
+        error: normalize_error(reason),
+        finished_at: DateTime.utc_now()
+      })
+
+    {:ok,
+     %{
+       "tool" => tool_name,
+       "arguments" => arguments,
+       "error" => normalize_error(reason)
+     }}
   end
 
   @doc false
@@ -912,6 +1116,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
          state,
          attrs
        ) do
+    response = Maraithon.AssistantChat.PreparationOutcome.reconcile(response, state.tool_history)
+
     message_class =
       response
       |> map_value("message_class", "assistant_reply")
@@ -943,6 +1149,26 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp handle_run_failure(run, reason, state, attrs) do
+    if Continuation.enabled?(attrs) and Maraithon.AssistantChat.Execution.retry_available?() and
+         retryable_continuation_error?(reason) do
+      # The next owner loads the saved phase. It cannot turn an uncertain
+      # mutating tool into a fresh attempt just because its worker exited.
+      _ = TelegramAssistant.update_run(run, %{error: "retrying_interrupted_request"})
+      {:error, reason}
+    else
+      finish_failed_run(run, reason, state, attrs)
+    end
+  end
+
+  defp retryable_continuation_error?({kind, _})
+       when kind in [:network_error, :llm_busy, :rate_limited, :tool_task_failed], do: true
+
+  defp retryable_continuation_error?({:api_error, status, _})
+       when status in [408, 425, 429, 500, 502, 503, 504], do: true
+
+  defp retryable_continuation_error?(_), do: false
+
+  defp finish_failed_run(run, reason, state, attrs) do
     _ = Tracing.record_error(reason)
 
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
@@ -1098,7 +1324,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
     now = DateTime.utc_now()
 
     with {:ok, step} <- build_step(run, "llm_response", sequence, %{}, now) do
-      TelegramAssistant.complete_step(step, %{response_payload: response, finished_at: now})
+      TelegramAssistant.complete_step(step, %{
+        response_payload: Map.delete(response, "_native_message"),
+        finished_at: now
+      })
     end
   end
 
@@ -1595,7 +1824,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
         "tool_history" =>
           AssistantHarness.execution_evidence(state.tool_history, runner_policy_opts()),
         "summary" => response_summary,
-        "message_class" => message_class
+        "message_class" => message_class,
+        "draft_card" => Maraithon.AssistantChat.MessageDraft.from_history(state.tool_history)
       }
     ]
     |> apply_delivery_mode(delivery)
@@ -2360,15 +2590,33 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp execute_external_action(action_type, payload, prepared_action, frozen_payload) do
     case action_type do
+      "browser_interact" ->
+        execute_tool_action(
+          "browser_interact",
+          Map.put(payload, "command_id", prepared_action.id),
+          "Completed the reviewed browser step on your Mac. The todo remains open.",
+          prepared_action
+        )
+
       "gmail_send" ->
-        execute_tool_action("gmail_send_message", payload, "Sent via Gmail.", prepared_action)
+        execute_tool_action(
+          "gmail_send_message",
+          with_mail_identity(payload, prepared_action),
+          "Sent via Gmail.",
+          prepared_action
+        )
 
       "gmail_draft_send" ->
-        with :ok <-
-               maybe_update_frozen_gmail_draft(frozen_payload, payload, prepared_action) do
-          payload = Map.put(payload || %{}, "action", "send")
-          execute_tool_action("gmail_drafts", payload, "Sent the Gmail draft.", prepared_action)
-        end
+        payload =
+          payload
+          |> with_mail_identity(prepared_action)
+          |> Map.put(
+            "send_frozen_content",
+            frozen_payload["_maraithon_update_draft_before_send"] == true
+          )
+          |> Map.put("action", "send")
+
+        execute_tool_action("gmail_drafts", payload, "Sent the Gmail draft.", prepared_action)
 
       "slack_post" ->
         execute_tool_action(
@@ -2462,22 +2710,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
-  defp maybe_update_frozen_gmail_draft(frozen_payload, payload, prepared_action) do
-    if Map.get(frozen_payload || %{}, "_maraithon_update_draft_before_send") == true do
-      update_payload = Map.put(payload || %{}, "action", "update")
-
-      case execute_tool_action(
-             "gmail_drafts",
-             update_payload,
-             "Updated the frozen Gmail draft.",
-             prepared_action
-           ) do
-        {:ok, _result} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      :ok
-    end
+  defp with_mail_identity(payload, action) do
+    Map.put(
+      payload,
+      "message_id_header",
+      Maraithon.TelegramAssistant.ActionReconciliation.message_id(action)
+    )
   end
 
   defp external_prepared_action_payload(payload) when is_map(payload) do
@@ -2509,8 +2747,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   # derived from the prepared action, so a retried confirm or a retried HTTP
   # call inside execute is idempotent at Google's side.
   defp calendar_client_event_id(prepared_action_id) do
-    :crypto.hash(:sha256, "calendar_create_event:" <> to_string(prepared_action_id))
-    |> Base.hex_encode32(case: :lower, padding: false)
+    Maraithon.TelegramAssistant.ActionReconciliation.calendar_event_id(prepared_action_id)
   end
 
   defp calendar_block_window(payload) do

@@ -48,7 +48,7 @@ struct TodoEditorView: View {
                     decisionReviewSection(decisionContext)
                 }
 
-                Section(TodoEditorCopy.commitmentSectionTitle) {
+                Section {
                     TextField(TodoEditorCopy.titlePlaceholder, text: $title)
                         .accessibilityIdentifier("todo-title-field")
                     TextField(TodoEditorCopy.notesPlaceholder, text: $notes, axis: .vertical)
@@ -64,31 +64,43 @@ struct TodoEditorView: View {
                                 .tag(priority)
                         }
                     }
+                } header: {
+                    RunnerSectionLabel(TodoEditorCopy.commitmentSectionTitle)
                 }
 
-                Section(TodoEditorCopy.timingSectionTitle) {
+                Section {
                     Toggle(TodoEditorCopy.dueDateToggleTitle, isOn: $hasDueDate)
                     if hasDueDate {
                         DatePicker(TodoEditorCopy.dueDatePickerTitle, selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
                     }
+                } header: {
+                    RunnerSectionLabel(TodoEditorCopy.timingSectionTitle)
                 }
 
-                Section(TodoEditorCopy.relatedPersonSectionTitle) {
+                Section {
                     Picker(TodoEditorCopy.personPickerTitle, selection: $selectedContactID) {
                         Text(TodoEditorCopy.noPersonLabel).tag(Optional<UUID>.none)
                         ForEach(contacts) { contact in
                             Text(contact.name).tag(Optional(contact.id))
                         }
                     }
+                } header: {
+                    RunnerSectionLabel(TodoEditorCopy.relatedPersonSectionTitle)
                 }
 
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .font(Runner.Typography.small)
+                            .foregroundStyle(Runner.Palette.destructiveText)
                     }
                 }
             }
+            .font(Runner.Typography.body)
+            .foregroundStyle(Runner.Palette.foreground)
+            .listRowBackground(Runner.Palette.foreground3)
+            .listRowSeparatorTint(Runner.Palette.border)
+            .runnerPage()
             .navigationTitle(
                 TodoEditorCopy.navigationTitle(
                     isNew: todo == nil,
@@ -99,11 +111,13 @@ struct TodoEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .buttonStyle(RunnerButtonStyle(.plain, compact: true))
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isSaving ? "Saving" : "Save") {
                         Task { await save() }
                     }
+                    .buttonStyle(RunnerButtonStyle(.primary, compact: true))
                     .accessibilityIdentifier("todo-save-button")
                     .disabled(isSaving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -113,7 +127,7 @@ struct TodoEditorView: View {
 
     @ViewBuilder
     private func decisionReviewSection(_ decisionContext: TodoDecisionContext) -> some View {
-        Section(TodoEditorCopy.decisionReviewSectionTitle) {
+        Section {
             if let decisionPrompt = decisionContext.decisionPrompt {
                 contextLine(
                     label: TodoEditorCopy.decisionPromptLabel,
@@ -162,22 +176,24 @@ struct TodoEditorView: View {
                     value: sourceContext
                 )
             }
+        } header: {
+            RunnerSectionLabel(TodoEditorCopy.decisionReviewSectionTitle)
         }
     }
 
     private func contextLine(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
             Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(Runner.Typography.captionMedium)
+                .foregroundStyle(Runner.Palette.mutedForeground)
 
             Text(value)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
+                .font(Runner.Typography.small)
+                .foregroundStyle(Runner.Palette.foreground)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, Runner.Spacing.xxsmall)
     }
 
     private func save() async {

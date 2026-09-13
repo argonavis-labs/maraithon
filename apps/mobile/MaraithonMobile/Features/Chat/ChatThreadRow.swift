@@ -9,30 +9,28 @@ struct ChatThreadRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            ChatAvatar(title: thread.title, systemImage: thread.messages.isEmpty ? "bubble.left" : nil)
-
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    Text(thread.title)
-                        .font(.headline)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 8)
-
-                    Text(AppFormatters.relativeString(for: thread.updatedAt))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+        HStack(alignment: .top, spacing: Runner.Spacing.small) {
+            VStack(alignment: .leading, spacing: Runner.Spacing.xsmall) {
+                Text(thread.title)
+                    .font(Runner.Typography.bodyMedium)
+                    .foregroundStyle(Runner.Palette.foreground)
+                    .lineLimit(1)
 
                 Text(preview)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(Runner.Typography.small)
+                    .foregroundStyle(Runner.Palette.mutedForeground)
                     .lineLimit(2)
             }
+
+            Spacer(minLength: Runner.Spacing.small)
+
+            Text(AppFormatters.relativeString(for: thread.updatedAt))
+                .font(Runner.Typography.caption)
+                .foregroundStyle(Runner.Palette.mutedForeground)
+                .lineLimit(1)
+                .padding(.top, Runner.Spacing.xxsmall)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, Runner.Spacing.snug)
     }
 
     private var preview: String {

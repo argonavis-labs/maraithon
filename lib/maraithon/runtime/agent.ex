@@ -191,6 +191,8 @@ defmodule Maraithon.Runtime.Agent do
         case Agents.begin_runtime_agent_recovery(agent.id) do
           {:ok, recovery_agent} ->
             Logger.metadata(agent_reference: Maraithon.Redaction.fingerprint(agent.id))
+            # The agent's user picks the model for every provider call it makes.
+            Maraithon.LLM.UserModel.bind(recovery_agent.user_id)
             Logger.info("Agent initializing", behavior: recovery_agent.behavior)
 
             data = struct!(__MODULE__, initial_data(recovery_agent))

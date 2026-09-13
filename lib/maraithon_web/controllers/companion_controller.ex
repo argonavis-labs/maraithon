@@ -57,6 +57,8 @@ defmodule MaraithonWeb.CompanionController do
 
       case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
+          wake_todo_workflows(user_id, accepted + duplicate)
+
           json(conn, %{
             accepted: accepted,
             duplicate: duplicate,
@@ -216,6 +218,8 @@ defmodule MaraithonWeb.CompanionController do
 
       case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid, filtered: filtered}} ->
+          wake_todo_workflows(user_id, accepted + duplicate)
+
           json(conn, %{
             accepted: accepted,
             duplicate: duplicate,
@@ -563,6 +567,19 @@ defmodule MaraithonWeb.CompanionController do
     end
   end
 
+  defp wake_todo_workflows(user_id, count) when count > 0 do
+    # Ingestion is already durable. A failed wake must not turn a successful
+    # sync into a client replay loop; the recurring sweep provides recovery.
+    case Maraithon.Runtime.PeriodicJobs.wake_todo_workflows(user_id) do
+      {:error, _reason} -> Logger.warning("Todo workflow wake deferred to recurring sweep")
+      _ -> :ok
+    end
+  rescue
+    _ -> Logger.warning("Todo workflow wake deferred to recurring sweep")
+  end
+
+  defp wake_todo_workflows(_user_id, _count), do: :ok
+
   defp ingest_collection(conn, params, batch_key, default_source, ingest_fun, opts \\ []) do
     device = conn.assigns.current_device
     user_id = conn.assigns.current_user_id
@@ -594,6 +611,8 @@ defmodule MaraithonWeb.CompanionController do
 
       case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
+          wake_todo_workflows(user_id, accepted + duplicate)
+
           json(conn, %{
             accepted: accepted,
             duplicate: duplicate,

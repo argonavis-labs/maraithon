@@ -1,11 +1,14 @@
 import SwiftUI
 
-/// Shared scaffolding used by every per-source detail pane.
+/// Shared page used by every per-source detail pane, styled like the
+/// Electron "Mac sources" page: eyebrow, source title, summary subtitle,
+/// header actions, then hairline-card sections.
 ///
-/// The healthy state is intentionally operational: current health,
-/// user-facing activity numbers, and recent checks. Permission and
-/// failure states swap to focused unblock views so green sources do not
-/// share space with setup copy.
+/// The healthy state is intentionally operational: current status,
+/// what the assistant can use, available context, and check history.
+/// Permission and failure states keep the same header and swap the body
+/// for a single focused card so green sources never share space with
+/// setup copy.
 struct SourceDetailScaffold: View {
     let sourceID: String
     let displayName: String
@@ -16,99 +19,75 @@ struct SourceDetailScaffold: View {
     var syncedItemPlural: String = "items"
     var emptyDescription: String = "After the first check, this view shows recent activity and recent checks."
     /// Optional source-specific section (e.g. the Files folder picker),
-    /// rendered between capabilities and stats on the healthy view.
+    /// rendered between capabilities and stats on the healthy view. The
+    /// provider wraps it in a `RunnerSection`.
     var extraSection: AnyView?
 
     @Environment(AppEnvironment.self) var env
 
     var body: some View {
-        Group {
-            if let issue = blockingIssue {
-                issueView(issue: issue)
-            } else if let reason = needsAttentionReason {
-                SourceUnblockView(
-                    sourceID: sourceID,
-                    displayName: displayName,
-                    hint: SourcePermissionHint.forReason(reason)
-                )
-            } else if let reason = errorReason {
-                errorView(reason: reason)
-            } else if isWaitingForFirstSync {
-                waitingForFirstSyncView
-            } else {
-                cleanUserView
+        RunnerPage {
+            RunnerPageHeader(
+                eyebrow: SourceDetailCopy.sourcesEyebrow,
+                title: displayName,
+                subtitle: isHealthyView ? summaryCopy : headlineCopy
+            ) {
+                if isHealthyView {
+                    SourceDetailActions(sourceID: sourceID, isPaused: isPaused)
+                }
             }
+            .padding(.bottom, Tokens.Spacing.large)
+
+            content
         }
     }
 
-    /// Healthy detail pane. Shows the useful operational facts a user
+    /// True when the page shows the operational sections rather than a
+    /// single issue card.
+    private var isHealthyView: Bool {
+        blockingIssue == nil && needsAttentionReason == nil && errorReason == nil && !isWaitingForFirstSync
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let issue = blockingIssue {
+            issueView(issue: issue)
+        } else if let reason = needsAttentionReason {
+            SourceUnblockView(
+                sourceID: sourceID,
+                displayName: displayName,
+                hint: SourcePermissionHint.forReason(reason)
+            )
+        } else if let reason = errorReason {
+            errorView(reason: reason)
+        } else if isWaitingForFirstSync {
+            waitingForFirstSyncView
+        } else {
+            cleanUserView
+        }
+    }
+
+    /// Healthy detail body. Shows the useful operational facts a user
     /// needs when a source is green.
     var cleanUserView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xlarge) {
-                overviewSection
-                Divider()
-                capabilitiesSection
-                if let extraSection {
-                    Divider()
-                    extraSection
-                }
-                Divider()
-                statsSection
-                Divider()
-                activitySection
-                Divider()
-                privacySection
+        VStack(alignment: .leading, spacing: 0) {
+            statusSection
+            capabilitiesSection
+            if let extraSection {
+                extraSection
             }
-            .padding(Tokens.Spacing.xlarge)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .animation(.default, value: isPaused)
+            statsSection
+            activitySection
+            privacySection
         }
-        .navigationTitle(displayName)
+        .animation(.default, value: isPaused)
     }
 
-    var overviewSection: some View {
-        HStack(alignment: .top, spacing: Tokens.Spacing.large) {
-            VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-                SourceStatusBadge(state: liveBadgeState, variant: .prominent)
-                Text(headlineCopy)
-                    .font(.title2.weight(.semibold))
-                Text(summaryCopy)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: Tokens.Spacing.large)
-
-            actionButtons
-        }
-    }
-
-    var actionButtons: some View {
-        HStack(spacing: Tokens.Spacing.small) {
-            Button {
-                if isPaused {
-                    env.sources.resume(id: sourceID)
-                } else {
-                    env.sources.syncNow(id: sourceID)
-                }
-            } label: {
-                Label(
-                    isPaused ? SourceDetailCopy.resumeUpdatesButtonTitle : SourceDetailCopy.checkNowButtonTitle,
-                    systemImage: isPaused ? "play.fill" : "arrow.clockwise"
-                )
-            }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut("r", modifiers: .command)
-
-            if !isPaused {
-                Button {
-                    env.sources.pause(id: sourceID)
-                } label: {
-                    Label(SourceDetailCopy.pauseUpdatesButtonTitle, systemImage: "pause.fill")
-                }
-                .buttonStyle(.bordered)
+    var statusSection: some View {
+        RunnerSection(title: SourceDetailCopy.statusSectionTitle) {
+            RunnerCard {
+                SourceStatusBadge(state: liveBadgeState, variant: .prominent, detail: headlineCopy)
+                    .runnerCardRow()
             }
         }
     }
@@ -121,12 +100,9 @@ struct SourceDetailScaffold: View {
     }
 
     var capabilitiesSection: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-            SectionHeader(SourceDetailCopy.capabilitiesSectionTitle)
-            VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
-                ForEach(capabilityItems) { capability in
-                    SourceCapabilityRow(capability: capability)
-                }
+        RunnerSection(title: SourceDetailCopy.capabilitiesSectionTitle) {
+            RunnerCardRows(data: capabilityItems) { capability in
+                SourceCapabilityRow(capability: capability)
             }
         }
     }
@@ -136,11 +112,33 @@ struct SourceDetailScaffold: View {
     }
 
     var privacySection: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-            SectionHeader(SourceDetailCopy.privacySectionTitle)
-            VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
-                ForEach(privacyItems) { item in
-                    SourceCapabilityRow(capability: item)
+        RunnerSection(title: SourceDetailCopy.privacySectionTitle) {
+            RunnerCardRows(data: privacyItems) { item in
+                SourceCapabilityRow(capability: item)
+            }
+        }
+    }
+
+    var statsSection: some View {
+        RunnerSection(title: SourceDetailCopy.activitySectionTitle) {
+            RunnerCardRows(data: stats) { stat in
+                SourceStatRow(stat: stat)
+            }
+        }
+    }
+
+    var activitySection: some View {
+        RunnerSection(title: SourceDetailCopy.recentChecksSectionTitle) {
+            if activity.isEmpty {
+                RunnerCard {
+                    RunnerEmptyState(
+                        title: SourceDetailCopy.recentChecksEmptyTitle,
+                        description: emptyDescription
+                    )
+                }
+            } else {
+                RunnerCardRows(data: activity.sorted { $0.timestamp > $1.timestamp }) { row in
+                    SourceActivityRowView(row: row)
                 }
             }
         }
@@ -195,67 +193,5 @@ struct SourceDetailScaffold: View {
             singular: syncedItemSingular,
             plural: syncedItemPlural
         )
-    }
-
-    var statsSection: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-            SectionHeader(SourceDetailCopy.activitySectionTitle)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(stats) { stat in
-                    SourceStatRow(stat: stat)
-                }
-            }
-        }
-    }
-
-    var activitySection: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-            SectionHeader(SourceDetailCopy.recentChecksSectionTitle)
-            if activity.isEmpty {
-                ContentUnavailableView(
-                    SourceDetailCopy.recentChecksEmptyTitle,
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text(emptyDescription)
-                )
-                .frame(minHeight: 200)
-            } else {
-                Table(activity.sorted { $0.timestamp > $1.timestamp }) {
-                    TableColumn("Time") { row in
-                        Text(row.timestamp, format: .dateTime.hour().minute().second())
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    .width(min: 90, ideal: 110)
-
-                    TableColumn("Found") { row in
-                        Text(String(row.count))
-                            .monospacedDigit()
-                    }
-                    .width(min: 60, ideal: 70)
-
-                    TableColumn("Added") { row in
-                        Text(String(row.accepted))
-                            .monospacedDigit()
-                            .foregroundStyle(StatusTone.good.color)
-                    }
-                    .width(min: 70, ideal: 80)
-
-                    TableColumn(SourceDetailCopy.alreadySyncedTitle) { row in
-                        Text(String(row.duplicates))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    .width(min: 80, ideal: 100)
-
-                    TableColumn(SourceDetailCopy.notSyncedTitle) { row in
-                        Text(String(row.failed))
-                            .monospacedDigit()
-                            .foregroundStyle(row.failed > 0 ? StatusTone.error.color : StatusTone.muted.color)
-                    }
-                    .width(min: 60, ideal: 70)
-                }
-                .frame(minHeight: 240)
-            }
-        }
     }
 }

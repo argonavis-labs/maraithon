@@ -18,6 +18,7 @@ defmodule Maraithon.Tools.GmailSendMessage do
              to: to,
              subject: subject,
              body: body,
+             message_id_header: ActionHelpers.optional_string(args, "message_id_header"),
              thread_id: ActionHelpers.optional_string(args, "thread_id"),
              reply_to_message_id: ActionHelpers.optional_string(args, "reply_to_message_id")
            }) do

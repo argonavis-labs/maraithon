@@ -1,0 +1,285 @@
+{
+  "at": "2026-09-08T23:24:31.584199Z",
+  "events": [
+    {
+      "count": 1,
+      "event_type": "checkpoint_created",
+      "newest": "2026-09-08T23:18:19.505468"
+    },
+    {
+      "count": 4,
+      "event_type": "effect_completed",
+      "newest": "2026-09-08T23:18:52.558312"
+    }
+  ],
+  "kind": "final_runtime_health",
+  "effect_proofs": [
+    {
+      "at": "2026-09-08T23:08:57.996694Z",
+      "event_id": 12076,
+      "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+      "effect_id": "b02be095-f910-401a-80d1-146eab412acd",
+      "evidence": [
+        {
+          "id": "f5374107-d5ff-4772-b6ff-6c973d7a4092",
+          "identity_matches": true,
+          "outcome": "completed",
+          "provider_boundary": "outcome_known",
+          "recorded_at": "2026-09-08T23:08:57.558334",
+          "revision": "maraithon-00286-wq4",
+          "state": "settled"
+        }
+      ]
+    },
+    {
+      "at": "2026-09-08T23:09:12.428964Z",
+      "event_id": 12078,
+      "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+      "effect_id": "0e19d1e7-8490-49c1-89c2-7f74852de92f",
+      "evidence": [
+        {
+          "id": "aac7a1dc-4b86-4822-94a1-82b6a4936834",
+          "identity_matches": true,
+          "outcome": "completed",
+          "provider_boundary": "outcome_known",
+          "recorded_at": "2026-09-08T23:09:11.819422",
+          "revision": "maraithon-00286-wq4",
+          "state": "settled"
+        }
+      ]
+    },
+    {
+      "at": "2026-09-08T23:18:46.497716Z",
+      "event_id": 12087,
+      "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+      "effect_id": "3bbba276-65d2-44be-85ca-7e9aceff4616",
+      "evidence": [
+        {
+          "id": "1b42cc60-6b02-4ef0-a798-9a2d31637b0a",
+          "identity_matches": true,
+          "outcome": "completed",
+          "provider_boundary": "outcome_known",
+          "recorded_at": "2026-09-08T23:18:46.074946",
+          "revision": "maraithon-00286-wq4",
+          "state": "settled"
+        }
+      ]
+    },
+    {
+      "at": "2026-09-08T23:18:52.558312Z",
+      "event_id": 12089,
+      "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+      "effect_id": "4c25c223-af3e-4504-983c-ed93f82b3321",
+      "evidence": [
+        {
+          "id": "ecfc58f7-5c8a-4fb9-a329-49cd03438bcc",
+          "identity_matches": true,
+          "outcome": "completed",
+          "provider_boundary": "outcome_known",
+          "recorded_at": "2026-09-08T23:18:52.207817",
+          "revision": "maraithon-00286-wq4",
+          "state": "settled"
+        }
+      ]
+    }
+  ],
+  "partitions": [
+    {
+      "count": 64,
+      "live": 64,
+      "state": "ready"
+    }
+  ],
+  "tasks": [
+    {
+      "count": 5,
+      "oldest": "2026-09-08T23:23:52.872206",
+      "state": "running"
+    }
+  ],
+  "recurring": [
+    {
+      "job_type": "runtime_recurring:assistant_run_recovery",
+      "scheduled_at": "2026-09-08T23:25:24.854648",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:24:24.854648"
+    },
+    {
+      "job_type": "runtime_recurring:briefing_cron",
+      "scheduled_at": "2026-09-08T23:25:28.436033",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:24:28.436033"
+    },
+    {
+      "job_type": "runtime_recurring:brief_notifier",
+      "scheduled_at": "2026-09-08T23:24:32.084702",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:23:32.084702"
+    },
+    {
+      "job_type": "runtime_recurring:critical_todo_push",
+      "scheduled_at": "2026-09-08T23:28:35.675971",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:23:35.675971"
+    },
+    {
+      "job_type": "runtime_recurring:dogfood_digest",
+      "scheduled_at": "2026-09-09T11:30:00.000000",
+      "status": "pending",
+      "updated_at": "2026-09-08T11:30:01.029382"
+    },
+    {
+      "job_type": "runtime_recurring:freshness_sweep",
+      "scheduled_at": "2026-09-08T23:55:25.636681",
+      "status": "pending",
+      "updated_at": "2026-09-08T22:55:25.636681"
+    },
+    {
+      "job_type": "runtime_recurring:insight_notifier",
+      "scheduled_at": "2026-09-08T23:24:33.155097",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:23:33.155097"
+    },
+    {
+      "job_type": "runtime_recurring:nudge_sweep",
+      "scheduled_at": "2026-09-08T23:28:52.283446",
+      "status": "pending",
+      "updated_at": "2026-09-08T22:58:52.283446"
+    },
+    {
+      "job_type": "runtime_recurring:people_network_discovery",
+      "scheduled_at": "2026-09-08T23:29:52.278708",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:19:52.278708"
+    },
+    {
+      "job_type": "runtime_recurring:privacy_erasure_discovery",
+      "scheduled_at": "2026-09-08T23:24:34.545912",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:23:34.545912"
+    },
+    {
+      "job_type": "runtime_recurring:privacy_retention",
+      "scheduled_at": "2026-09-08T23:29:36.564913",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:14:36.564913"
+    },
+    {
+      "job_type": "runtime_recurring:proactive_check_in",
+      "scheduled_at": "2026-09-08T23:29:45.599551",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:19:45.599551"
+    },
+    {
+      "job_type": "runtime_recurring:source_account_discovery",
+      "scheduled_at": "2026-09-08T23:25:23.949886",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:24:23.949886"
+    },
+    {
+      "job_type": "runtime_recurring:staleness_triage_sweep",
+      "scheduled_at": "2026-09-09T14:59:21.353399",
+      "status": "pending",
+      "updated_at": "2026-09-08T14:59:21.353399"
+    },
+    {
+      "job_type": "runtime_recurring:telegram_run_reaper",
+      "scheduled_at": "2026-09-08T23:25:27.340931",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:24:27.340931"
+    },
+    {
+      "job_type": "runtime_recurring:todo_completion_sweep",
+      "scheduled_at": "2026-09-08T23:24:30.067264",
+      "status": "running",
+      "updated_at": "2026-09-08T23:24:30.808165"
+    },
+    {
+      "job_type": "runtime_recurring:todo_outcome_learning_recovery",
+      "scheduled_at": "2026-09-08T23:28:37.177567",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:23:37.177567"
+    },
+    {
+      "job_type": "runtime_recurring:token_refresher",
+      "scheduled_at": "2026-09-08T23:28:39.561854",
+      "status": "pending",
+      "updated_at": "2026-09-08T23:23:39.561854"
+    },
+    {
+      "job_type": "runtime_recurring:watch_renewer",
+      "scheduled_at": "2026-09-08T23:28:54.525732",
+      "status": "pending",
+      "updated_at": "2026-09-08T22:58:54.525732"
+    }
+  ],
+  "gmail_timestamp_formats": [
+    {
+      "format": "integer",
+      "checked": 1,
+      "completed": 0,
+      "model_callback_calls": 1,
+      "external_model_calls": 0,
+      "rolled_back": true
+    },
+    {
+      "format": "string",
+      "checked": 1,
+      "completed": 0,
+      "model_callback_calls": 1,
+      "external_model_calls": 0,
+      "rolled_back": true
+    },
+    {
+      "format": "iso",
+      "checked": 1,
+      "completed": 0,
+      "model_callback_calls": 1,
+      "external_model_calls": 0,
+      "rolled_back": true
+    }
+  ],
+  "snapshots": [
+    {
+      "count": 9,
+      "max_ciphertext_bytes": 80720,
+      "newest": "2026-09-08T23:24:07.470449"
+    }
+  ],
+  "execution": "maraithon-todo-validation-9wx9b",
+  "commit": "56ef99ac5ea5",
+  "revision": "maraithon-00287-rcz",
+  "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon:dev-56ef99ac5ea5-20260908231914-1",
+  "cloud_build": "12a32175-ce19-4e9d-a789-da6e7b6af0e3",
+  "final_revision_agent_logs": [
+    {
+      "insertId": "6aa098fb0008c0b56fb684fd",
+      "jsonPayload": {
+        "agent_reference": "24bd6156748af4a7",
+        "message": "Exact Agent recovered, transitioning to idle",
+        "timestamp": "2026-09-08T23:23:39.573Z"
+      },
+      "labels": {
+        "function": "expose_recovered_agent/4",
+        "instanceId": "00a41e8c1d632f9a270ba7adcb0582aff2e28e458a3cc94ead38d85a6653dc6cbf86c29da5959872d1fa96ffe1e6137293ef7dab29ba38bc6abccce6ff2a50119c40bdd22c3e5f145bd663ef6d",
+        "line": "463",
+        "maraithon-process-role": "web",
+        "module": "Elixir.Maraithon.Runtime.Agent"
+      },
+      "logName": "projects/maraithon/logs/run.googleapis.com%2Fstdout",
+      "receiveTimestamp": "2026-09-08T23:23:39.813380250Z",
+      "resource": {
+        "labels": {
+          "configuration_name": "maraithon",
+          "location": "us-central1",
+          "project_id": "maraithon",
+          "revision_name": "maraithon-00287-rcz",
+          "service_name": "maraithon"
+        },
+        "type": "cloud_run_revision"
+      },
+      "severity": "INFO",
+      "timestamp": "2026-09-08T23:23:39.573621Z"
+    }
+  ]
+}

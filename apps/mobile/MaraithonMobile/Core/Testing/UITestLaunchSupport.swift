@@ -8,6 +8,26 @@ enum UITestLaunchSupport {
         static let resetState = "MARAITHON_UI_TEST_RESET_STATE"
         static let magicToken = "MARAITHON_UI_TEST_MAGIC_TOKEN"
         static let magicCode = "MARAITHON_UI_TEST_MAGIC_CODE"
+        static let startTab = "MARAITHON_UI_TEST_START_TAB"
+        static let skipPush = "MARAITHON_UI_TEST_SKIP_PUSH"
+    }
+
+    /// Design-review launches skip the push permission prompt so screenshots
+    /// are not covered by the system alert.
+    static var skipsPushPrompt: Bool {
+        ProcessInfo.processInfo.environment[EnvironmentKeys.skipPush] == "1"
+    }
+
+    /// Design-review launches can open on a specific tab
+    /// (`today`, `todos`, `people`, `chat`).
+    static func requestedStartTab() -> AppTab? {
+        switch ProcessInfo.processInfo.environment[EnvironmentKeys.startTab] {
+        case "today": return .today
+        case "todos": return .todos
+        case "people": return .people
+        case "chat": return .chat
+        default: return nil
+        }
     }
 
     static func resetStateIfNeeded(modelContext: ModelContext) {
