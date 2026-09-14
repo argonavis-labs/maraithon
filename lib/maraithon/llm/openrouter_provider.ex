@@ -407,7 +407,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     model =
       configured_model(
         params["model"] || Maraithon.LLM.openrouter_model(),
-        "moonshotai/kimi-k3"
+        "meta/muse-spark-1.3-contributor"
       )
 
     %{

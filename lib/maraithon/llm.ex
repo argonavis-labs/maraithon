@@ -156,7 +156,7 @@ defmodule Maraithon.LLM do
 
   def openrouter_model do
     runtime_config()
-    |> Keyword.get(:openrouter_model, "moonshotai/kimi-k3")
+    |> Keyword.get(:openrouter_model, "meta/muse-spark-1.3-contributor")
   end
 
   def openrouter_api_key do

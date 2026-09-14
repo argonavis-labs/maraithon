@@ -182,7 +182,7 @@ config :maraithon, Maraithon.LLM.CostMonitor,
   projected_daily_usd: llm_projected_daily_usd
 
 default_openai_model = "gpt-5.4"
-default_openrouter_model = "moonshotai/kimi-k3"
+default_openrouter_model = "meta/muse-spark-1.3-contributor"
 default_qwen_model = "qwen/qwen3.7-max"
 
 llm_model_selector =
@@ -253,8 +253,8 @@ selected_llm_model =
     "" -> nil
     "openai" -> default_openai_model
     "gpt" -> default_openai_model
-    "kimi" -> default_openrouter_model
-    "kimi-k3" -> default_openrouter_model
+    "kimi" -> "moonshotai/kimi-k3"
+    "kimi-k3" -> "moonshotai/kimi-k3"
     "qwen" -> default_qwen_model
     "qwen-max" -> default_qwen_model
     "openrouter" -> default_openrouter_model
