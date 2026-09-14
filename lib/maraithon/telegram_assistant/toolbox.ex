@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Calendar.FreeBlocks
   alias Maraithon.Companion.Devices, as: CompanionDevices
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.OAuth
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
   alias Maraithon.Goals
@@ -3570,22 +3571,39 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   # Goes through the same confirm-and-execute path a tapped card uses, so the
   # receipt, todo calendar block, and handoff bookkeeping stay identical.
+  # `message` is what the user sees in the activity list; `assistant_note`
+  # carries the guidance for the model's reply.
   defp execute_prepared_action_directly(prepared_action, preview_text) do
-    case TelegramAssistant.confirm_and_execute(prepared_action, durable: true) do
-      {:ok, executed, _result} ->
-        direct_execution_result(executed, preview_text)
+    if OAuth.google_write_granted?(prepared_action.user_id, :calendar) do
+      case TelegramAssistant.confirm_and_execute(prepared_action, durable: true) do
+        {:ok, executed, _result} ->
+          direct_execution_result(executed, preview_text)
 
-      {:ok, executed, _result, :already_executed} ->
-        direct_execution_result(executed, preview_text)
+        {:ok, executed, _result, :already_executed} ->
+          direct_execution_result(executed, preview_text)
 
-      {:error, action, reason, _state} ->
-        direct_execution_failure(action, reason, preview_text)
+        {:error, action, reason, _state} ->
+          direct_execution_failure(action, reason, preview_text)
 
-      {:error, action, reason} ->
-        direct_execution_failure(action, reason, preview_text)
+        {:error, action, reason} ->
+          direct_execution_failure(action, reason, preview_text)
 
-      {:error, reason} ->
-        direct_execution_failure(prepared_action, reason, preview_text)
+        {:error, reason} ->
+          direct_execution_failure(prepared_action, reason, preview_text)
+      end
+    else
+      {:ok,
+       %{
+         status: "awaiting_confirmation",
+         prepared_action_id: prepared_action.id,
+         preview_text: preview_text,
+         requires_confirmation: true,
+         connection_required: true,
+         message: "#{preview_text} Not booked yet: Google calendar access is read-only.",
+         assistant_note:
+           "The card shows an Enable calendar booking link. Ask the user to enable it once, " <>
+             "then book again. Do not claim it is booked."
+       }}
     end
   end
 
@@ -3596,9 +3614,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        prepared_action_id: executed.id,
        preview_text: preview_text,
        requires_confirmation: false,
-       message:
-         "Done. #{preview_text} It is on the calendar now. Tell the user it is booked, " <>
-           "with the exact day and time, and that they can ask to move or remove it."
+       message: "Booked. #{preview_text}",
+       assistant_note:
+         "Tell the user it is on the calendar with the exact day and time, and that they " <>
+           "can ask you to move or remove it."
      }}
   end
 
@@ -3609,9 +3628,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        prepared_action_id: action.id,
        preview_text: preview_text,
        requires_confirmation: action.status == "awaiting_confirmation",
-       message:
-         "#{preview_text} Booking did not go through: #{ActionFailureCopy.prepared_action(reason)} " <>
-           "Tell the user what blocked it and how to fix it; do not claim it is booked."
+       message: "#{preview_text} Booking did not go through: #{ActionFailureCopy.prepared_action(reason)}",
+       assistant_note: "Tell the user what blocked it and how to fix it. Do not claim it is booked."
      }}
   end
 

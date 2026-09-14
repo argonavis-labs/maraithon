@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The steps behind one assistant turn, folded into a single muted line:
 /// chevron, a preview sentence, and a count chip. Closed by default so the
-/// reply reads as prose; expanding lists each step with its outcome.
+/// reply reads as prose. A live group is the working line itself: it opens,
+/// pulses, and counts elapsed time, so nothing repeats beneath it.
 struct RunnerActivityGroup: View {
     struct Step: Identifiable {
         let id: Int
@@ -14,15 +15,19 @@ struct RunnerActivityGroup: View {
 
     let preview: String
     let steps: [Step]
+    let live: Bool
+    let since: Date?
 
     @State private var expanded: Bool
     @State private var hovering = false
 
     /// A settled turn folds its steps; a live turn opens them so each call
     /// shows up as it happens.
-    init(preview: String, steps: [Step], expanded: Bool = false) {
+    init(preview: String, steps: [Step], expanded: Bool = false, live: Bool = false, since: Date? = nil) {
         self.preview = preview
         self.steps = steps
+        self.live = live
+        self.since = since
         _expanded = State(initialValue: expanded)
     }
 
@@ -32,12 +37,17 @@ struct RunnerActivityGroup: View {
                 withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
             } label: {
                 HStack(spacing: Tokens.Spacing.compact) {
-                    Image(systemName: "chevron.right")
-                        .font(Tokens.Typography.caption)
-                        .rotationEffect(expanded ? .degrees(90) : .zero)
-                        .accessibilityHidden(true)
-                    Text(preview)
+                    if live {
+                        RunnerStatusDot(color: Tokens.Palette.accent, pulsing: true)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(Tokens.Typography.caption)
+                            .rotationEffect(expanded ? .degrees(90) : .zero)
+                            .accessibilityHidden(true)
+                    }
+                    headerText
                         .font(Tokens.Typography.small)
+                        .monospacedDigit()
                         .lineLimit(1)
                     Text("\(steps.count)")
                         .font(Tokens.Typography.captionMedium)
@@ -55,7 +65,7 @@ struct RunnerActivityGroup: View {
             .accessibilityHint(expanded ? "Collapses the steps" : "Shows each step")
 
             if expanded {
-                VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+                VStack(alignment: .leading, spacing: Tokens.Spacing.compact) {
                     ForEach(steps) { step in row(step) }
                 }
                 .padding(.leading, Tokens.Spacing.medium)
@@ -64,30 +74,34 @@ struct RunnerActivityGroup: View {
         }
     }
 
+    @ViewBuilder private var headerText: some View {
+        if live, let since {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(RunnerWorkingIndicator.text(label: preview, since: since, now: context.date))
+            }
+        } else {
+            Text(preview)
+        }
+    }
+
+    /// One line per step: the label as a muted prefix, then what it found.
     private func row(_ step: Step) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.small) {
             glyph(for: step.status)
                 .frame(width: Tokens.SourcesLayout.rowIconColumnWidth, alignment: .leading)
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xxsmall) {
-                Text(step.label)
-                    .font(Tokens.Typography.small)
-                    .foregroundStyle(Tokens.Palette.foreground80)
-                if let summary = step.summary, !summary.isEmpty {
-                    Text(summary)
-                        .font(Tokens.Typography.caption)
-                        .foregroundStyle(Tokens.Palette.mutedForeground)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let detail = step.detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(Tokens.Typography.caption)
-                        .foregroundStyle(Tokens.Palette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            (Text(step.label + (outcome(step) == nil ? "" : " · ")).foregroundStyle(Tokens.Palette.mutedForeground)
+                + Text(outcome(step) ?? "").foregroundStyle(Tokens.Palette.foreground80))
+                .font(Tokens.Typography.small)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private func outcome(_ step: Step) -> String? {
+        let text = [step.summary, step.detail].compactMap { $0 }.first { !$0.isEmpty }
+        return text
     }
 
     @ViewBuilder

@@ -47,27 +47,8 @@ defmodule MaraithonWeb.TodoActionAccess do
 
   def enrich(card, _, _), do: card
 
-  defp writable?("gmail", scopes),
-    do:
-      Enum.any?(
-        scopes,
-        &(&1 in [
-            "https://mail.google.com/",
-            "https://www.googleapis.com/auth/gmail.compose",
-            "https://www.googleapis.com/auth/gmail.modify"
-          ])
-      )
-
-  defp writable?("calendar", scopes),
-    do:
-      Enum.any?(
-        scopes,
-        &(&1 in [
-            "https://www.googleapis.com/auth/calendar",
-            "https://www.googleapis.com/auth/calendar.events",
-            "https://www.googleapis.com/auth/calendar.events.owned"
-          ])
-      )
+  defp writable?("gmail", scopes), do: OAuth.google_write_scopes?(:gmail, scopes)
+  defp writable?("calendar", scopes), do: OAuth.google_write_scopes?(:calendar, scopes)
 
   defp terminal?(card),
     do: card["status"] in ["Sent", "Saved to calendar", "Cancelled", "Expired"]

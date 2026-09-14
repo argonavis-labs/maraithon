@@ -85,14 +85,18 @@ private struct TodoLiveRunView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
             if let work = store.run?.workSummary, let calls = work.toolCalls, !calls.isEmpty {
-                RunnerActivityGroup(preview: TodoActionCopy.activityPreview(work),
-                                    steps: TodoActionCopy.activitySteps(work), expanded: true)
+                // The open group is the working line: headline, elapsed time,
+                // and each step as it lands. Nothing repeats beneath it.
+                RunnerActivityGroup(preview: work.headline ?? "Working…",
+                                    steps: TodoActionCopy.activitySteps(work),
+                                    expanded: true, live: true, since: store.runStartedAt)
                     .id(store.run?.id)
+            } else {
+                RunnerWorkingIndicator(label: store.run?.workSummary?.headline ?? "Working…", since: store.runStartedAt)
             }
             if let preview = store.run?.workSummary?.preview, !preview.isEmpty {
                 RunnerMarkdownText(text: preview)
             }
-            RunnerWorkingIndicator(label: store.run?.workSummary?.headline ?? "Working…", since: store.runStartedAt)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

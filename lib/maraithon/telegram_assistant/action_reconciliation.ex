@@ -6,7 +6,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   An absent result cannot prove that an expired sender has stopped or that a
   provider rejected its request. Only exact positive evidence settles success.
   """
-  alias Maraithon.{ConnectedAccounts, Repo, TelegramAssistant}
+  alias Maraithon.{ConnectedAccounts, OAuth, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, PeriodicJobs}
   alias Maraithon.TelegramAssistant.PreparedAction
@@ -27,13 +27,13 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
 
       account =
         if action.action_type != "browser_interact",
-          do: ConnectedAccounts.get(action.user_id, provider)
+          do: execution_account(action.user_id, provider)
 
       identity = %{
         "version" => 1,
         "action_id" => action.id,
         "kind" => action.action_type,
-        "provider" => provider,
+        "provider" => (account && account.provider) || provider,
         "account_id" => account && account.id,
         "external_account_id" => account && account.external_account_id,
         "message_id" => mail_identity(action, payload)
@@ -168,6 +168,22 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
     do: GmailApiHelpers.provider_from_args(payload)
 
   defp provider(_, _), do: "google"
+
+  # Google tokens are keyed per address ("google:<email>") and the connectors
+  # resolve the plain "google" key to the best of them. The frozen identity
+  # must name that same account, or every calendar confirm reads as an
+  # account change and fails before reaching Google.
+  defp execution_account(user_id, "google") do
+    case OAuth.get_token(user_id, "google") do
+      %{provider: provider} when is_binary(provider) ->
+        ConnectedAccounts.get(user_id, provider) || ConnectedAccounts.get(user_id, "google")
+
+      _ ->
+        ConnectedAccounts.get(user_id, "google")
+    end
+  end
+
+  defp execution_account(user_id, provider), do: ConnectedAccounts.get(user_id, provider)
 
   def message_id(action) do
     case get_in(action.payload || %{}, [@identity_key, "message_id"]) do

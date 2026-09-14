@@ -98,6 +98,34 @@ defmodule Maraithon.OAuth do
     get_exact_token(user_id, provider)
   end
 
+  @google_write_scopes %{
+    calendar: [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/calendar.events.owned"
+    ],
+    gmail: [
+      "https://mail.google.com/",
+      "https://www.googleapis.com/auth/gmail.compose",
+      "https://www.googleapis.com/auth/gmail.modify"
+    ]
+  }
+
+  @doc "Whether `scopes` carry a Google write grant for `:calendar` or `:gmail`."
+  def google_write_scopes?(service, scopes) when service in [:calendar, :gmail] and is_list(scopes) do
+    Enum.any?(scopes, &(&1 in Map.fetch!(@google_write_scopes, service)))
+  end
+
+  def google_write_scopes?(_service, _scopes), do: false
+
+  @doc "Whether the user's best Google token can write to `:calendar` or `:gmail`."
+  def google_write_granted?(user_id, service) do
+    case get_token(user_id, "google") do
+      %Token{scopes: scopes} -> google_write_scopes?(service, scopes || [])
+      _ -> false
+    end
+  end
+
   @doc """
   Gets a valid access token for a user and provider.
 

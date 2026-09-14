@@ -25,6 +25,6 @@ struct RunnerWorkingIndicator: View {
         guard let since else { return label }
         let seconds = max(0, Int(now.timeIntervalSince(since)))
         let elapsed = seconds < 60 ? "\(seconds)s" : String(format: "%dm %02ds", seconds / 60, seconds % 60)
-        return "\(label) \(elapsed)"
+        return "\(label) · \(elapsed)"
     }
 }
