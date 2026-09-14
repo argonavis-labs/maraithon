@@ -214,7 +214,7 @@ discovery reasoning, and no new closure receipts in this window. Deployment
 and a fresh observation of useful model work are still needed before calling
 the latest runtime healthy or treating its near-zero activity as savings.
 
-### Warning implemented, awaiting deployment
+### Warning deployed
 
 Kent selected a fixed **US$3/day projection**, with an email above **US$6** to
 **kent.fenwick@gmail.com**. `Maraithon.LLM.CostMonitor` runs through the existing
@@ -244,8 +244,8 @@ agent-effects spend dashboard, which excludes other workloads.
 `LLM_PROJECTED_DAILY_USD` defaults to `3.00`; the multiplier is fixed at two.
 The normal deploy script preserves an existing projection or accepts an
 explicit override. Monitoring is enabled in production and stays disabled in
-development. The current US$7.67 daily total would trigger a warning on the
-first successful production check, even if subsequent spend remains low.
+development. The initial US$7.67 daily total triggered a warning on the first successful
+production check, including charges incurred before the fixes.
 
 Validation: `make build` passed with warnings treated as errors. A manual
 `mix run --no-start` inspection confirmed that a fresh limiter admits work with
@@ -253,8 +253,111 @@ a negative monotonic clock, a background cooldown leaves chat available, and
 the old snapshot shape gains the cooldown fields without crashing. This made
 no provider or database calls. The deploy script passed `bash -n`, and
 `git diff --check` passed. Automated tests were not run under the manual-first
-development policy. The warning, rate-limiter fix, and snapshot fix have not
-been deployed, and email delivery has not been exercised.
+development policy. The warning, rate-limiter fix, and snapshot fix first went
+live on revision `maraithon-00326-4w8`. At 18:45:12 UTC, the monitor read the current
+US$7.669780 daily bill and successfully emailed the US$6 threshold warning.
+
+## 4c. Fresh start for kent@runner.now (Sep 14)
+
+Kent requested deletion of all his todos and morning briefings, followed by a
+fresh run and a cost measurement. The Chief of Staff was paused for the reset.
+The scoped transaction completed at **18:44:45 UTC (14:44:45 Toronto)**:
+
+- Deleted 1,563 todos: 91 open, 45 done, and 1,427 dismissed.
+- Deleted 17 morning briefings. Other briefing cadences were preserved.
+- Verified zero todos and zero morning briefings for this user inside the
+  transaction. Other users, connections, source data, and runtime proofs were
+  outside the deletion scope.
+- Confirmed the selected model is `meta/muse-spark-1.3-contributor`.
+
+The billing baseline was read at **18:44:44 UTC**: cumulative OpenRouter key
+usage **US$5,029.431418189**, and current UTC-day usage **US$7.669780475**.
+Incremental cost is the later cumulative counter minus this baseline. It
+includes all traffic using the app's key during the observation window, not
+just the manual rebuild, and the initial rebuild is a one-time cost rather
+than a steady daily rate.
+
+Revision `00326-4w8` includes commits `6c010919` and `1e6697d7`. Manual rebuilds
+now bind the requested user's model, and morning briefing generation checks
+the stored brief instead of letting an old snapshot suppress a deleted brief.
+Both changes passed `make build`.
+
+The 14-day open-work rebuild was queued at **18:45:54 UTC** as
+`62911cdc-88ef-4d99-b1fd-ccc9864a6303`. Its first Muse analysis returned eight
+candidates at 18:50:23 UTC for US$0.0072873. The subsequent ownership check timed
+out after five minutes and queued durable todo ingestion. The rebuild API
+reported `completed` with zero saved items while that retry was pending, so
+that status alone was not evidence that regeneration had finished.
+
+The durable Muse retry completed at 18:59:42 UTC for US$0.005411 and saved six
+todos: five open and one snoozed. Source acquisition covered three Google
+accounts, Slack, and connected local sources. Gmail coverage was partial:
+180 messages, 40 full bodies, and 140 without full bodies. This was a bounded
+14-day review, not an exhaustive rescan of every message.
+
+The Chief of Staff resumed at 18:55:44 UTC. The fresh cycle exposed another
+model-setting gap: effect workers were spawned by the outbox runner and did
+not inherit the Agent's user binding. They therefore used the deployment's
+Kimi default. Commit `2ae9c4ae` restores the durable effect owner's model
+binding in the worker. Kent explicitly confirmed Muse, so commit `b43e1288`
+also changes the OpenRouter defaults and all production model routes to
+`meta/muse-spark-1.3-contributor`. No distinct fallback model is configured.
+The Chief was paused again at 19:01:06 UTC to prevent additional Kimi effects
+during deployment. Both changes passed `make build`; shell syntax and diff
+checks passed. Automated tests were not run under the manual-first policy.
+
+At **19:04:47 UTC**, OpenRouter reported cumulative usage of
+**US$5,029.876939195**, an increase of **US$0.44552101** since the reset. The
+six todos were saved, the durable ingestion job was completed, and no morning
+briefing existed yet. The next cost check was pending for **00:45:12 UTC on
+Sep 15 (20:45 Toronto on Sep 14)**.
+
+Revision `maraithon-00327-wk8` reached 100% traffic at approximately 19:07 UTC.
+All four production model routes now select Muse, with no alternate fallback
+configured. The Chief of Staff recovered at 19:07:40 UTC and subsequent
+observed requests used Muse. The first start request briefly returned
+`partition_not_owned` during the rolling handoff; normal recovery resumed the
+Agent seconds later.
+
+The operator wakeup was queued at **19:14:17 UTC** through the normal durable
+scheduler. The first maintenance attempt lacked the signing-key tag and made
+no write; the retry supplied the existing production tag through an execution
+override. No runtime proof or ownership check was bypassed.
+
+The fresh morning briefing, `9cb47b78-d56d-45a4-ac78-921a67362d8d`, was saved
+at **19:17:30 UTC** with `generation_mode=llm`, Muse in its request metadata,
+and no generation error. Its email timestamp is **19:17:38 UTC (15:17:38
+Toronto)**. The three successful Chief of Staff model calls in this cycle
+reported a combined **US$0.0088102**.
+
+The delivery check at **19:17:44 UTC** found:
+
+| Measure | Result |
+| --- | --- |
+| Cumulative OpenRouter key bill | US$5,029.898978995 |
+| Billed since the 18:44:44 baseline | **US$0.46756081** |
+| Current UTC-day bill, including earlier activity | US$8.137341281 |
+| Todos now stored | Seven: five open, one snoozed, one done |
+| Morning briefing | Generated with Muse and emailed |
+| Chief of Staff | Running |
+| Next US$6 cost-warning check | 00:45:12 UTC, Sep 15 |
+
+The attempt logs contain 34 Muse attempts (32 completed, US$0.069799066 in
+reported charges) and three Kimi attempts (two completed, US$0.232937948149017
+in reported charges). Each model had one failed attempt without a reported
+charge. All measured attempts on revision `00327-wk8` used Muse. These are
+different workloads, not a controlled model comparison; the billing-counter
+difference remains the authoritative total.
+
+The billed increase includes the earlier Kimi attempts, timed-out calls, and
+background activity during the reset experiment. It is not a Muse-only price
+for rebuilding todos. The morning briefing's follow-on todo reconciliation
+was still running at the delivery check, and normal discovery continues, so
+later charges are outside this measurement. The warning remains active.
+
+These observations confirm useful work at materially lower measured model
+costs. They do not establish a full-day production cost below US$3. Keep the
+fixed projection and check the next full day with the billing counter.
 
 ## 5. What must not change
 
