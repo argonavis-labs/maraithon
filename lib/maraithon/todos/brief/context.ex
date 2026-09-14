@@ -319,6 +319,9 @@ defmodule Maraithon.Todos.Brief.Context do
   end
 
   defp gmail_message_section(message) when is_map(message) do
+    draft? = Maraithon.Connectors.Gmail.Delivery.draft?(message)
+    message = Maraithon.Connectors.Gmail.Delivery.for_reasoning(message)
+
     body =
       first_present([
         read_string(message, :text_body),
@@ -329,6 +332,8 @@ defmodule Maraithon.Todos.Brief.Context do
     %{
       "from" => read_string(message, :from),
       "to" => read_string(message, :to),
+      "cc" => read_string(message, :cc),
+      "is_draft" => draft?,
       "subject" => read_string(message, :subject),
       "date" => iso(Map.get(message, :internal_date)) || read_string(message, :date),
       "body" => body |> clean_email_body() |> truncate(@max_body_chars),
@@ -346,6 +351,7 @@ defmodule Maraithon.Todos.Brief.Context do
     case Gmail.fetch_thread_content(user_id, thread_id, opts) do
       {:ok, messages} when is_list(messages) and messages != [] ->
         messages
+        |> Enum.reject(&Maraithon.Connectors.Gmail.Delivery.draft?/1)
         |> Enum.sort_by(&thread_sort_key/1)
         |> Enum.take(-@max_thread_messages)
         |> Enum.map(fn message ->
@@ -359,6 +365,7 @@ defmodule Maraithon.Todos.Brief.Context do
           %{
             "from" => read_string(message, :from),
             "to" => read_string(message, :to),
+            "cc" => read_string(message, :cc),
             "subject" => read_string(message, :subject),
             "date" => iso(Map.get(message, :internal_date)) || read_string(message, :date),
             "body" => body |> clean_email_body() |> truncate(@max_body_chars),

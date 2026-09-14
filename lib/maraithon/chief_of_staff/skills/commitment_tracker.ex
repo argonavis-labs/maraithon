@@ -597,10 +597,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "gmail" => %{
         "recent_inbox" =>
           inbox_messages
+          |> Enum.reject(&Maraithon.Connectors.Gmail.Delivery.draft?/1)
           |> Enum.map(&gmail_message_for_prompt/1)
           |> Enum.take(state.email_scan_limit),
         "recent_sent" =>
           sent_messages
+          |> Enum.reject(&Maraithon.Connectors.Gmail.Delivery.draft?/1)
           |> Enum.map(&gmail_message_for_prompt/1)
           |> Enum.take(state.email_scan_limit),
         "counts" => %{
@@ -2203,6 +2205,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         read_string(message, "account", read_string(message, "google_account_email", nil)),
       "from" => read_string(message, "from", nil),
       "to" => read_string(message, "to", nil),
+      "cc" => read_string(message, "cc", nil),
       "subject" => read_string(message, "subject", "(no subject)"),
       "date" =>
         prompt_time(read_any(message, "internal_date")) || read_string(message, "date", nil),

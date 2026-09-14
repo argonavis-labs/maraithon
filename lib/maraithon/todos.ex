@@ -2210,9 +2210,15 @@ defmodule Maraithon.Todos do
 
   defp update_datetime_attr(changes, attrs, key, field) do
     if attr_present?(attrs, key) do
-      case read_datetime(attrs, key) do
-        nil -> changes
-        value -> Map.put(changes, field, value)
+      case fetch_attr(attrs, key) do
+        empty when empty in [nil, ""] ->
+          Map.put(changes, field, nil)
+
+        _value ->
+          case read_datetime(attrs, key) do
+            nil -> changes
+            value -> Map.put(changes, field, value)
+          end
       end
     else
       changes

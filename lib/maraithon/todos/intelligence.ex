@@ -406,7 +406,12 @@ defmodule Maraithon.Todos.Intelligence do
     }
 
     with {:ok, existing_json} <- Jason.encode(normalize_json_value(payload["existing_todos"])),
-         {:ok, candidates_json} <- Jason.encode(normalize_json_value(candidates)),
+         {:ok, candidates_json} <-
+           Jason.encode(
+             candidates
+             |> normalize_json_value()
+             |> Maraithon.Connectors.Gmail.Delivery.for_reasoning()
+           ),
          {:ok, todo_relevance_memories_json} <-
            Jason.encode(normalize_json_value(payload["todo_relevance_memories"])),
          {:ok, payload_json} <- Jason.encode(normalize_json_value(shared_context)) do
@@ -442,6 +447,22 @@ defmodule Maraithon.Todos.Intelligence do
          dependency, or follow-up. A literal @mention is not required. Quote that
          connection separately. Generic seniority, company affiliation, being in
          a channel, or an AI-generated relationship does not establish it.
+       - Separate being affected by work from owning its next action. Gmail To
+         and CC are distinct: a request addressed to another person with the operator
+         copied is that person's request unless the body explicitly assigns the
+         operator a separate action. CC does not prove account-holder status,
+         payment authority, responsibility, or an accepted promise. When the
+         source names other people as contacts, do not substitute the operator.
+       - An unsent Gmail DRAFT is proposed wording, never a sent promise,
+         accepted assignment, delivered handoff, or proof of availability.
+         Skip draft candidates. Ignore draft content even when it appears in
+         thread context or an earlier generated work item.
+       - Preserve explicit workflow ownership. Work with a person owner in
+         they_own or waiting is associated work the operator is watching.
+         Describe that person's progress without asking the operator to take
+         over. An explicit request to track it does not transfer ownership.
+         Only fresh source evidence of a separate operator action or an
+         explicit user ownership change can justify such a handoff.
        - For every create/update return involvement with kind (direct or implicit),
          source_quote (a verbatim quote of the outstanding ask from candidate source
          evidence), connection (why this is the user's action), and connection_quote
@@ -1068,6 +1089,13 @@ defmodule Maraithon.Todos.Intelligence do
         "source" => source,
         "status" => status
       }
+
+      # An explicit handoff is required context, even when optional prose is trimmed.
+      base =
+        case item["workflow"] do
+          %{} = workflow -> Map.put(base, "workflow", workflow)
+          _ -> base
+        end
 
       title_fixed_bytes =
         PromptBudget.encoded_bytes(Map.put(base, "title", nil)) - PromptBudget.encoded_bytes(nil)
@@ -2281,6 +2309,10 @@ defmodule Maraithon.Todos.Intelligence do
       "action_plan" => clip_prompt_text(todo.action_plan),
       "owner_user_id" => todo.owner_user_id,
       "owner_label" => todo.owner_label,
+      "workflow" =>
+        if(Maraithon.Todos.Workflow.outcome_tracked?(todo),
+          do: Map.take(Maraithon.Todos.Workflow.current(todo), ~w(state owner))
+        ),
       "priority" => todo.priority,
       "source_item_id" => todo.source_item_id,
       "source_occurred_at" => normalize_json_value(todo.source_occurred_at),

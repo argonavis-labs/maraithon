@@ -1056,6 +1056,16 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp message_evidence_items(_message, _exact?, _source), do: []
 
   defp gmail_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
+    if Maraithon.Connectors.Gmail.Delivery.draft?(message) do
+      nil
+    else
+      delivered_gmail_source_evidence(message, exact?)
+    end
+  end
+
+  defp gmail_source_evidence(_message, _exact?), do: nil
+
+  defp delivered_gmail_source_evidence(message, exact?) do
     current_text =
       source_evidence_text(
         message,
@@ -1067,6 +1077,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       %{
         "channel" => "gmail",
         "kind" => gmail_kind(message),
+        "to" => read_string(message, "to", nil),
+        "cc" => read_string(message, "cc", nil),
         "subject" => read_string(message, "subject", nil),
         "text" => current_text,
         "sender" => read_string(message, "from", nil),
@@ -1080,8 +1092,6 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       exact?
     )
   end
-
-  defp gmail_source_evidence(_message, _exact?), do: nil
 
   defp gmail_source_ref(message) do
     provider = read_string(message, "google_provider", "unknown")
@@ -2052,6 +2062,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "channel" => read_string(item, "channel", nil),
       "kind" => read_string(item, "kind", nil),
       "sender" => read_string(item, "sender", nil),
+      "to" => read_string(item, "to", nil),
+      "cc" => read_string(item, "cc", nil),
       "subject" => read_string(item, "subject", nil),
       "text" => exact_string(item, "text", nil),
       "at" => read_string(item, "at", nil),
@@ -2081,7 +2093,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "next_action" => bounded_prompt_string(todo.next_action, 320),
       "people" => workflow_people(todo),
       "workflow" =>
-        Maraithon.Todos.Workflow.current(todo) |> Map.take(~w(state owner outcome revision)),
+        Maraithon.Todos.Workflow.current(todo)
+        |> Map.take(~w(state owner outcome revision reason))
+        |> Map.update("reason", nil, &bounded_prompt_string(&1, 800)),
       "captured_at" => DateTime.to_iso8601(Todo.completion_evidence_after(todo)),
       # SPEC 05 R5: structured linkage so the model can match a specific piece
       # of inbound evidence to a specific waiting-on item.
@@ -2339,8 +2353,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     when a verified person has the next move; waiting for a date or condition.
     Preserve the goal through these handoffs. Use only person IDs supplied in the
     work item's workflow, people or counterparty fields. If identity is not established,
-    keep responsibility with the user; do not invent a person or group owner.
-    A draft or intent is not a delivered handoff.
+    preserve the current owner; do not invent a person or group owner or default
+    someone else's work back to the user. Being affected, CC'd, or an account's
+    connected user does not assign the next action. An explicit user correction
+    of ownership remains authoritative until fresh evidence changes it.
+    An unsent Gmail draft or intent is not a promise or a delivered handoff.
     Include the same confidence, evidence_quote and evidence source fields as a
     completion decision. Do not propose a transition without fresh grounded evidence.
 

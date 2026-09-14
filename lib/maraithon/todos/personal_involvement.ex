@@ -47,6 +47,9 @@ defmodule Maraithon.Todos.PersonalInvolvement do
            "version" => 1
          }}
 
+      Maraithon.Connectors.Gmail.Delivery.draft?(metadata["source_record"]) ->
+        {:skip, "An unsent draft does not establish an outstanding request or a promise."}
+
       assessment["kind"] not in @kinds ->
         {:skip, "No direct or source-supported implicit responsibility for the user."}
 
@@ -130,6 +133,12 @@ defmodule Maraithon.Todos.PersonalInvolvement do
 
   defp strings(value) when is_binary(value), do: [value]
   defp strings(value) when is_list(value), do: Enum.flat_map(value, &strings/1)
-  defp strings(value) when is_map(value), do: value |> Map.values() |> Enum.flat_map(&strings/1)
+
+  defp strings(value) when is_map(value) do
+    if Maraithon.Connectors.Gmail.Delivery.draft?(value),
+      do: [],
+      else: value |> Map.values() |> Enum.flat_map(&strings/1)
+  end
+
   defp strings(_value), do: []
 end

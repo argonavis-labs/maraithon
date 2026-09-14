@@ -1062,6 +1062,7 @@ defmodule Maraithon.Connectors.Gmail do
       labels: message["labelIds"] || [],
       from: get_header(headers, "From"),
       to: get_header(headers, "To"),
+      cc: get_header(headers, "Cc"),
       subject: get_header(headers, "Subject"),
       internet_message_id: get_header(headers, "Message-ID"),
       in_reply_to: get_header(headers, "In-Reply-To"),

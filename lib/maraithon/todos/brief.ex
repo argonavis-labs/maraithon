@@ -21,7 +21,7 @@ defmodule Maraithon.Todos.Brief do
 
   require Logger
 
-  @version 9
+  @version 10
   @sentinel "TODO_BRIEF_JSON_V1"
   @metadata_key "brief"
   @lease_key "brief_generation"
@@ -469,8 +469,10 @@ defmodule Maraithon.Todos.Brief do
     - No preamble, no hedging, no filler, no praise. Every sentence must earn its place.
     - First decide whether this work involves the user directly, implicitly, or not at all. Match Slack participant IDs to OPERATOR IDENTITY. Channel membership and a previous generated todo are not evidence of ownership. Implicit responsibility requires a concrete source or explicit user instruction linking the user to the outcome; it does not require an @mention.
     - Treat the saved title, summary, People relationship labels, previous draft and previous brief as claims to check against the actual source. They can be wrong. Never use their repetition as corroboration.
+    - Being affected by work is separate from owning it. A verified person owner in WORK ITEM.workflow means that person owns the next action. Use involvement associated, name that owner first, explain the impact on the user, and return no reply, call, suggested actions, or personal steps. Respect an explicit user ownership correction. A request to keep track does not mean the user accepted the work.
+    - Read Gmail To and CC separately. Being copied is not a direct assignment or proof of payment authority. If someone else is asked to act or named as a contact, keep that ownership unless a later delivered message explicitly assigns the user a separate action.
     - If the user is a bystander, say so clearly in the summary, explain who is being asked when known, and return no reply or steps. If the source is unavailable and ownership cannot be established, say what is unverified and return no invented commitment or promised deadline.
-    - A prior AI draft is not evidence of availability, agreement, progress or a promise. Never invent meeting slots, claim the user or another person is free, promise an unapproved deadline, or claim work has started. If the needed fact is missing, draft an honest clarification or acknowledgment without fabricating it.
+    - Any unsent draft, including a Gmail DRAFT or a prior AI draft, is not evidence of availability, agreement, progress or a promise. Never treat it as sent or ask the user to resend it. Never invent meeting slots, claim the user or another person is free, promise an unapproved deadline, or claim work has started. If the needed fact is missing, draft an honest clarification or acknowledgment without fabricating it.
     - Source status cached or excerpt_only means partial synced coverage, not a live check. Never claim there were no later replies, edits, completion or acknowledgment from that partial view. Explain the remaining action from the evidence and ask the user to check the linked conversation for updates.
     - Omit parts of a request already fulfilled. Do not reshare supplied contact information or redo completed steps unless the source explicitly asks again.
     - The summary must lead with the smallest real next action, including any missing decision. Do not describe the draft or narrate how the UI works. Use 40-80 words, and stop once the user has enough context to act.
@@ -479,7 +481,7 @@ defmodule Maraithon.Todos.Brief do
 
     Field rules:
     - summary: the main thing the user will see. Write one compact paragraph, usually 2-4 sentences and at most 100 words, that lets them act without piecing together separate sections. Synthesize the actual request, the few facts/links/names/deadline needed to finish, and your recommended action. Include a missing decision only if it blocks completion. Do not restate the title or repeat every detail. Supporting history belongs in the other fields, which live in a Details tab.
-    - involvement: direct, implicit, bystander, or uncertain, based on the source and verified operator identity. Never convert someone else's deliverable into a promise by the user.
+    - involvement: direct, implicit, associated, bystander, or uncertain, based on the source and verified operator identity. Associated means the work affects the user but someone else owns it. Never convert someone else's deliverable into a promise by the user.
     - why_it_matters: 1-2 sentences on the concrete stakes and timing (who is waiting, what is blocked, when it is due).
     - situation: 2-4 sentences on what is actually being asked, grounded in the source thread, including any relevant history with the person.
     - recommendation: one sentence. The single best move.
@@ -495,7 +497,7 @@ defmodule Maraithon.Todos.Brief do
     - For suggested actions, label Gmail actions "Email <name>" and iMessage/Slack actions "Message <name>" so the label matches the actual provider. Prefer imessage for a short coordination message to a partner/family member when People provides a phone or Messages contact; inspect their preferred_channel and contact_details. Do not assume every supporting message belongs in Gmail just because the original obligation came by email.
     - "Add to calendar" should offer a short work block to advance this obligation now, such as coordinating availability and replying. Do not make it depend on a future reply or silently promise an invitation. Put it first when a work block would help; the conversation can prepare a meeting separately if requested.
     - Website work can use background Chrome on the paired Mac through the todo conversation, including from mobile and web. Suggest provider browser with the exact source URL when the todo involves a portal, website research, or a web form. Maraithon can inspect the page and prepare clicks or text entry for review. Sign-in, CAPTCHA, unsupported controls, and final decisions may require the user. Do not say all website work must be done manually.
-    - suggested_actions: 2-4 concrete agent-assisted moves in the order they help finish this todo. Short labels name the action and person: "Add to calendar", "Message Christina", "Email Michael". These examples are illustrative; use only the actual people and work in the source. provider is calendar, gmail, imessage, slack, or browser; person_name matches a person above or null. purpose says exactly what to prepare or investigate, grounded in source facts. A calendar action schedules time to do the work unless the source actually asks for a meeting. Include a supporting message when another person's input is needed. Do not turn all actions into replies to the original sender. Return [] for bystander/uncertain involvement.
+    - suggested_actions: 2-4 concrete agent-assisted moves in the order they help finish this todo. Short labels name the action and person: "Add to calendar", "Message Christina", "Email Michael". These examples are illustrative; use only the actual people and work in the source. provider is calendar, gmail, imessage, slack, or browser; person_name matches a person above or null. purpose says exactly what to prepare or investigate, grounded in source facts. A calendar action schedules time to do the work unless the source actually asks for a meeting. Include a supporting message when another person's input is needed. Do not turn all actions into replies to the original sender. Return [] for associated/bystander/uncertain involvement.
     - effort: under_2_min, under_15_min, or longer.
 
     Return STRICT JSON only. No markdown, no code fences, no commentary. Marker: #{@sentinel}
@@ -525,7 +527,7 @@ defmodule Maraithon.Todos.Brief do
          [
            """
            Return JSON with exactly this shape:
-           {"summary": "concise action brief", "involvement": "direct|implicit|bystander|uncertain", "why_it_matters": "string", "situation": "string", "recommendation": "string", "done_when": "observable completion outcome or null", "steps": ["string"], "reply": {"channel": "gmail|slack|imessage|whatsapp", "to": "string or null", "subject": "string or null", "body": "string", "resolves_todo": true} or null, "required_inputs": ["missing fact or decision"], "call": {"number": "exact source phone", "label": "person"} or null, "open_questions": ["string"], "effort": "under_2_min|under_15_min|longer", "people": [{"person_id": "id from supplied people or null", "name": "actual name", "context": "who they are and why involved"}], "suggested_actions": [{"label": "short action label", "provider": "calendar|gmail|imessage|slack|browser", "person_name": "actual name or null", "purpose": "concrete next step to prepare"}]}
+           {"summary": "concise action brief", "involvement": "direct|implicit|associated|bystander|uncertain", "why_it_matters": "string", "situation": "string", "recommendation": "string", "done_when": "observable completion outcome or null", "steps": ["string"], "reply": {"channel": "gmail|slack|imessage|whatsapp", "to": "string or null", "subject": "string or null", "body": "string", "resolves_todo": true} or null, "required_inputs": ["missing fact or decision"], "call": {"number": "exact source phone", "label": "person"} or null, "open_questions": ["string"], "effort": "under_2_min|under_15_min|longer", "people": [{"person_id": "id from supplied people or null", "name": "actual name", "context": "who they are and why involved"}], "suggested_actions": [{"label": "short action label", "provider": "calendar|gmail|imessage|slack|browser", "person_name": "actual name or null", "purpose": "concrete next step to prepare"}]}
            #{@sentinel}
            """
            |> String.trim()
@@ -609,6 +611,8 @@ defmodule Maraithon.Todos.Brief do
 
   defp normalize(parsed, context) when is_map(parsed) do
     summary = clean(parsed["summary"])
+    owner = get_in(context.todo, ["workflow", "owner"]) || %{}
+    associated? = owner["kind"] == "person"
 
     has_evidence? =
       context.source["status"] in ["available", "cached"] or
@@ -618,12 +622,14 @@ defmodule Maraithon.Todos.Brief do
         context.todo["source"] in ~w(manual user mobile mcp assistant)
 
     involvement =
-      if has_evidence? or parsed["involvement"] == "bystander",
-        do: parsed["involvement"],
-        else: "uncertain"
+      cond do
+        associated? -> "associated"
+        has_evidence? or parsed["involvement"] == "bystander" -> parsed["involvement"]
+        true -> "uncertain"
+      end
 
     summary =
-      if not has_evidence? and involvement != "bystander",
+      if not has_evidence? and involvement not in ["bystander", "associated"],
         do:
           "I couldn’t verify the original source or your responsibility for this item. Open the source to check who needs to act before making a commitment.",
         else: summary
@@ -639,9 +645,13 @@ defmodule Maraithon.Todos.Brief do
     required_inputs = string_list(parsed["required_inputs"], @max_open_questions)
     why = clean(parsed["why_it_matters"])
     situation = clean(parsed["situation"])
-    recommendation = clean(parsed["recommendation"])
 
-    if is_nil(summary) or involvement not in ~w(direct implicit bystander uncertain) do
+    recommendation =
+      if associated?,
+        do: "#{owner["label"]} owns the next action. You are watching for progress.",
+        else: clean(parsed["recommendation"])
+
+    if is_nil(summary) or involvement not in ~w(direct implicit associated bystander uncertain) do
       {:error, :empty_brief}
     else
       {:ok,
@@ -653,13 +663,21 @@ defmodule Maraithon.Todos.Brief do
          "why_it_matters" => why,
          "situation" => situation,
          "recommendation" => recommendation,
-         "done_when" => if(actionable?, do: clean(parsed["done_when"])),
+         "done_when" =>
+           if(associated?,
+             do: get_in(context.todo, ["workflow", "outcome"]),
+             else: if(actionable?, do: clean(parsed["done_when"]))
+           ),
          "steps" => if(actionable?, do: string_list(parsed["steps"], @max_steps), else: []),
-         "required_inputs" => required_inputs,
+         "required_inputs" => if(actionable?, do: required_inputs, else: []),
          "reply" =>
            if(actionable?, do: normalize_reply(parsed["reply"], context, required_inputs)),
          "call" => if(actionable?, do: normalize_call(parsed["call"], context)),
-         "open_questions" => string_list(parsed["open_questions"], @max_open_questions),
+         "open_questions" =>
+           if(actionable?,
+             do: string_list(parsed["open_questions"], @max_open_questions),
+             else: []
+           ),
          "effort" => normalize_effort(parsed["effort"])
        }}
     end
