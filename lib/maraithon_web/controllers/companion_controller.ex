@@ -57,7 +57,7 @@ defmodule MaraithonWeb.CompanionController do
 
       case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
-          wake_todo_workflows(user_id, accepted + duplicate)
+          wake_todo_workflows(user_id, accepted)
 
           json(conn, %{
             accepted: accepted,
@@ -218,7 +218,7 @@ defmodule MaraithonWeb.CompanionController do
 
       case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid, filtered: filtered}} ->
-          wake_todo_workflows(user_id, accepted + duplicate)
+          wake_todo_workflows(user_id, accepted)
 
           json(conn, %{
             accepted: accepted,
@@ -611,7 +611,7 @@ defmodule MaraithonWeb.CompanionController do
 
       case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
-          wake_todo_workflows(user_id, accepted + duplicate)
+          wake_todo_workflows(user_id, accepted)
 
           json(conn, %{
             accepted: accepted,

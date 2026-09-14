@@ -29,7 +29,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
-  @handoff_item_limit 5
+  # Fewer, larger partitions mean fewer sibling reasoning jobs racing the same
+  # intake snapshot; the 96 KB partition byte cap below stays the real bound.
+  @handoff_item_limit 12
   @handoff_binary_chunk_bytes 96_000
   @handoff_max_encoded_source_bundle_bytes 2_000_000
   @handoff_max_restored_binary_bytes 5_000_000
@@ -493,18 +495,53 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   def source_proof_items(_bundle), do: []
 
+  # Fields that change what a message means. Labels, read state, and thread
+  # context bodies are left out on purpose: reading or archiving a message
+  # inside the safety overlap, or a reply landing in its thread, must not make
+  # an already-reasoned message look new. A new reply still invalidates
+  # through its id in `thread_context_refs`; a changed body still invalidates
+  # through the body fields.
+  @revision_digest_keys ~w(
+    id message_id thread_id ts thread_ts target_ts channel_id provider_event_id
+    subject from to cc internal_date date user
+  )
+  @revision_digest_text_markers ["body", "text", "snippet"]
+
   defp source_revision_digest(item) do
     # Provider reads can contain DateTime structs, while sealed handoffs contain
     # their JSON strings. Hash the same representation on both sides, otherwise
     # every safety-overlap poll treats an unchanged message as a new revision.
-    # Keep the full record: changed bodies, labels, and thread context must still
-    # invalidate the settled receipt. Existing JSON-backed proofs keep their hash.
     item
     |> Jason.encode!()
     |> Jason.decode!()
+    |> revision_projection()
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
   end
+
+  defp revision_projection(item) when is_map(item) do
+    content =
+      item
+      |> Enum.filter(fn {key, _value} ->
+        is_binary(key) and
+          (key in @revision_digest_keys or
+             Enum.any?(@revision_digest_text_markers, &String.contains?(key, &1)))
+      end)
+      |> Map.new()
+
+    context_refs =
+      item
+      |> Map.get("thread_context", [])
+      |> List.wrap()
+      |> Enum.map(fn
+        message when is_map(message) -> Map.take(message, ~w(id message_id ts thread_ts))
+        other -> other
+      end)
+
+    Map.put(content, "thread_context_refs", context_refs)
+  end
+
+  defp revision_projection(item), do: item
 
   @doc false
   def filter_settled_source_items(bundle, %ConnectedAccount{} = account, role)

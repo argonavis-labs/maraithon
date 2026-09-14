@@ -389,7 +389,11 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     do: {:error, {:unknown_background_job, job_type}}
 
   defp publish_gmail_sync_completed(user_id, account, job, result) do
-    _ = wake_source_account(account, "gmail_sync_completed")
+    # A sync that ingested nothing has nothing for discovery or closure to
+    # reason about; the recurring heartbeat still covers missed deltas.
+    if Map.get(result, :count, 0) > 0 do
+      _ = wake_source_account(account, "gmail_sync_completed")
+    end
 
     event =
       Connector.build_event("gmail_sync_completed", "gmail", %{

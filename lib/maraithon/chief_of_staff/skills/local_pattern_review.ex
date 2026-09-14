@@ -82,8 +82,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
         integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 4_000),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
-      pending_candidate_refs: []
+      pending_candidate_refs: [],
+      # The last set the model reviewed and when. The same candidates are not
+      # sent back every ten minutes; new candidates or the cooldown reopen it.
+      reviewed_refs: [],
+      reviewed_at: nil
     }
+  end
+
+  @review_cooldown_seconds 6 * 60 * 60
+
+  defp already_reviewed?(state, refs, now) do
+    reviewed = Map.get(state, :reviewed_refs, [])
+
+    recent? =
+      with value when is_binary(value) <- Map.get(state, :reviewed_at),
+           {:ok, reviewed_at, _offset} <- DateTime.from_iso8601(value) do
+        DateTime.diff(now, reviewed_at, :second) < @review_cooldown_seconds
+      else
+        _ -> false
+      end
+
+    recent? and Enum.all?(refs, &(&1 in reviewed))
   end
 
   @impl true
@@ -107,29 +127,36 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
         _ = relationship_drift_module().run_for_user(user_id, now: now)
 
         candidates = Insights.list_candidates_for_user(user_id, limit: state.candidate_limit)
+        refs = candidate_refs(candidates)
 
-        if candidates == [] do
-          # Nothing to review — no model spend on a quiet cycle.
-          {:idle, state}
-        else
-          pending_state = %{state | pending_candidate_refs: candidate_refs(candidates)}
+        cond do
+          candidates == [] ->
+            # Nothing to review — no model spend on a quiet cycle.
+            {:idle, state}
 
-          case llm_params(candidates, state, context) do
-            {:ok, params} ->
-              {:effect, {:llm_call, params}, pending_state}
+          already_reviewed?(state, refs, now) ->
+            # Same candidates the model already judged; wait for new ones.
+            {:idle, state}
 
-            {:error, reason} ->
-              handle_effect_result(
-                {:llm_call,
-                 %{
-                   content: "",
-                   error: Maraithon.Redaction.error_summary(reason),
-                   finish_reason: "error"
-                 }},
-                pending_state,
-                context
-              )
-          end
+          true ->
+            pending_state = %{state | pending_candidate_refs: refs}
+
+            case llm_params(candidates, state, context) do
+              {:ok, params} ->
+                {:effect, {:llm_call, params}, pending_state}
+
+              {:error, reason} ->
+                handle_effect_result(
+                  {:llm_call,
+                   %{
+                     content: "",
+                     error: Maraithon.Redaction.error_summary(reason),
+                     finish_reason: "error"
+                   }},
+                  pending_state,
+                  context
+                )
+            end
         end
     end
   end
@@ -224,9 +251,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     end)
   end
 
-  defp apply_review(response, state, _context) do
+  defp apply_review(response, state, context) do
     candidate_refs = state.pending_candidate_refs
-    cleared_state = %{state | pending_candidate_refs: []}
+    # Recorded on every outcome: a retry ten minutes later with the same
+    # inputs rarely differs, and the cooldown reopens the set in six hours.
+    cleared_state = %{
+      state
+      | pending_candidate_refs: [],
+        reviewed_refs: candidate_refs,
+        reviewed_at: DateTime.to_iso8601(context[:timestamp] || DateTime.utc_now())
+    }
 
     case parse_decisions(response) do
       {:ok, decisions} ->

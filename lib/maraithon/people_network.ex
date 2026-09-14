@@ -21,7 +21,10 @@ defmodule Maraithon.PeopleNetwork do
   end
 
   def discover do
-    cutoff = DateTime.add(DateTime.utc_now(), -10, :minute)
+    # Ingestion hooks (relationship_graph_refresh, communication_score_refresh)
+    # rebuild the graph when sources change; the periodic pass only catches
+    # graphs that nothing has touched for hours.
+    cutoff = DateTime.add(DateTime.utc_now(), -6, :hour)
 
     users =
       Repo.all(

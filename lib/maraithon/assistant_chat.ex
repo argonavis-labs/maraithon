@@ -200,7 +200,7 @@ defmodule Maraithon.AssistantChat do
   @doc false
   def execute_request(run, conversation, user_turn, resume? \\ false) do
     previous_metadata = Logger.metadata()
-    Logger.metadata(target_reference: run.id)
+    Logger.metadata(target_reference: run.id, prompt_kind: "chat")
     # The run's user picks the model for every provider call in this request.
     Maraithon.LLM.UserModel.bind(run.user_id)
 
@@ -959,7 +959,8 @@ defmodule Maraithon.AssistantChat do
        do: :skip
 
   defp maybe_mark_linked_todo_done(%PreparedAction{action_type: action_type}, _conversation)
-       when action_type not in ["gmail_send", "gmail_draft_send", "slack_post"], do: :skip
+       when action_type not in ["gmail_send", "gmail_draft_send", "slack_post"],
+       do: :skip
 
   defp maybe_mark_linked_todo_done(
          %PreparedAction{} = prepared_action,

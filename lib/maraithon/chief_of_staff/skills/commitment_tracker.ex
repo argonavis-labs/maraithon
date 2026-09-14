@@ -36,8 +36,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   @default_local_browser_visit_scan_limit 200
   @default_lookback_hours 24 * 14
   @default_calendar_forward_days 14
-  @default_llm_max_tokens 32_000
-  @default_llm_reasoning_effort "high"
+  # Ranking existing open work is a review, not a derivation. The effect
+  # runner's incomplete-response retry widens the budget if a run truncates.
+  @default_llm_max_tokens 12_000
+  @default_llm_reasoning_effort "medium"
   @vague_self_commitment_followup_hour 16
   @explicit_clock_time_pattern ~r/\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/i
   @explicit_time_words [

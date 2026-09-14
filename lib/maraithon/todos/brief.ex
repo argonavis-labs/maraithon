@@ -35,6 +35,8 @@ defmodule Maraithon.Todos.Brief do
   @max_open_questions 3
   @max_prompt_bytes 100_000
   @max_age_seconds 6 * 60 * 60
+  # The six-hour clock only applies to work due inside this horizon.
+  @due_soon_seconds 48 * 60 * 60
   @queue "runtime_todo_preparation"
 
   def version, do: @version
@@ -81,8 +83,10 @@ defmodule Maraithon.Todos.Brief do
           DateTime.compare(todo.due_at, generated_at) == :gt and
           DateTime.compare(todo.due_at, now) != :gt
 
-      DateTime.compare(generated_at, now) != :gt and
-        DateTime.compare(now, expires_at) == :lt and not due_passed?
+      expired_on_clock? =
+        brief_expires_on_clock?(todo, now) and DateTime.compare(now, expires_at) != :lt
+
+      DateTime.compare(generated_at, now) != :gt and not expired_on_clock? and not due_passed?
     else
       _ -> false
     end
@@ -206,11 +210,13 @@ defmodule Maraithon.Todos.Brief do
 
   def enqueue_generation(_todo, _opts), do: {:error, :invalid_todo}
 
-  @doc "Prepare the first three actionable items in a visible list without running a model in the request."
+  @doc "Prepare the first actionable item in a visible list without running a model in the request."
   def prepare_focus(todos) when is_list(todos) do
+    # Opening a todo prepares it on demand; prefetching only the top item
+    # keeps list loads from fanning out brief generation.
     todos
     |> Enum.filter(&(&1.status == "open" && &1.attention_mode != "monitor"))
-    |> Enum.take(3)
+    |> Enum.take(1)
     |> Enum.each(fn todo ->
       case enqueue_generation(todo, refresh_expired: true) do
         {:ok, _} -> :ok
@@ -349,20 +355,21 @@ defmodule Maraithon.Todos.Brief do
   Content fingerprint used to detect a stale brief.
   """
   def fingerprint(%Todo{} = todo) do
-    metadata = todo.metadata || %{}
+    # Only fields a person or an explicit workflow transition changes. The
+    # sweeps rewrite next_action, action_plan, excerpts, and workflow
+    # bookkeeping constantly; regenerating on those churned a brief every
+    # few minutes without changing what the user reads.
+    workflow = Maraithon.Todos.Workflow.current(todo) || %{}
 
     [
-      Jason.encode!(Maraithon.Todos.Workflow.current(todo)),
+      workflow_field(workflow, :state),
+      workflow_field(workflow, :owner),
+      workflow_field(workflow, :outcome),
       todo.title,
       todo.summary,
-      todo.next_action,
-      todo.action_plan,
       todo.notes,
       todo.source_item_id,
-      iso(todo.due_at),
-      Map.get(metadata, "source_quote"),
-      Map.get(metadata, "source_excerpt"),
-      Map.get(metadata, "matching_message_excerpt")
+      iso(todo.due_at)
     ]
     |> Enum.map(&to_string/1)
     |> Enum.join("\n")
@@ -370,6 +377,23 @@ defmodule Maraithon.Todos.Brief do
     |> Base.encode16(case: :lower)
     |> binary_part(0, 24)
   end
+
+  defp workflow_field(workflow, key) when is_map(workflow) do
+    case Map.get(workflow, key) || Map.get(workflow, Atom.to_string(key)) do
+      %{} = nested -> Jason.encode!(nested)
+      value -> value
+    end
+  end
+
+  defp workflow_field(_workflow, _key), do: nil
+
+  defp brief_expires_on_clock?(%Todo{due_at: %DateTime{} = due_at}, now) do
+    # Work due soon changes character as the deadline approaches; everything
+    # else keeps its brief until the todo itself changes.
+    DateTime.diff(due_at, now, :second) <= @due_soon_seconds
+  end
+
+  defp brief_expires_on_clock?(_todo, _now), do: false
 
   # Same unconfigured-provider fallback the todo intelligence pipeline uses,
   # so test and local environments without an LLM key still produce briefs.

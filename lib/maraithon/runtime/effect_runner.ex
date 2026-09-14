@@ -1790,6 +1790,8 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp execute_with_command(effect, command_prepared_observer) do
     effect = Effect.materialize_legacy_payload(effect)
+    # Provider calls made for an agent effect are attributable in the logs.
+    Logger.metadata(prompt_kind: "agent_effect:" <> to_string(effect.effect_type))
 
     with {:ok, command_module} <- CommandFactory.fetch(effect.effect_type),
          {:ok, prepared} <- command_module.prepare(effect),

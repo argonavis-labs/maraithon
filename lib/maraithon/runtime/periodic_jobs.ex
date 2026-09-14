@@ -50,8 +50,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @source_dependency_retry_ms 10_000
   @source_graph_publication "parent_completion_v1"
   @slack_reconciliation_fanout_spacing_seconds 6
-  @slack_reconciliation_plan_cooldown_seconds 55
-  @completion_backstop_interval_seconds 60
+  # Slack Events deliver messages as they happen; the reconciliation plan is
+  # anti-entropy, so one full conversation listing per 15 minutes is enough.
+  @slack_reconciliation_plan_cooldown_seconds 900
+  # Companion and calendar ingestion wake the review directly; the backstop
+  # only has to catch what those wakes missed.
+  @completion_backstop_interval_seconds 900
 
   @token_job "runtime_partition:token_refresh"
   @watch_job "runtime_partition:watch_renewal"
@@ -1347,7 +1351,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       dedupe_key: model_dedupe_key("todo_completion_backstop", user_id),
       partition_key: tenant_partition(user_id),
       rate_limit_key: "model",
-      max_attempts: 3,
+      # One retry: a second identical full-size prompt rarely changes a
+      # deterministic outcome, and the next heartbeat covers the rest.
+      max_attempts: 2,
       scheduled_at: scheduled_at,
       payload: %{"user_id" => user_id, "partition_role" => "backstop"}
     })
@@ -2062,7 +2068,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
             "#{account.user_id}:#{acquisition_job.id}:#{fanout_index}"
           ),
         rate_limit_key: "model",
-        max_attempts: 3,
+        max_attempts: 2,
         scheduled_at: database_now!(),
         result: replay_activity_result(handoff),
         payload: Map.put(handoff, "source_graph_publication", @source_graph_publication)
@@ -2252,7 +2258,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
               fanout_index
             ),
           rate_limit_key: "model",
-          max_attempts: 3,
+          max_attempts: 2,
           scheduled_at: database_now!(),
           result: replay_activity_result(handoff),
           payload: Map.put(handoff, "source_graph_publication", @source_graph_publication)

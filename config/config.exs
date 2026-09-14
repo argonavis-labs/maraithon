@@ -80,8 +80,13 @@ config :maraithon, Maraithon.Runtime,
   proactive_check_in_interval_ms: :timer.minutes(10),
   proactive_check_in_initial_delay_ms: :timer.minutes(10),
   proactive_check_in_batch_size: 25,
-  todo_completion_sweep_interval_ms: :timer.minutes(1),
-  todo_completion_sweep_initial_delay_ms: :timer.minutes(1),
+  # Gmail push, Slack events, and companion ingest wake discovery and the
+  # completion review directly; these ticks are the safety heartbeat behind
+  # them, not the primary trigger (docs/audits/2026-09-14-llm-call-volume-audit.md).
+  source_account_discovery_interval_ms: :timer.minutes(15),
+  source_account_discovery_initial_delay_ms: :timer.minutes(1),
+  todo_completion_sweep_interval_ms: :timer.minutes(15),
+  todo_completion_sweep_initial_delay_ms: :timer.minutes(2),
   oauth_refresh_interval_ms: :timer.minutes(5),
   oauth_refresh_lookahead_seconds: 15 * 60,
   oauth_refresh_batch_size: 100,

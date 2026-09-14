@@ -376,7 +376,10 @@ proactive_check_in_interval_ms =
   String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000"))
 
 todo_completion_sweep_interval_ms =
-  String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_INTERVAL_MS", "60000"))
+  String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_INTERVAL_MS", "900000"))
+
+source_account_discovery_interval_ms =
+  String.to_integer(System.get_env("SOURCE_ACCOUNT_DISCOVERY_INTERVAL_MS", "900000"))
 
 optional_boolean_env = fn name ->
   case System.get_env(name) do
@@ -682,7 +685,15 @@ config :maraithon, Maraithon.Runtime,
     String.to_integer(
       System.get_env(
         "TODO_COMPLETION_SWEEP_INITIAL_DELAY_MS",
-        Integer.to_string(todo_completion_sweep_interval_ms)
+        Integer.to_string(min(todo_completion_sweep_interval_ms, 120_000))
+      )
+    ),
+  source_account_discovery_interval_ms: source_account_discovery_interval_ms,
+  source_account_discovery_initial_delay_ms:
+    String.to_integer(
+      System.get_env(
+        "SOURCE_ACCOUNT_DISCOVERY_INITIAL_DELAY_MS",
+        Integer.to_string(min(source_account_discovery_interval_ms, 60_000))
       )
     ),
   oauth_refresh_interval_ms:

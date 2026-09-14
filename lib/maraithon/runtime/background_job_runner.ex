@@ -1175,6 +1175,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       user_id: job.user_id
     )
 
+    # Every provider call this job makes carries its job type in the log line.
+    Logger.metadata(job_type: job.job_type)
     # The job's user picks the model for every provider call it makes.
     Maraithon.LLM.UserModel.with_user(job.user_id, fn -> safe_execute(handler, job) end)
   end

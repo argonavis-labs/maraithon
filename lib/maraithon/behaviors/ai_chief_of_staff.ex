@@ -747,13 +747,29 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     end
   end
 
+  # A memo records what this cycle decided. Inbound source items alone are not
+  # a decision: skills that saw nothing worth acting on leave the previous memo
+  # standing. A daily refresh keeps the memo from going stale on a quiet week.
+  @memo_max_age_seconds 24 * 60 * 60
+
   defp cycle_worth_memo?(state) do
-    blank?(Map.get(state.cycle_memory || %{}, "memo")) or cycle_has_activity?(state)
+    blank?(Map.get(state.cycle_memory || %{}, "memo")) or cycle_has_activity?(state) or
+      memo_stale?(state)
   end
 
   defp cycle_has_activity?(state) do
-    has_emits = state.pending_emits != [] or not is_nil(state.pending_emit)
-    has_emits or telemetry_delta_count(state.assistant_fetch_telemetry) > 0
+    state.pending_emits != [] or not is_nil(state.pending_emit)
+  end
+
+  defp memo_stale?(state) do
+    with value when is_binary(value) <- Map.get(state.cycle_memory || %{}, "updated_at"),
+         {:ok, updated_at, _offset} <- DateTime.from_iso8601(value) do
+      DateTime.diff(DateTime.utc_now(), updated_at, :second) >= @memo_max_age_seconds
+    else
+      # A memo without a readable timestamp is refreshed by the next decision,
+      # not by every cycle.
+      _ -> false
+    end
   end
 
   @delta_count_keys ~w(
