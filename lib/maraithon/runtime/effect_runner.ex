@@ -1684,7 +1684,11 @@ defmodule Maraithon.Runtime.EffectRunner do
 
     result =
       try do
-        execute_with_command(effect, command_prepared_observer)
+        # Outbox workers are spawned by the runner, not the user's Agent, so
+        # they must restore the durable owner's model setting explicitly.
+        Maraithon.LLM.UserModel.with_user(effect.owner_user_id, fn ->
+          execute_with_command(effect, command_prepared_observer)
+        end)
       rescue
         exception ->
           {:error, {:effect_exception, Maraithon.Redaction.error_class(exception)}}
