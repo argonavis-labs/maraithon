@@ -135,6 +135,35 @@ arrives. At the current model's prices that is a few dollars a day.
   hashes each todo's linked evidence.
 - Item 8 (event-driven agent wake) is not implemented; it saves acquisition
   cycles rather than model calls and carries the starvation risk noted above.
+- `5ac7db1a` fixes a regression the cheaper endpoint exposed rather than a
+  call-volume item: the provider cooldown was global, so a 429 earned by a
+  background sweep also blocked the chat bucket. Cooldowns are now lane
+  scoped, background against background and chat against chat.
+
+### Measured after the cutover
+
+Thirty minutes on revision `maraithon-00324-8l6`, all traffic on
+`meta/muse-spark-1.3-contributor`:
+
+| Metric | Before (Sep 8-13 average) | After |
+| --- | --- | --- |
+| Model calls per day | ~2,000 | ~670 |
+| Spend per day | ~$87 | under $1 |
+| Background job rows per day | ~20,000 | ~12,600 |
+
+Closure receipts over 90 minutes: 827 model verdicts and 174
+`unlinked_source_evidence` policy receipts, so only one todo in six skipped
+the model. `0683210b` explains the rest: item 1 matched counterparty labels
+as substrings, and those labels are generated prose. Twenty-three of the
+sixty labelled open todos contain the word "teammate" and a dozen more carry
+the workspace name, so nearly every Slack message linked to nearly every
+todo. Tokens now match whole, generic role and platform words are dropped, a
+token counts only while it stays rare in the open pool, and a plain word has
+to match the sender rather than the subject. Against the live labels, chatter
+in a shared channel falls from seventeen matches to one while a named sender
+and a Slack id still match exactly the todos they belong to. Gmail ingest still reaches discovery reasoning in
+about three seconds, and a sync that ingested nothing no longer wakes
+anything.
 
 ## 5. What must not change
 
