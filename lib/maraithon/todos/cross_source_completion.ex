@@ -24,6 +24,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.PromptBudget
   alias Maraithon.Repo
+  alias Maraithon.Runtime.TodoClosureReceipt
   alias Maraithon.TelegramAssistant.PushBroker
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -217,17 +218,42 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     else
       memo = Keyword.fetch!(opts, :review_memo)
 
-      evidence_hash =
-        evidence
+      # Each todo's memo covers only the evidence that could close it, so a
+      # newsletter arriving for one todo no longer invalidates every other.
+      # Calendar and source-health entries stay shared: time-blocked work can
+      # complete on the clock alone.
+      {shared_evidence, linkable_evidence} =
+        Enum.split_with(evidence, fn item ->
+          read_string(item, "channel", nil) in ["source_health", "google_calendar", "calendar"]
+        end)
+
+      shared_hash =
+        shared_evidence
         |> Enum.flat_map(&stable_review_evidence/1)
         |> Enum.uniq()
         |> Enum.sort()
         |> review_hash()
 
       fingerprints =
-        Map.new(open_todos, &{&1.id, review_hash({1, prompt_todo(&1), evidence_hash})})
+        Map.new(open_todos, fn todo ->
+          linked_hash =
+            linkable_evidence
+            |> Enum.filter(&evidence_item_linked?(todo, &1))
+            |> Enum.uniq()
+            |> Enum.sort()
+            |> review_hash()
 
-      changed = Enum.reject(open_todos, &(memo[&1.id] == fingerprints[&1.id]))
+          {todo.id, review_hash({2, prompt_todo(todo), shared_hash, linked_hash})}
+        end)
+
+      last_checks = last_model_checks(user_id, Enum.map(open_todos, & &1.id))
+
+      changed =
+        Enum.filter(open_todos, fn todo ->
+          memo[todo.id] != fingerprints[todo.id] or
+            exhaustive_check_due?(todo, last_checks, now)
+        end)
+
       unchanged = open_todos -- changed
       {eligible, no_new_evidence} = exact_model_candidates(changed, evidence)
       candidates = select_candidates(user_id, eligible, evidence)
@@ -1289,7 +1315,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
                  model_calls: left_result.model_calls + right_result.model_calls,
                  policy_decision_refs:
                    Map.get(left_result, :policy_decision_refs, []) ++
-                     Map.get(right_result, :policy_decision_refs, [])
+                     Map.get(right_result, :policy_decision_refs, []),
+                 unlinked_decision_refs:
+                   Map.get(left_result, :unlinked_decision_refs, []) ++
+                     Map.get(right_result, :unlinked_decision_refs, [])
                }, left_todos ++ right_todos}
             end
           else
@@ -1400,7 +1429,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp evaluate_exact_candidates(user_id, todos, evidence, now, opts) do
-    {candidates, ruled_out} = exact_model_candidates(todos, evidence)
+    {timely, ruled_out} = exact_model_candidates(todos, evidence)
+    {candidates, unlinked} = linked_model_candidates(user_id, timely, evidence, now)
 
     evaluation =
       if candidates == [],
@@ -1410,12 +1440,116 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     case evaluation do
       %{} = result ->
         result
-        |> Map.update!(:checked, &(&1 + length(ruled_out)))
+        |> Map.update!(:checked, &(&1 + length(ruled_out) + length(unlinked)))
         |> Map.put(:policy_decision_refs, Enum.map(ruled_out, & &1.id))
+        |> Map.put(:unlinked_decision_refs, Enum.map(unlinked, & &1.id))
 
       {:error, _reason} = error ->
         error
     end
+  end
+
+  # One new message used to send every open todo to the model. Evidence can
+  # only close work it is about: the same thread or source item, the same
+  # counterparty, or a person the todo names. Everything else gets a policy
+  # receipt instead of a prompt, and a daily exhaustive check still lets an
+  # acknowledgement on one channel close work created from another.
+  @exhaustive_check_seconds 24 * 60 * 60
+
+  defp linked_model_candidates(_user_id, [], _evidence, _now), do: {[], []}
+
+  defp linked_model_candidates(user_id, todos, evidence, now) do
+    identifiers = evidence_identifiers(evidence)
+    people = evidence_people_text(evidence)
+    last_checks = last_model_checks(user_id, Enum.map(todos, & &1.id))
+
+    Enum.split_with(todos, fn todo ->
+      evidence_linked?(todo, identifiers) or counterparty_mentioned?(todo, people) or
+        exhaustive_check_due?(todo, last_checks, now)
+    end)
+  end
+
+  defp evidence_people_text(evidence) do
+    evidence
+    |> Enum.reject(fn item -> read_string(item, "channel", nil) == "source_health" end)
+    |> Enum.flat_map(fn item ->
+      [read_string(item, "sender", nil), read_string(item, "subject", nil)]
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp counterparty_mentioned?(%Todo{counterparty_label: label}, people)
+       when is_binary(label) and people != "" do
+    tokens =
+      label
+      |> String.downcase()
+      |> String.split(~r/[^\p{L}\p{N}@.]+/u, trim: true)
+      |> Enum.filter(&(String.length(&1) >= 3))
+
+    tokens != [] and Enum.any?(tokens, &String.contains?(people, &1))
+  end
+
+  defp counterparty_mentioned?(_todo, _people), do: false
+
+  # Item-level linkage for the backstop memo: the same thread or source item,
+  # the same account and subject, or the todo's counterparty named in it.
+  defp evidence_item_linked?(%Todo{} = todo, item) when is_map(item) do
+    channel = read_string(item, "channel", nil)
+
+    ids =
+      [
+        read_string(item, "thread_id", nil),
+        read_string(item, "source_item_id", nil),
+        read_string(item, "target_source_item_id", nil)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    id_linked? =
+      is_binary(todo.source_item_id) and todo.source_item_id != "" and channel == todo.source and
+        todo.source_item_id in ids
+
+    label_items =
+      case {channel, read_string(item, "account", nil), read_string(item, "subject", nil)} do
+        {c, a, s} when is_binary(c) and is_binary(a) and is_binary(s) ->
+          [{c, a, String.downcase(s)}]
+
+        _ ->
+          []
+      end
+
+    id_linked? or counterparty_label_linked?(todo, label_items) or
+      counterparty_mentioned?(todo, evidence_people_text([item]))
+  end
+
+  defp evidence_item_linked?(_todo, _item), do: false
+
+  defp exhaustive_check_due?(todo, last_checks, now) do
+    case Map.get(last_checks, todo.id) do
+      %DateTime{} = checked_at ->
+        DateTime.diff(now, checked_at, :second) >= @exhaustive_check_seconds
+
+      _never ->
+        true
+    end
+  end
+
+  # The newest model verdict per todo, from the closure receipts the cycle
+  # proofs already record.
+  defp last_model_checks(_user_id, []), do: %{}
+
+  defp last_model_checks(user_id, todo_ids) do
+    Repo.all(
+      from(r in TodoClosureReceipt,
+        where: r.user_id == ^user_id and r.todo_id in ^todo_ids and r.evaluator == "model",
+        group_by: r.todo_id,
+        select: {r.todo_id, max(r.inserted_at)}
+      )
+    )
+    |> Map.new()
+  rescue
+    _exception -> %{}
   end
 
   # The same strict timestamp gate is enforced again when applying a quote.

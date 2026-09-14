@@ -350,7 +350,8 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          todo_decision_manifest:
            evaluated_decision_manifest(
              todo_manifest.evaluated_refs,
-             Map.get(result, :policy_decision_refs, [])
+             Map.get(result, :policy_decision_refs, []),
+             Map.get(result, :unlinked_decision_refs, [])
            ) ++
              Enum.map(todo_manifest.superseded_refs, &%{todo_ref: &1, action: "superseded"}),
          model_calls: Map.get(result, :model_calls, 0),
@@ -376,15 +377,23 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
 
   def reason(_account, _payload, _opts), do: {:error, :invalid_source_closure_payload}
 
-  defp evaluated_decision_manifest(evaluated_refs, policy_refs) do
+  defp evaluated_decision_manifest(evaluated_refs, policy_refs, unlinked_refs) do
     policy_refs = MapSet.new(policy_refs)
+    unlinked_refs = MapSet.new(unlinked_refs)
 
     Enum.map(evaluated_refs, fn ref ->
       entry = %{todo_ref: ref, action: "evaluated"}
 
-      if MapSet.member?(policy_refs, ref),
-        do: Map.merge(entry, %{evaluator: "policy", reason_code: "no_later_source_evidence"}),
-        else: entry
+      cond do
+        MapSet.member?(policy_refs, ref) ->
+          Map.merge(entry, %{evaluator: "policy", reason_code: "no_later_source_evidence"})
+
+        MapSet.member?(unlinked_refs, ref) ->
+          Map.merge(entry, %{evaluator: "policy", reason_code: "unlinked_source_evidence"})
+
+        true ->
+          entry
+      end
     end)
   end
 
@@ -623,6 +632,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     case {result_string(entry, "evaluator"), result_string(entry, "reason_code")} do
       {nil, nil} -> true
       {"policy", "no_later_source_evidence"} -> result_string(entry, "action") == "evaluated"
+      {"policy", "unlinked_source_evidence"} -> result_string(entry, "action") == "evaluated"
       _invalid -> false
     end
   end

@@ -354,11 +354,10 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
 
     if is_map(snapshot) and match?(%Todo{user_id: ^user_id}, todo) do
       {outcome, evaluator, reason_code} =
-        if read_string(entry, "evaluator") == "policy" and
-             read_string(entry, "reason_code") == "no_later_source_evidence" do
-          temporal_closure_outcome(todo.status)
-        else
-          closure_outcome(action, todo.status)
+        case {read_string(entry, "evaluator"), read_string(entry, "reason_code")} do
+          {"policy", "no_later_source_evidence"} -> temporal_closure_outcome(todo.status)
+          {"policy", "unlinked_source_evidence"} -> unlinked_closure_outcome(todo.status)
+          _model_or_superseded -> closure_outcome(action, todo.status)
         end
 
       %{
@@ -385,6 +384,13 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     do: {"still_open", "policy", "no_later_source_evidence"}
 
   defp temporal_closure_outcome(_status), do: {"superseded", "policy", "todo_superseded"}
+
+  # Evidence that is not about this todo cannot close it; the receipt records
+  # that the model was not asked, so coverage proofs stay total.
+  defp unlinked_closure_outcome(status) when status in ["open", "snoozed"],
+    do: {"still_open", "policy", "unlinked_source_evidence"}
+
+  defp unlinked_closure_outcome(_status), do: {"superseded", "policy", "todo_superseded"}
 
   defp normalize_proof_item(item) when is_map(item) do
     source_ref = read_string(item, "source_ref")

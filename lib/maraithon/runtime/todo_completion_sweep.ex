@@ -313,6 +313,10 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         |> Map.put(:todo_decision_refs, result_string_list(cross_source, :decision_refs))
         |> Map.put(:policy_decision_refs, result_string_list(cross_source, :policy_decision_refs))
         |> Map.put(
+          :unlinked_decision_refs,
+          result_string_list(cross_source, :unlinked_decision_refs)
+        )
+        |> Map.put(
           :coverage_complete?,
           deterministic.checked == length(initial_ids) and deterministic.errors == 0 and
             deterministic.fetch_errors == 0 and
@@ -346,7 +350,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       model_calls: 0,
       expected: 0,
       decision_refs: [],
-      policy_decision_refs: []
+      policy_decision_refs: [],
+      unlinked_decision_refs: []
     }
   end
 
@@ -361,7 +366,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         model_calls: 0,
         expected: length(todo_ids),
         decision_refs: [],
-        policy_decision_refs: []
+        policy_decision_refs: [],
+        unlinked_decision_refs: []
       },
       fn {batch, index}, acc ->
         result =
@@ -383,7 +389,10 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
                  model_calls: acc.model_calls + result_count(summary, :model_calls),
                  decision_refs: acc.decision_refs ++ result_string_list(summary, :decision_refs),
                  policy_decision_refs:
-                   acc.policy_decision_refs ++ result_string_list(summary, :policy_decision_refs)
+                   acc.policy_decision_refs ++ result_string_list(summary, :policy_decision_refs),
+                 unlinked_decision_refs:
+                   acc.unlinked_decision_refs ++
+                     result_string_list(summary, :unlinked_decision_refs)
              }}
 
           {:skip, :no_open_todos} ->
