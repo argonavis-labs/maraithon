@@ -6,6 +6,11 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   pending effect retry independently turns one 429 into a retry storm. This
   gate keeps LLM concurrency bounded and shares provider retry-after cooldowns
   across effect workers in this node.
+
+  Cooldowns are lane-scoped. Background work (`:default`, `:reasoning`) shares
+  one cooldown so a single 429 cannot turn into a retry storm, while `:chat`
+  keeps its own: a sweep that trips a provider limit must never freeze the
+  chat the user is waiting on.
   """
 
   use GenServer
@@ -31,7 +36,7 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   Reserve one LLM execution slot.
 
   Returns `{:error, {:rate_limited, retry_after_ms}}` while a provider cooldown
-  is active, or `{:error, {:llm_busy, retry_after_ms}}` when local concurrency is
+  for the bucket's lane is active, or `{:error, {:llm_busy, retry_after_ms}}` when local concurrency is
   already full.
   """
   def checkout(bucket \\ @default_bucket) do
@@ -68,18 +73,18 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   end
 
   @doc """
-  Share a provider retry-after with future callers.
+  Share a provider retry-after with future callers in the bucket's lane.
   """
-  def record_rate_limit(retry_after_ms) do
-    record_rate_limit(__MODULE__, retry_after_ms)
+  def record_rate_limit(retry_after_ms, bucket \\ @default_bucket) do
+    record_rate_limit(__MODULE__, retry_after_ms, bucket)
   end
 
-  def record_rate_limit(server, retry_after_ms) do
-    call(server, {:record_rate_limit, retry_after_ms}, :ok)
+  def record_rate_limit(server, retry_after_ms, bucket) do
+    call(server, {:record_rate_limit, retry_after_ms, normalize_bucket(bucket)}, :ok)
   end
 
-  def record_rate_limit_async(retry_after_ms) do
-    cast(__MODULE__, {:record_rate_limit, retry_after_ms})
+  def record_rate_limit_async(retry_after_ms, bucket \\ @default_bucket) do
+    cast(__MODULE__, {:record_rate_limit, retry_after_ms, normalize_bucket(bucket)})
   end
 
   def reset do
@@ -129,7 +134,7 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
 
     {:ok,
      %{
-       blocked_until_ms: nil,
+       blocked_until_ms: %{},
        bucket_counts: %{},
        bucket_limits: normalize_bucket_limits(bucket_limits, max_concurrency),
        busy_retry_ms: busy_retry_ms,
@@ -144,8 +149,8 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
     now_ms = now_ms()
 
     cond do
-      blocked_for_ms(state, now_ms) > 0 ->
-        {:reply, {:error, {:rate_limited, blocked_for_ms(state, now_ms)}}, state}
+      blocked_for_ms(state, bucket, now_ms) > 0 ->
+        {:reply, {:error, {:rate_limited, blocked_for_ms(state, bucket, now_ms)}}, state}
 
       Map.has_key?(state.holders, pid) ->
         {:reply, :ok, add_holder(state, pid, bucket)}
@@ -162,12 +167,15 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
     Enum.each(state.holders, fn {_pid, {ref, _count}} -> Process.demonitor(ref, [:flush]) end)
 
     {:reply, :ok,
-     %{state | blocked_until_ms: nil, bucket_counts: %{}, holders: %{}, in_flight: 0}}
+     %{state | blocked_until_ms: %{}, bucket_counts: %{}, holders: %{}, in_flight: 0}}
   end
 
   def handle_call(:status, _from, state) do
+    now_ms = now_ms()
+
     status = %{
-      blocked_for_ms: blocked_for_ms(state, now_ms()),
+      blocked_for_ms: blocked_for_ms(state, @default_bucket, now_ms),
+      blocked_for_ms_by_lane: blocked_by_lane(state, now_ms),
       buckets: bucket_status(state),
       in_flight: state.in_flight,
       max_concurrency: state.max_concurrency
@@ -176,13 +184,13 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
     {:reply, status, state}
   end
 
-  def handle_call({:record_rate_limit, retry_after_ms}, _from, state) do
-    {:reply, :ok, apply_rate_limit(state, retry_after_ms)}
+  def handle_call({:record_rate_limit, retry_after_ms, bucket}, _from, state) do
+    {:reply, :ok, apply_rate_limit(state, retry_after_ms, bucket)}
   end
 
   @impl true
-  def handle_cast({:record_rate_limit, retry_after_ms}, state) do
-    {:noreply, apply_rate_limit(state, retry_after_ms)}
+  def handle_cast({:record_rate_limit, retry_after_ms, bucket}, state) do
+    {:noreply, apply_rate_limit(state, retry_after_ms, bucket)}
   end
 
   def handle_cast({:checkin, pid, bucket}, state) do
@@ -306,24 +314,38 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_integer(_value, default), do: default
 
-  defp apply_rate_limit(state, retry_after_ms) do
+  # A 429 answers for the lane that earned it. Background lanes share one
+  # cooldown because they retry on their own; chat only ever holds back when
+  # a chat call itself was limited, so a sweep cannot stall the user.
+  defp lane_for_bucket(:chat), do: :chat
+  defp lane_for_bucket(_bucket), do: :background
+
+  defp apply_rate_limit(state, retry_after_ms, bucket) do
     retry_after_ms = normalize_retry_after_ms(retry_after_ms)
+    lane = lane_for_bucket(bucket)
     blocked_until_ms = now_ms() + retry_after_ms
 
-    next_blocked_until_ms =
-      case state.blocked_until_ms do
-        nil -> blocked_until_ms
-        existing -> max(existing, blocked_until_ms)
-      end
+    next =
+      Map.update(state.blocked_until_ms, lane, blocked_until_ms, &max(&1, blocked_until_ms))
 
-    Logger.warning("LLM provider cooldown active", retry_after_ms: retry_after_ms)
-    %{state | blocked_until_ms: next_blocked_until_ms}
+    Logger.warning("LLM provider cooldown active",
+      retry_after_ms: retry_after_ms,
+      lane: lane
+    )
+
+    %{state | blocked_until_ms: next}
   end
 
-  defp blocked_for_ms(%{blocked_until_ms: nil}, _now_ms), do: 0
+  defp blocked_by_lane(state, now_ms) do
+    Map.new([:background, :chat], fn lane ->
+      {lane, max(0, Map.get(state.blocked_until_ms, lane, 0) - now_ms)}
+    end)
+  end
 
-  defp blocked_for_ms(%{blocked_until_ms: blocked_until_ms}, now_ms) do
-    max(0, blocked_until_ms - now_ms)
+  defp blocked_for_ms(state, bucket, now_ms) do
+    lane = lane_for_bucket(bucket)
+
+    max(0, Map.get(state.blocked_until_ms, lane, 0) - now_ms)
   end
 
   defp normalize_retry_after_ms(value) when is_integer(value) and value > 0 do

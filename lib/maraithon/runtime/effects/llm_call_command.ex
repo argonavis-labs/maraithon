@@ -150,7 +150,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
         case result do
           {:error, reason} = error ->
-            record_provider_limit(reason)
+            record_provider_limit(reason, params)
             error
 
           other ->
@@ -191,7 +191,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
           end
 
         {:error, reason} ->
-          record_provider_limit(reason)
+          record_provider_limit(reason, params)
 
           case retry_backoff_ms(reason, attempt) do
             nil ->
@@ -301,7 +301,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         error
 
       {:error, fallback_reason} ->
-        record_provider_limit(fallback_reason)
+        record_provider_limit(fallback_reason, fallback_params)
 
         Logger.warning("LLM fallback model failed",
           effect_reference: Redaction.fingerprint(effect.id),
@@ -568,11 +568,13 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   defp provider_deferral_error?({:llm_busy, _retry_after}), do: true
   defp provider_deferral_error?(_reason), do: false
 
-  defp record_provider_limit({:rate_limited, retry_after_ms}) do
-    LLMRateLimiter.record_rate_limit(retry_after_ms)
+  # The cooldown is recorded against the lane the call ran in, so a background
+  # sweep that trips a provider limit never holds back interactive chat.
+  defp record_provider_limit({:rate_limited, retry_after_ms}, params) do
+    LLMRateLimiter.record_rate_limit(retry_after_ms, LLM.execution_bucket(params))
   end
 
-  defp record_provider_limit(_reason), do: :ok
+  defp record_provider_limit(_reason, _params), do: :ok
 
   # llm_busy is the local concurrency gate (one slot per bucket), not a
   # provider limit: another effect simply holds the slot, sometimes for

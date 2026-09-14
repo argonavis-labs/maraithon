@@ -417,7 +417,7 @@ defmodule Maraithon.LLM do
             params
             |> Map.put("timeout_ms", remaining)
             |> fun.()
-            |> tap(&record_provider_rate_limit/1)
+            |> tap(&record_provider_rate_limit(&1, bucket))
           else
             {:error, :timeout}
           end
@@ -485,9 +485,9 @@ defmodule Maraithon.LLM do
 
   defp non_empty(_value), do: nil
 
-  defp record_provider_rate_limit({:error, {:rate_limited, retry_after_ms}}) do
-    LLMRateLimiter.record_rate_limit_async(retry_after_ms)
+  defp record_provider_rate_limit({:error, {:rate_limited, retry_after_ms}}, bucket) do
+    LLMRateLimiter.record_rate_limit_async(retry_after_ms, bucket)
   end
 
-  defp record_provider_rate_limit(_result), do: :ok
+  defp record_provider_rate_limit(_result, _bucket), do: :ok
 end
