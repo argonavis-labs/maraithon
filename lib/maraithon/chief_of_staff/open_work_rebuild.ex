@@ -32,6 +32,12 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
   def run(user_id, opts \\ [])
 
   def run(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    Maraithon.LLM.UserModel.with_user(user_id, fn -> do_run(user_id, opts) end)
+  end
+
+  def run(_user_id, _opts), do: {:error, :invalid_user}
+
+  defp do_run(user_id, opts) do
     now = opts |> Keyword.get(:now, DateTime.utc_now()) |> DateTime.truncate(:second)
     source_scope = Keyword.get(opts, :source_scope) || SourceScope.resolve(user_id)
 
@@ -64,8 +70,6 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
        }}
     end
   end
-
-  def run(_user_id, _opts), do: {:error, :invalid_user}
 
   def queue_job(user_id, opts \\ [])
 

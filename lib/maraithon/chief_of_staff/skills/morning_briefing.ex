@@ -337,9 +337,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         record_generation_blocked(user_id, dedupe_key)
         {:idle, %{state | user_id: user_id}}
 
-      Map.get(state.last_generated_keys, "morning") == period_key ->
-        {:idle, %{state | user_id: user_id}}
-
+      # The stored brief is authoritative. An operator can delete today's
+      # briefing for a fresh run while a restored snapshot still remembers it.
       Briefs.exists?(user_id, dedupe_key) ->
         {:idle,
          %{
