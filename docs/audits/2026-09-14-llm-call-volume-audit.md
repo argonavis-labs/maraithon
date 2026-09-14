@@ -117,6 +117,25 @@ Expected end state: roughly 300 to 500 calls a day instead of 2,000, and about
 of a push notification and completions still detected when linked evidence
 arrives. At the current model's prices that is a few dollars a day.
 
+## 4a. Implementation status (Sep 14)
+
+- Items 0, 3, 4, 5, 6, 7, 9, 10 shipped in `824bb123` (revision
+  `maraithon-00323-jzn`): 15-minute heartbeats for discovery and the
+  completion sweep (the discovery interval is now `SOURCE_ACCOUNT_DISCOVERY_INTERVAL_MS`),
+  count-gated Gmail and companion wakes, 15-minute Slack plan and backstop
+  cooldowns, six-hour people-network cutoff, content-only revision digest,
+  12-item discovery partitions, one retry on reasoning jobs, memo only on
+  decisions or daily, pattern-review cooldown, commitment tracker at 12k and
+  medium, brief fingerprint on user-meaningful fields with due-soon-only
+  expiry and top-1 prefetch, and `job_type` / `prompt_kind` on every model
+  call log line.
+- Items 1 and 2 shipped in `91299461`: the exact closure path prompts only
+  todos linked to the delta or overdue for a daily check and records
+  `unlinked_source_evidence` policy receipts for the rest; the backstop memo
+  hashes each todo's linked evidence.
+- Item 8 (event-driven agent wake) is not implemented; it saves acquisition
+  cycles rather than model calls and carries the starvation risk noted above.
+
 ## 5. What must not change
 
 - The source-account fence, one live acquisition per role per account, the
