@@ -42,12 +42,13 @@ extension MaraithonClient {
             }
 
             guard let nextOffset = page.pagination.nextOffset else {
+                let visibleTodos = todos.filter { filter.includes($0) }
                 return CompanionTodosResponse(
-                    todos: todos,
+                    todos: visibleTodos,
                     pagination: CompanionTodoPagination(
                         limit: page.pagination.limit,
                         offset: 0,
-                        count: todos.count,
+                        count: visibleTodos.count,
                         nextOffset: nil
                     )
                 )
@@ -68,7 +69,7 @@ extension MaraithonClient {
         offset: Int
     ) async throws -> CompanionTodosResponse {
         var queryItems = [
-            URLQueryItem(name: "status", value: filter.rawValue),
+            URLQueryItem(name: "status", value: filter.statusParameter),
             URLQueryItem(name: "sort", value: filter.sortParameter),
             URLQueryItem(name: "dir", value: "desc"),
             URLQueryItem(name: "limit", value: "200"),

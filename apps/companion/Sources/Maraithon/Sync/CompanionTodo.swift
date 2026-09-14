@@ -1,10 +1,11 @@
 import Foundation
 import AssistantProgressKit
 
-/// Least-privilege Todo filters exposed by the paired-device API. Raw values
-/// are the server's `status` query values; titles are the tab labels.
+/// Task views use the paired-device API's status filters, with ownership
+/// filtering applied locally after all pages have loaded.
 enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
     case active
+    case tracking
     case snoozed
     case done
     case all
@@ -14,27 +15,34 @@ enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .active: return "Active"
+        case .tracking: return "Tracking"
         case .snoozed: return "Snoozed"
         case .done: return "Completed"
         case .all: return "All tasks"
         }
     }
 
+    var statusParameter: String { self == .tracking ? "active" : rawValue }
+
     /// Open work sorts by rank; history sorts by recency.
     var sortParameter: String {
         switch self {
-        case .active, .snoozed: return "rank"
+        case .active, .tracking, .snoozed: return "rank"
         case .done, .all: return "updated"
         }
     }
 
     func includes(status: String) -> Bool {
         switch self {
-        case .active: return status == "open" || status == "snoozed"
+        case .active, .tracking: return status == "open" || status == "snoozed"
         case .snoozed: return status == "snoozed"
         case .done: return status == "done"
         case .all: return true
         }
+    }
+
+    func includes(_ todo: CompanionTodo) -> Bool {
+        includes(status: todo.status) && (self != .tracking || todo.isOwnedBySomeoneElse)
     }
 }
 
@@ -110,7 +118,9 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     var closedDate: Date? { Self.parseDate(closedAt) }
     var resolutionNote: String? { Self.nonblank(metadata?.resolutionNote) }
 
-    var needsDecision: Bool { decision == true }
+    var isOwnedBySomeoneElse: Bool { workflow?.owner.kind == "person" }
+    var isTracking: Bool { canMarkDone && isOwnedBySomeoneElse }
+    var needsDecision: Bool { decision == true && !isOwnedBySomeoneElse }
 
     var canMarkDone: Bool { status == "open" || status == "snoozed" }
     var canReopen: Bool { status == "done" }

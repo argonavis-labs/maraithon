@@ -33,7 +33,9 @@ struct TodosHeaderView: View {
                         .contentTransition(.numericText())
                         .accessibilityLabel(TodosCopy.resultCount(store.todos.count, filter: store.filter))
                 }
-                Text("A clear next step for everything on your plate.")
+                Text(store.filter == .tracking
+                    ? "Work that matters to you, owned by someone else."
+                    : "A clear next step for everything on your plate.")
                     .font(Tokens.Typography.body)
                     .foregroundStyle(Tokens.Palette.mutedForeground)
                     .padding(.top, Tokens.Spacing.snug)

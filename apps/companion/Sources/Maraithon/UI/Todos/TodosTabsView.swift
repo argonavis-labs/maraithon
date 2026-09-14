@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Active / Snoozed / Completed / All tasks view switcher with the accent
+/// Task view switcher, including work owned by others, with the accent
 /// underline the web tabs use. Switching a tab reloads the store.
 struct TodosTabsView: View {
     @Bindable var store: TodosStore

@@ -22,7 +22,14 @@ final class TodosStore {
     private(set) var loadingDetailIDs: Set<String> = []
     private(set) var detailErrors: [String: String] = [:]
 
-    var filter: TodoListFilter = .active
+    var filter: TodoListFilter = .active {
+        didSet {
+            guard filter != oldValue else { return }
+            loadGeneration += 1
+            todos = []
+            phase = .idle
+        }
+    }
     var query: String = ""
 
     private let client: MaraithonClient
@@ -244,7 +251,7 @@ final class TodosStore {
     }
 
     private func apply(_ todo: CompanionTodo) {
-        if filter.includes(status: todo.status) {
+        if filter.includes(todo) {
             if let index = todos.firstIndex(where: { $0.id == todo.id }) {
                 todos[index] = todo
             } else {

@@ -6,6 +6,7 @@ enum TodosCopy {
         let noun = count == 1 ? "work item" : "work items"
         switch filter {
         case .active: return "\(count) active \(noun)"
+        case .tracking: return "\(count) tracked \(noun)"
         case .snoozed: return "\(count) snoozed \(noun)"
         case .done: return "\(count) completed \(noun)"
         case .all: return "\(count) \(noun)"
@@ -24,6 +25,7 @@ enum TodosCopy {
         }
         switch filter {
         case .active: return "Your open work list is clear"
+        case .tracking: return "No work is being tracked"
         case .snoozed: return "Nothing is snoozed"
         case .done: return "No completed work yet"
         case .all: return "No tasks yet"
@@ -36,6 +38,7 @@ enum TodosCopy {
         }
         switch filter {
         case .active: return "Maraithon will surface commitments when the next move is clear."
+        case .tracking: return "Work owned by someone else will appear here so you can follow its progress."
         case .snoozed: return "Snoozed tasks return here until their review date."
         case .done: return "Completed work will appear here and can be reopened."
         case .all: return "Tasks from your inbox, calendar, and Slack will land here."
@@ -105,12 +108,19 @@ enum TodosCopy {
     }
 
     static func nextActionLabel(_ todo: CompanionTodo) -> String {
-        todo.needsDecision ? "Recommended" : "Next"
+        if todo.isOwnedBySomeoneElse { return "Owner’s next step" }
+        return todo.needsDecision ? "Recommended" : "Next"
     }
 
-    /// The offer pill in the Source column. Nil until the server sends the
-    /// actionability field, so older servers simply show no pill.
+    static func ownershipLabel(_ todo: CompanionTodo) -> String? {
+        guard let workflow = todo.workflow else { return nil }
+        return todo.isOwnedBySomeoneElse ? "Owned by \(workflow.owner.displayName)" : workflow.ballLabel
+    }
+
+    /// Work owned by others shows monitoring rather than an offer to act.
+    /// User-owned work uses the server's actionability label when present.
     static func agentOfferLabel(_ todo: CompanionTodo) -> String? {
+        if todo.isOwnedBySomeoneElse { return todo.isTracking ? "Tracking progress" : nil }
         guard let actionability = todo.agentActionability else { return nil }
         if let label = todo.agentActionLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
@@ -123,6 +133,7 @@ enum TodosCopy {
     }
 
     static func agentOfferTone(_ todo: CompanionTodo) -> RunnerBadge.Tone {
+        if todo.isOwnedBySomeoneElse { return .zinc }
         switch todo.agentActionability {
         case "can_prepare": return .blue
         case "can_execute": return .emerald

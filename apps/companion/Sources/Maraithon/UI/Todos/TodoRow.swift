@@ -94,6 +94,9 @@ struct TodoRow: View {
                 if todo.status != "open" {
                     RunnerBadge(text: TodosCopy.statusLabel(todo.status), tone: TodosCopy.statusTone(todo.status))
                 }
+                if todo.isTracking {
+                    RunnerBadge(text: "Tracking", tone: .zinc)
+                }
                 if todo.needsDecision {
                     RunnerBadge(text: "Decision", tone: .indigo)
                 }
@@ -102,19 +105,20 @@ struct TodoRow: View {
                 }
             }
 
-            if let workflow = todo.workflow {
+            if let workflow = todo.workflow, let ownerLabel = TodosCopy.ownershipLabel(todo) {
                 HStack(spacing: Tokens.Spacing.compact) {
                     Image(systemName: "person.2")
                         .font(Tokens.Typography.caption)
                         .accessibilityHidden(true)
-                    Text(workflow.ballLabel)
+                    Text(ownerLabel)
+                        .foregroundStyle(todo.isOwnedBySomeoneElse ? Tokens.Palette.foreground : Tokens.Palette.mutedForeground)
                     Text("·")
                     Text(workflow.label)
                 }
                 .font(Tokens.Typography.small)
                 .foregroundStyle(Tokens.Palette.mutedForeground)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(workflow.ballLabel). State: \(workflow.label)")
+                .accessibilityLabel("\(ownerLabel). State: \(workflow.label)")
             }
 
             if let move = nextMove {
