@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
   import Ecto.Query
 
   alias Maraithon.AssistantChat.RunRecovery
+  alias Maraithon.LLM.CostMonitor
   alias Maraithon.PrivacyErasure
   alias Maraithon.PrivacyRetention
   alias Maraithon.Repo
@@ -128,7 +129,13 @@ defmodule Maraithon.Runtime.RecurringJobs do
         Config.positive_integer(:privacy_retention_interval_ms, :timer.minutes(15)),
         Config.positive_integer(:privacy_retention_initial_delay_ms, :timer.seconds(20))
       )
-    ]
+    ] ++ cost_monitor_specs()
+  end
+
+  defp cost_monitor_specs do
+    if CostMonitor.enabled?(),
+      do: [interval_spec("llm_cost_monitor", CostMonitor.interval_ms(), :timer.seconds(30))],
+      else: []
   end
 
   @doc "Repairs missing durable schedules while holding transaction-scoped authority."
@@ -159,7 +166,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
         {:error, {:unknown_recurring_job, job_type}}
 
       %{schedule: {:interval, interval_ms}} = spec ->
-        case run_cycle(spec.name) do
+        case run_cycle(spec.name, job) do
           {:error, _reason} = error -> error
           {:ok, result} -> {:ok, result, {:reschedule_in, interval_ms}}
           result -> {:ok, result, {:reschedule_in, interval_ms}}
@@ -348,6 +355,9 @@ defmodule Maraithon.Runtime.RecurringJobs do
   end
 
   defp bounded_schedule_integer(_value, _range, default), do: default
+
+  defp run_cycle("llm_cost_monitor", job), do: CostMonitor.run_once(job)
+  defp run_cycle(name, _job), do: run_cycle(name)
 
   defp run_cycle("insight_notifier"), do: InsightNotifier.run_once()
   defp run_cycle("brief_notifier"), do: BriefNotifier.run_once()

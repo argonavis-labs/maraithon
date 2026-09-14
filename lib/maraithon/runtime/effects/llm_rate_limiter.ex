@@ -338,14 +338,16 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
 
   defp blocked_by_lane(state, now_ms) do
     Map.new([:background, :chat], fn lane ->
-      {lane, max(0, Map.get(state.blocked_until_ms, lane, 0) - now_ms)}
+      {lane, max(0, Map.get(state.blocked_until_ms, lane, now_ms) - now_ms)}
     end)
   end
 
   defp blocked_for_ms(state, bucket, now_ms) do
     lane = lane_for_bucket(bucket)
 
-    max(0, Map.get(state.blocked_until_ms, lane, 0) - now_ms)
+    # Monotonic time has an arbitrary origin and may be negative. An absent
+    # lane has no cooldown; zero would accidentally block it for years.
+    max(0, Map.get(state.blocked_until_ms, lane, now_ms) - now_ms)
   end
 
   defp normalize_retry_after_ms(value) when is_integer(value) and value > 0 do

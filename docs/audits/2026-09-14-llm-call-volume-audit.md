@@ -165,6 +165,97 @@ and a Slack id still match exactly the todos they belong to. Gmail ingest still 
 about three seconds, and a sync that ingested nothing no longer wakes
 anything.
 
+## 4b. Independent follow-up and cost warning (Sep 14, 17:51 UTC)
+
+The cheaper model and lower call volume reduce the bill, but the latest quiet
+period is not proof that the product is working at the projected cost.
+
+Fresh Cloud Logging reads and a read-only Cloud Run execution
+(`maraithon-migrate-l9xnt`, `POOL_SIZE=2`) produced these observations:
+
+| Window or measure | Observed result |
+| --- | --- |
+| 13:00 to 14:00 UTC on revision `00324` | 41 OpenRouter attempts, 40 completed, US$0.065204 in provider-reported charges |
+| Same hour at a constant daily rate | About 960 completed calls and US$1.56/day, versus the earlier baseline of about 2,000 calls and US$87/day |
+| Models in that hour | 39 Muse attempts costing US$0.051880; two Kimi attempts costing US$0.013324 |
+| Revision `00325-tfj` | Created at 14:06:48 UTC and serving 100% of traffic |
+| 14:10 to approximately 17:49 UTC | No model-attempt or model-completion logs, despite recurring work continuing |
+| OpenRouter billing counter at approximately 17:51 UTC | US$7.669780 for the current UTC day, including spend before the cost changes |
+
+The one-hour sample is about 98% cheaper than the previous daily baseline when
+extrapolated. It is not a full-day measurement, and the failed attempt has no
+reported charge. The provider's daily counter is a separate whole-day total;
+it cannot isolate the latest revision. The earlier "under US$1/day" projection
+was based on a shorter window and should not be treated as a settled result.
+
+Production still defaults to Kimi in the deployment environment. Muse comes
+from the user's `assistant_model` setting. Requests without that user binding
+can still use Kimi, as the two calls above show. The warning counts every model
+using the app's OpenRouter key, so those calls are included.
+
+The latest lane-scoped rate limiter also defaults a missing lane's deadline to
+zero, then subtracts `System.monotonic_time/1`. BEAM's monotonic origin may be
+negative, so a lane that has never been rate-limited is incorrectly blocked
+for years. This explains the absence of model attempts and is a regression in
+`5ac7db1a`, not a saving. The local fix treats a missing deadline as no remaining
+cooldown in both admission and status reporting, while retaining separate
+background and chat lanes. A second read-only execution
+(`maraithon-migrate-jn72v`) found 78 relationship-ingestion failures and 16
+completion failures labelled `rate_limited` since 14:10 UTC. All 64 partitions
+were `ready`; this observation alone is not a full runtime-health proof.
+
+The latest revision logged eleven `KeyError: key :reviewed_at not found`
+Agent crashes in the inspected period. The cooldown change added fields to
+new `LocalPatternReview` state but used map-update syntax on restored snapshots
+that lacked those fields. The local follow-up changes that update to
+`Map.merge/2`, which adds the missing fields on first use. There were also
+effect timeouts and rejected requests, failed completion jobs, pending
+discovery reasoning, and no new closure receipts in this window. Deployment
+and a fresh observation of useful model work are still needed before calling
+the latest runtime healthy or treating its near-zero activity as savings.
+
+### Warning implemented, awaiting deployment
+
+Kent selected a fixed **US$3/day projection**, with an email above **US$6** to
+**kent.fenwick@gmail.com**. `Maraithon.LLM.CostMonitor` runs through the existing
+durable recurring-job system every six hours, about four checks per day, plus
+an initial check when monitoring first starts. It reads OpenRouter's
+[current-key billing counters](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key)
+using the app's existing key. It makes no model calls and does not rely on the
+agent-effects spend dashboard, which excludes other workloads.
+
+- Alert when either the provider's current UTC-day total or observed rolling
+  spend exceeds twice the fixed projection. All amounts are USD.
+- Rolling spend uses differences in the provider's cumulative counter over up
+  to 24 hours. It starts collecting at activation and omits the partial interval
+  before the oldest retained sample, normally less than six hours. The daily
+  counter gives immediate coverage during that initial collection period.
+- Keep at most six samples and the last successful email time in the recurring
+  job's encrypted result. Existing lease-fenced settlement persists the state;
+  there is no new table, coordinator, or process-local ownership mechanism.
+- Send through the existing Postmark transport. Retry provider or email
+  failures next cycle, preserve history and the last successful notification,
+  and log the failure explicitly. A failed usage read is never treated as zero.
+- Suppress repeat warnings for 24 hours after a successful send. As with the
+  existing email path, delivery followed by a crash before durable settlement
+  can produce a duplicate on recovery.
+- Keep the assistant running. This is a warning, not a spending cap.
+
+`LLM_PROJECTED_DAILY_USD` defaults to `3.00`; the multiplier is fixed at two.
+The normal deploy script preserves an existing projection or accepts an
+explicit override. Monitoring is enabled in production and stays disabled in
+development. The current US$7.67 daily total would trigger a warning on the
+first successful production check, even if subsequent spend remains low.
+
+Validation: `make build` passed with warnings treated as errors. A manual
+`mix run --no-start` inspection confirmed that a fresh limiter admits work with
+a negative monotonic clock, a background cooldown leaves chat available, and
+the old snapshot shape gains the cooldown fields without crashing. This made
+no provider or database calls. The deploy script passed `bash -n`, and
+`git diff --check` passed. Automated tests were not run under the manual-first
+development policy. The warning, rate-limiter fix, and snapshot fix have not
+been deployed, and email delivery has not been exercised.
+
 ## 5. What must not change
 
 - The source-account fence, one live acquisition per role per account, the

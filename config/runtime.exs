@@ -171,6 +171,16 @@ config :maraithon, MaraithonWeb.Endpoint,
 # =============================================================================
 
 # LLM Provider Configuration
+llm_projected_daily_usd =
+  case System.get_env("LLM_PROJECTED_DAILY_USD", "3.00") |> String.trim() |> Float.parse() do
+    {value, ""} when value > 0 and value <= 10_000 -> value
+    _ -> raise "LLM_PROJECTED_DAILY_USD must be a positive USD amount no greater than 10000"
+  end
+
+config :maraithon, Maraithon.LLM.CostMonitor,
+  enabled: config_env() == :prod,
+  projected_daily_usd: llm_projected_daily_usd
+
 default_openai_model = "gpt-5.4"
 default_openrouter_model = "moonshotai/kimi-k3"
 default_qwen_model = "qwen/qwen3.7-max"

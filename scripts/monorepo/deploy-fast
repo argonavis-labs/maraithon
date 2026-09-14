@@ -132,6 +132,11 @@ push_env="$(jq -r '
 runtime_secrets+="${push_secret_bindings:+,${push_secret_bindings}}"
 common_env+="${push_env:+,${push_env}}"
 
+# Keep the fixed cost projection across deployments. This is an operator
+# budget, not a moving average that should rise when a regression spends more.
+llm_projected_daily_usd="${LLM_PROJECTED_DAILY_USD:-$(env_value "${service_json}" LLM_PROJECTED_DAILY_USD)}"
+common_env+=",LLM_PROJECTED_DAILY_USD=${llm_projected_daily_usd:-3.00}"
+
 if [[ "${migrations_digest}" != "${current_migrations_digest}" ]]; then
   echo "Migration files changed; running the migration job once"
   gcloud run jobs deploy "${service}-migrate" \

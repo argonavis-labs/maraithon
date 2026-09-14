@@ -255,12 +255,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     candidate_refs = state.pending_candidate_refs
     # Recorded on every outcome: a retry ten minutes later with the same
     # inputs rarely differs, and the cooldown reopens the set in six hours.
-    cleared_state = %{
-      state
-      | pending_candidate_refs: [],
+    # Restored snapshots from before the cooldown shipped lack these fields.
+    # Add them on first use instead of crashing the Agent during recovery.
+    cleared_state =
+      Map.merge(state, %{
+        pending_candidate_refs: [],
         reviewed_refs: candidate_refs,
         reviewed_at: DateTime.to_iso8601(context[:timestamp] || DateTime.utc_now())
-    }
+      })
 
     case parse_decisions(response) do
       {:ok, decisions} ->
@@ -286,7 +288,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
       {:error, reason} ->
         _ = Tracing.record_error("local_pattern_review: " <> String.slice(reason, 0, 200))
         Logger.warning("Local pattern review model synthesis failed", reason: reason)
-        # Leave candidates as-is; the next cycle will retry the review.
+        # Leave candidates as-is; new candidates or the cooldown allow a retry.
         {:idle, cleared_state}
     end
   end
