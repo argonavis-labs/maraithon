@@ -234,16 +234,24 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         |> Enum.sort()
         |> review_hash()
 
+      discriminating = discriminating_token_set(open_todos)
+
+      linkable_with_tokens =
+        Enum.map(linkable_evidence, fn item -> {item, evidence_people_tokens([item])} end)
+
       fingerprints =
         Map.new(open_todos, fn todo ->
           linked_hash =
-            linkable_evidence
-            |> Enum.filter(&evidence_item_linked?(todo, &1))
+            linkable_with_tokens
+            |> Enum.filter(fn {item, people} ->
+              evidence_item_linked?(todo, item, people, discriminating)
+            end)
+            |> Enum.map(&elem(&1, 0))
             |> Enum.uniq()
             |> Enum.sort()
             |> review_hash()
 
-          {todo.id, review_hash({2, prompt_todo(todo), shared_hash, linked_hash})}
+          {todo.id, review_hash({3, prompt_todo(todo), shared_hash, linked_hash})}
         end)
 
       last_checks = last_model_checks(user_id, Enum.map(open_todos, & &1.id))
@@ -1460,42 +1468,116 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp linked_model_candidates(user_id, todos, evidence, now) do
     identifiers = evidence_identifiers(evidence)
-    people = evidence_people_text(evidence)
+    people = evidence_people_tokens(evidence)
+    discriminating = discriminating_token_set(todos)
     last_checks = last_model_checks(user_id, Enum.map(todos, & &1.id))
 
     Enum.split_with(todos, fn todo ->
-      evidence_linked?(todo, identifiers) or counterparty_mentioned?(todo, people) or
+      evidence_linked?(todo, identifiers) or
+        counterparty_mentioned?(todo, people, discriminating) or
         exhaustive_check_due?(todo, last_checks, now)
     end)
   end
 
-  defp evidence_people_text(evidence) do
+  # Counterparty labels are generated prose, not identifiers: "Runner
+  # teammate (U0B79L2BQKY)", "Teammate in #cust-uride". Matching them as
+  # substrings let "teammate", "the" and the workspace's own name link any
+  # message to nearly every todo, so the linked-evidence filter passed most
+  # of the pool through to the model anyway. Tokens now have to match whole,
+  # and a token only counts when it can actually tell todos apart: generic
+  # role words are dropped, and so is anything a large share of the open
+  # pool already shares. Ids and addresses always count, however common.
+  @generic_counterparty_tokens MapSet.new(~w(
+    the and for with from that this you your our about into
+    team teammate teammates colleague colleagues coworker contact contacts
+    group channel thread chat message messages email inbox note
+    inc llc ltd corp company new who whoever someone person people
+    slack gmail google calendar imessage sms call meeting dms
+  ))
+
+  @shared_token_pool_ratio 0.1
+  @min_shared_token_todos 2
+
+  defp text_tokens(text) when is_binary(text) do
+    text
+    |> String.downcase()
+    |> String.split(~r/[^\p{L}\p{N}@.]+/u, trim: true)
+    |> Enum.flat_map(fn token ->
+      trimmed = String.trim(token, ".")
+
+      [trimmed | String.split(trimmed, ~r/[@.]/, trim: true)]
+    end)
+    |> Enum.filter(&(String.length(&1) >= 3))
+    |> Enum.uniq()
+  end
+
+  defp text_tokens(_text), do: []
+
+  defp counterparty_tokens(label) when is_binary(label) do
+    label
+    |> text_tokens()
+    |> Enum.reject(&MapSet.member?(@generic_counterparty_tokens, &1))
+  end
+
+  defp counterparty_tokens(_label), do: []
+
+  # An address or an opaque account id names one counterparty however many
+  # todos carry it; a plain word only does while it stays rare in the pool.
+  defp identifier_token?(token) do
+    String.contains?(token, "@") or
+      (String.length(token) >= 8 and Regex.match?(~r/\d/, token) and
+         Regex.match?(~r/\p{L}/u, token))
+  end
+
+  defp discriminating_token_set(todos) do
+    counts =
+      todos
+      |> Enum.flat_map(fn todo -> counterparty_tokens(todo.counterparty_label) end)
+      |> Enum.frequencies()
+
+    limit = max(@min_shared_token_todos, trunc(length(todos) * @shared_token_pool_ratio))
+
+    Enum.reduce(counts, MapSet.new(), fn {token, count}, acc ->
+      if count <= limit or identifier_token?(token), do: MapSet.put(acc, token), else: acc
+    end)
+  end
+
+  # Who sent it identifies a counterparty; what it is about does not. A plain
+  # word has to match the sender, so a subject full of shared project words
+  # cannot link a message to work it has nothing to do with. Ids and
+  # addresses still count wherever they appear, including as a mention.
+  defp evidence_people_tokens(evidence) do
     evidence
     |> Enum.reject(fn item -> read_string(item, "channel", nil) == "source_health" end)
-    |> Enum.flat_map(fn item ->
-      [read_string(item, "sender", nil), read_string(item, "subject", nil)]
+    |> Enum.reduce(%{sender: MapSet.new(), any: MapSet.new()}, fn item, acc ->
+      sender = item |> read_string("sender", nil) |> text_tokens()
+      subject = item |> read_string("subject", nil) |> text_tokens()
+
+      %{
+        sender: Enum.into(sender, acc.sender),
+        any: subject |> Enum.into(acc.any) |> then(&Enum.into(sender, &1))
+      }
     end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" ")
-    |> String.downcase()
   end
 
-  defp counterparty_mentioned?(%Todo{counterparty_label: label}, people)
-       when is_binary(label) and people != "" do
-    tokens =
-      label
-      |> String.downcase()
-      |> String.split(~r/[^\p{L}\p{N}@.]+/u, trim: true)
-      |> Enum.filter(&(String.length(&1) >= 3))
-
-    tokens != [] and Enum.any?(tokens, &String.contains?(people, &1))
+  defp counterparty_mentioned?(%Todo{counterparty_label: label}, people, discriminating) do
+    label
+    |> counterparty_tokens()
+    |> Enum.any?(fn token ->
+      MapSet.member?(discriminating, token) and
+        MapSet.member?(matchable_tokens(people, token), token)
+    end)
   end
 
-  defp counterparty_mentioned?(_todo, _people), do: false
+  defp counterparty_mentioned?(_todo, _people, _discriminating), do: false
+
+  defp matchable_tokens(%{sender: sender, any: any}, token) do
+    if identifier_token?(token), do: any, else: sender
+  end
 
   # Item-level linkage for the backstop memo: the same thread or source item,
   # the same account and subject, or the todo's counterparty named in it.
-  defp evidence_item_linked?(%Todo{} = todo, item) when is_map(item) do
+  defp evidence_item_linked?(%Todo{} = todo, item, people, discriminating) when is_map(item) do
     channel = read_string(item, "channel", nil)
 
     ids =
@@ -1520,10 +1602,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       end
 
     id_linked? or counterparty_label_linked?(todo, label_items) or
-      counterparty_mentioned?(todo, evidence_people_text([item]))
+      counterparty_mentioned?(todo, people, discriminating)
   end
 
-  defp evidence_item_linked?(_todo, _item), do: false
+  defp evidence_item_linked?(_todo, _item, _people, _discriminating), do: false
 
   defp exhaustive_check_due?(todo, last_checks, now) do
     case Map.get(last_checks, todo.id) do
