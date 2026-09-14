@@ -1313,17 +1313,37 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
   defp normalize_content(_content), do: ""
 
+  # Endpoints that answer `reasoning: {enabled: false}` with HTTP 400
+  # ("Reasoning is mandatory for this endpoint and cannot be disabled").
+  # For them the cheapest legal opt-out is the lowest effort.
+  @reasoning_mandatory_model_prefixes ["meta/muse-"]
+
   defp maybe_put_reasoning(body, params) do
     case reasoning_value(params) do
       nil -> body
       # Hybrid-thinking models (qwen3.x) reason by default when the field is
       # omitted; "none" must be an explicit opt-out or chat-tier calls burn
       # a full hidden thinking phase per turn.
-      :disabled -> Map.put(body, :reasoning, %{enabled: false})
-      %{} = reasoning -> Map.put(body, :reasoning, reasoning)
+      :disabled -> Map.put(body, :reasoning, reasoning_opt_out(body.model))
+      %{} = reasoning -> Map.put(body, :reasoning, reasoning_for_model(reasoning, body.model))
       effort -> Map.put(body, :reasoning, %{effort: effort})
     end
   end
+
+  defp reasoning_for_model(%{enabled: false} = reasoning, model) do
+    if reasoning_mandatory?(model), do: reasoning_opt_out(model), else: reasoning
+  end
+
+  defp reasoning_for_model(reasoning, _model), do: reasoning
+
+  defp reasoning_opt_out(model) do
+    if reasoning_mandatory?(model), do: %{effort: "low"}, else: %{enabled: false}
+  end
+
+  defp reasoning_mandatory?(model) when is_binary(model),
+    do: Enum.any?(@reasoning_mandatory_model_prefixes, &String.starts_with?(model, &1))
+
+  defp reasoning_mandatory?(_model), do: false
 
   defp reasoning_value(%{"reasoning" => %{} = reasoning}), do: atomize_known_reasoning(reasoning)
 
