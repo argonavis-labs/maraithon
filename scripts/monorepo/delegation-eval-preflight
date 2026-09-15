@@ -3,24 +3,13 @@ set -euo pipefail
 
 # Read-only checks run on Cloud Run with the deployed image and Secret Manager
 # bindings. No laptop database access or provider credentials enter CI output.
-revision="$(gcloud run services describe maraithon --project maraithon --region us-central1 \
-  --format='value(status.latestReadyRevisionName)')"
-image="$(gcloud run revisions describe "${revision}" --project maraithon --region us-central1 \
-  --format='value(status.imageDigest)')"
-if [[ "${image}" != us-central1-docker.pkg.dev/maraithon/*@sha256:* ]]; then
-  echo "The serving image could not be pinned for the eval job" >&2
-  exit 1
-fi
-
-# The fast deploy updates the serving service, not the optional validation job.
-gcloud run jobs update maraithon-todo-validation --project maraithon --region us-central1 \
-  --image "${image}" --quiet
+source "$(dirname "$0")/delegation-eval-config"
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 gcloud run jobs execute maraithon-todo-validation \
   --project maraithon --region us-central1 \
   --args='^@^eval@Maraithon.Release.delegation_eval_preflight' \
-  --update-env-vars POOL_SIZE=2 --wait --quiet
+  --update-env-vars "${eval_env}" --wait --quiet
 
 for attempt in $(seq 1 20); do
   report="$(gcloud logging read \

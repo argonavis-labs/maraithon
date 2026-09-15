@@ -90,7 +90,15 @@ When a decision cites evidence outside the last six messages, the read-only tool
 
 The ledger is capped at 32 KiB, with 28 KB available to facts and room reserved for existing outcome and booking notes. A turn may update eight facts and recall six older messages totalling at most 128 KB. PromptBudget enforces a 64 KB prompt ceiling. Limits hold visibly; they do not silently truncate facts. Decision wake events now carry only the kind and user question because the reviewed decision is already stored on the turn.
 
-The server build and 105 focused checks passed. A simulated turn 180 days later used its stored fact, fetched one cited message, and passed independent review with the usual two model calls. Replaying the leased worker made no additional provider or model calls. Other checks cover rejected facts, corrections, explicit removal, size limits, foreign mailboxes, missing messages, changed evidence before sending, preserved Gmail signatures, and local Slack channel and DM reads. These fixtures do not prove whole-app recovery or a real six-month conversation. Live verification of the new memory path is pending.
+The server build and 106 distinct focused checks passed. The initial run passed 105 checks; after preserving the original account in outcome citations, the 62-check follow-up included one new case. A simulated turn 180 days later used its stored fact, fetched one cited message, and passed independent review with the usual two model calls. Replaying the leased worker made no additional provider or model calls. Other checks cover rejected facts, corrections, explicit removal, size limits, foreign mailboxes, missing messages, changed evidence before sending, preserved Gmail signatures, and local Slack channel and DM reads. These fixtures do not prove whole-app recovery or a real six-month conversation.
+
+Commits `5adf1c58` and `3e9ad3f5` deployed through workflow `35035265999` to revision `maraithon-00377-xkw`. The first live memory attempt, `maraithon-todo-validation-kts9t`, stopped at preflight with zero messages. Its validation job still had an old model and lacked the serving app's delegation flags. The serving app retained Muse and the controlled Gmail gate. Live verification of learned memory remains pending.
+
+## Controlled eval configuration and sending hours
+
+The eval commands now share a configuration reader that pins the serving image and copies only the relevant non-secret model, spending, and delegation settings. They also pass the selected actor, clear stale model fallbacks, and disable automatic container retries. Starting an eval no longer changes the serving app's rollout gates. A local configuration fixture verified model selection, comma-separated allowlists, disabled gates, omitted secrets, and the default US$3 projection.
+
+The saved sending hours are 08:00 to 18:00 Eastern on weekdays. A live eval started in the evening now queues for the next working window, and its one-hour deadline starts there. A late-day start without a full hour also waits. This uses the existing durable background job schedule and leaves user preferences and send checks intact. The server build and two focused evaluation checks passed, including the weekend daylight-saving transition and short working windows. The memory eval still needs to finish with real provider evidence.
 
 ## Previously verified
 

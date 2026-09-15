@@ -4,6 +4,32 @@ defmodule Maraithon.Delegations.Evaluation do
   alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.Delegations.{Preferences, Scheduling}
 
+  @doc "Leave one working hour for the live fixture, including its normal undo windows."
+  def window(now, prefs) do
+    {:ok, first} = Time.from_iso8601(prefs["work_start"] <> ":00")
+    {:ok, last} = Time.from_iso8601(prefs["work_end"] <> ":00")
+
+    if Time.diff(last, first) < 3600 do
+      {:error, :eval_work_window_too_short}
+    else
+      start = Preferences.next_work_time(now, prefs)
+      deadline = DateTime.add(start, 1, :hour)
+
+      if Time.diff(last, DateTime.to_time(Preferences.local_time(start, prefs))) >= 3600 do
+        {:ok, start, deadline}
+      else
+        next =
+          Preferences.local_time(start, prefs)
+          |> DateTime.to_date()
+          |> Date.add(1)
+          |> Preferences.from_local(~T[00:00:00], prefs)
+          |> Preferences.next_work_time(prefs)
+
+        {:ok, next, DateTime.add(next, 1, :hour)}
+      end
+    end
+  end
+
   @doc "Check the actual recipient's offered dates and wording before the fixture accepts a time."
   def verify_offer(scenario, slots, body, requested_at, actor \\ "as_user") do
     valid =

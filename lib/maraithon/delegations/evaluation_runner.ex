@@ -28,7 +28,9 @@ defmodule Maraithon.Delegations.EvaluationRunner do
          %{"account_id" => sender_id} <-
            Enum.find(report["accounts"], &(&1["email"] == @counterparty)),
          {:ok, %{"email" => @counterparty} = sender_identity} <-
-           Maraithon.AssistantIdentities.gmail_snapshot(@user, "as_user", sender_id) do
+           Maraithon.AssistantIdentities.gmail_snapshot(@user, "as_user", sender_id),
+         {:ok, scheduled_at, deadline} <-
+           Evaluation.window(DateTime.utc_now(), Maraithon.Delegations.Preferences.get(@user)) do
       accounts = Map.new(report["accounts"], &{&1["email"], &1["account_id"]})
       id = Ecto.UUID.generate()
 
@@ -38,7 +40,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         "sender_account_id" => accounts[@counterparty],
         "sender_identity" => sender_identity,
         "owner_account_id" => accounts[@user],
-        "deadline" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 60, :minute)),
+        "deadline" => DateTime.to_iso8601(deadline),
         "subject" => "[Maraithon eval] #{scenario_id} #{id}"
       }
 
@@ -52,14 +54,16 @@ defmodule Maraithon.Delegations.EvaluationRunner do
             partition_key: "delegation-eval:#{@user}",
             rate_limit_key: "google",
             max_attempts: 3,
+            scheduled_at: scheduled_at,
             dedupe_key: "delegation-eval:#{id}",
             payload: payload
           })
 
-        %{job_id: job.id, scenario: scenario_id, phase: "queued"}
+        %{job_id: job.id, scenario: scenario_id, phase: "queued", scheduled_at: scheduled_at}
       end)
     else
       {:error, :account_cost_hold} = error -> error
+      {:error, :eval_work_window_too_short} = error -> error
       _ -> {:error, :eval_preflight_required}
     end
   end
@@ -102,7 +106,14 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     )
     |> Enum.map(fn row ->
       job = BackgroundJob.hydrate_payloads(row)
-      %{job_id: job.id, status: job.status, result: job.result, error: job.last_error}
+
+      %{
+        job_id: job.id,
+        status: job.status,
+        scheduled_at: job.scheduled_at,
+        result: job.result,
+        error: job.last_error
+      }
     end)
   end
 
