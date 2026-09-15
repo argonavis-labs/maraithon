@@ -45,7 +45,8 @@ final class TodoConversationStore {
     var isThinking: Bool { run?.isActive == true || thread?.pendingRun?.isActive == true }
 
     func delegationRequest(path: String, input: TodoDelegation.Request?) async throws -> TodoDelegation.Response {
-        try await client.delegationRequest(path: path, input: input)
+        do { return try await client.delegationRequest(path: path, input: input) }
+        catch { throw TodoDelegation.Failure(CompanionErrorCopy.message(for: error)) }
     }
 
     var runStartedAt: Date? {

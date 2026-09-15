@@ -172,7 +172,8 @@ struct TodoDetailView: View {
 
     private func delegationRequest(path: String, input: TodoDelegation.Request?) async throws -> TodoDelegation.Response {
         guard let token = sessionStore.user?.sessionToken else { throw MobileAPIError.unauthorized }
-        return try await MobileAPIClient().delegationRequest(sessionToken: token, path: path, input: input)
+        do { return try await MobileAPIClient().delegationRequest(sessionToken: token, path: path, input: input) }
+        catch { throw TodoDelegation.Failure(MobileErrorCopy.message(for: error)) }
     }
 
     @MainActor private func refreshDelegatedTodo() async {
