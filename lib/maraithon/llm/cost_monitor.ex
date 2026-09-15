@@ -84,10 +84,7 @@ defmodule Maraithon.LLM.CostMonitor do
         _ -> samples
       end
 
-    samples =
-      (samples ++ [%{"at" => timestamp, "total" => usage.total}])
-      |> Enum.filter(&(&1["at"] >= timestamp - @day_seconds and &1["at"] <= timestamp))
-      |> Enum.take(-@max_samples)
+    samples = window_samples(samples, timestamp, usage.total)
 
     first = hd(samples)
     rolling = max(usage.total - first["total"], 0)
@@ -103,10 +100,29 @@ defmodule Maraithon.LLM.CostMonitor do
       "daily_cost_usd" => usage.daily,
       "rolling_cost_usd" => rolling,
       "rolling_since" => first["at"],
+      "rolling_coverage_seconds" => timestamp - first["at"],
+      "rolling_window" =>
+        if(timestamp - first["at"] >= @day_seconds, do: "upper_bound", else: "partial"),
       "projected_daily_usd" => projection,
       "threshold_usd" => 2 * projection
     })
     |> Map.delete("failure_code")
+  end
+
+  @doc false
+  def window_samples(samples, timestamp, total) do
+    cutoff = timestamp - @day_seconds
+    history = Enum.filter(samples, &(&1["at"] <= timestamp)) |> Enum.sort_by(& &1["at"])
+    {older, recent} = Enum.split_while(history, &(&1["at"] < cutoff))
+
+    # Six-hour schedules drift. Dropping the sample just before the boundary
+    # silently turns a 24-hour check into an 18-hour check. Keep that anchor and
+    # label the interval honestly as a conservative upper bound.
+    anchor = if Enum.any?(recent, &(&1["at"] == cutoff)), do: [], else: Enum.take(older, -1)
+
+    anchor ++
+      Enum.take(recent, -(@max_samples - length(anchor) - 1)) ++
+      [%{"at" => timestamp, "total" => total}]
   end
 
   defp maybe_notify(state, now) do
@@ -179,8 +195,10 @@ defmodule Maraithon.LLM.CostMonitor do
 
     These amounts come from OpenRouter's billing counter for Maraithon's API key,
     including billed attempts that failed or were rejected by the app. Rolling
-    history covers up to 24 hours with six hours between checks; today's total also
-    works immediately after monitoring starts. All models using this key count.
+    checks use six-hour samples. Once history covers a day, the rolling amount
+    includes the sample just before the 24-hour boundary, so it can cover slightly
+    more than a day and warn conservatively. Before then it covers the available
+    history. The exact interval starts at the time above. All models using this key count.
 
     Review model and request activity at https://openrouter.ai/activity.
     Maraithon continues running. This warning does not stop your assistant.
