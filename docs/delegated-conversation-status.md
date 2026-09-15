@@ -43,7 +43,7 @@ Commit `bb66b0dd` excludes assistant accounts from personal chat context, user-m
 
 Commit `d453c00e` implements the saved first-message copy setting. The grant preview shows the source user's address; the first prepared email freezes that Cc, and later sends omit it unless the user explicitly added a permanent Cc. A manual reply from the source user pauses an assistant conversation and cannot prove the counterparty's outcome. The controlled eval gate also validates the extra recipient. The focused policy, gate, and ingress run passed 47 checks, the preview and isolation run passed nine checks, and the server build passed. Server deployment `35001963170` passed, serving revision `maraithon-00349-xpk`. The shared native preview in `2aa70f8e` passed signed Mac and iPhone builds. The signed Mac app is installed; iPhone release `35002441909` passed.
 
-This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes account-specific voice and an audit of other direct provider read paths. October connected on September 15; live actor verification is still required.
+This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes account-specific voice and an audit of other direct provider read paths. October connected on September 15; live actor verification still needs Google's sending permission.
 
 ## Conflict recovery and retention
 
@@ -79,9 +79,15 @@ Server workflow `35007994634` passed, serving revision `maraithon-00353-79v`. iP
 
 Kent connected `october@ewakened.com`, account 9. Web verified its sending address and saved the assistant name October with the mailbox signature, AI disclosure enabled, and first-message Cc left off. Mac loaded the same identity.
 
-The eval extension supports the frozen actor and permits October only as the assistant sender on labelled Kent-pair conversations. Preflight checks its verified identity, sending scope, and exclusion from personal source accounts. The reply fixture resolves the latest executed send into the recipient's actual mailbox by RFC Message-ID, then replies in that mailbox's thread. It checks the sender address, display name, and frozen signature before replying. The server build and 12 focused gate, offer, and isolation tests passed. The leased fixture retry check also passed, confirming that replay does not send the initial email twice. This extension still needs deployment and a live assistant run.
+The eval extension supports the frozen actor and permits October only as the assistant sender on labelled Kent-pair conversations. Preflight checks its verified identity, sending scope, and exclusion from personal source accounts. The reply fixture resolves the latest executed send into the recipient's actual mailbox by RFC Message-ID, then replies in that mailbox's thread. It checks the sender address, display name, and frozen signature before replying. The server build and 12 focused gate, offer, and isolation tests passed. The leased fixture retry check also passed, confirming that replay does not send the initial email twice. This extension deployed in revision `maraithon-00355-ftz`, workflow `35010181018`.
 
 The read-path audit found that `OAuth.get_token(user, "google")` could fall back to an assistant mailbox. The default lookup now excludes assistant providers while exact bound access remains available. Eleven isolation checks and 39 OAuth checks passed, along with the server build. Older OAuth fixtures now create real test users so the existing privacy fence can run; their assertions were preserved.
+
+The first assistant attempt stopped before enqueueing the conversation. The production reader verified October's account, sending address, display name, disclosure, and assistant classification, but its five Google scopes include only read access to Gmail, Calendar, and Contacts plus account identification. No accepted Gmail sending scope is present. Both Kent accounts and the Muse model passed preflight. This attempt sent no messages, created no events, made no model calls, and incurred no LLM cost. [Permission evidence](evidence/delegated-conversations/2026-09-15-october-permissions.json).
+
+Commit `4728607c` moves the same send-permission check into normal delegation identity preparation, before source reading or model work. Web, Mac, and iPhone receive a shared warning when the selected mailbox cannot send. Settings may still save the identity, and the warning clears when Google grants sending permission. The server build and 13 focused checks passed, including both native authentication paths and the web warning. Workflow `35011567883` deployed revision `maraithon-00356-6l2` successfully. October's Google sign-in is open for Kent to finish and grant Gmail compose access.
+
+Kent's connector screenshot showed why this was confusing: the row said Healthy and listed five permissions without saying that Gmail was read-only. Commit `0056f910` names read and send access on each Google account, adds an Enable Gmail sending action for missing access, and flags October's missing permission. Its consent URL includes the exact account and assistant purpose. Assistant reconnects also preserve that purpose and request compose access. The server build and four connector controller checks passed, including disappearance of the action after sending is granted. Workflow `35012173010` deployed revision `maraithon-00357-fmg` successfully. Production web verification showed the missing-permission message and the account-specific consent link on October's row; all three Kent accounts showed Gmail sending and calendar booking access. The assistant eval remains pending Google's consent.
 
 ## Personal and work accounts
 
@@ -95,7 +101,7 @@ The 18:47 to 18:48 UTC sample again found all 64 partitions ready with live leas
 
 ## Remaining work
 
-1. Deploy the October eval extension and run the assistant conversation. The Kent-pair information, regular scheduling, and busy-slot evals have passed.
+1. Finish Google's sending consent for October and run the assistant conversation. The extension is deployed; the Kent-pair information, regular scheduling, and busy-slot evals have passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.

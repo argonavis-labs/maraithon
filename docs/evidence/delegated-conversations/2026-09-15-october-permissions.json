@@ -1,0 +1,64 @@
+{
+  "date": "2026-09-15",
+  "revision": "maraithon-00355-ftz",
+  "start_execution": "maraithon-todo-validation-bndlp",
+  "reader_execution": "maraithon-todo-validation-54qzt",
+  "outcome": "stopped_before_enqueue",
+  "reason": "assistant_gmail_sending_permission_required",
+  "preflight": {
+    "accounts": [
+      {
+        "account_id": 2,
+        "email": "kent@runner.now",
+        "status": "ready"
+      },
+      {
+        "account_id": 1,
+        "email": "kent.fenwick@gmail.com",
+        "status": "ready"
+      }
+    ],
+    "accounts_ready": false,
+    "actor": "as_assistant",
+    "assistant": {
+      "status": "assistant_setup_required"
+    },
+    "events_created": 0,
+    "execution_ready": true,
+    "expected_model": "meta/muse-spark-1.3-contributor",
+    "live_eval_passed": false,
+    "messages_sent": 0,
+    "model": "meta/muse-spark-1.3-contributor",
+    "model_calls": 0,
+    "model_ready": true,
+    "phase": "preflight"
+  },
+  "assistant_account": {
+    "id": 9,
+    "status": "connected",
+    "provider": "google:october@ewakened.com",
+    "assistant": true,
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "openid",
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+  },
+  "verified_identity": {
+    "account_id": 9,
+    "actor": "as_assistant",
+    "assistant_identity_id": "564e71ef-a826-421b-8fae-7751ae756a80",
+    "disclose_ai": true,
+    "display_name": "October",
+    "email": "october@ewakened.com",
+    "provider": "google:october@ewakened.com"
+  },
+  "model_calls": 0,
+  "messages_sent": 0,
+  "events_created": 0,
+  "cost_micro_usd": 0,
+  "required_scope": "https://www.googleapis.com/auth/gmail.compose",
+  "note": "The identity and mailbox are connected. The account has Gmail read access and lacks all accepted Gmail sending scopes. The live conversation has not run."
+}
