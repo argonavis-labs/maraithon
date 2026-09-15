@@ -36,6 +36,16 @@ The direct-read audit found that the legacy Gmail connector and Calendar's defau
 
 The server build and all 14 assistant-isolation checks passed. The new cases cover direct Gmail lists, messages, threads and history, Calendar sync and upcoming events, an assistant-only connection, choosing the personal account when both exist, and retaining explicit assistant evidence reads. Four existing leased Gmail send-and-recovery regression cases also passed. These were local provider fixtures with no live messages or model calls. Commit `b30e9ee7` deployed through workflow `35027028412`; revision `maraithon-00371-lxr` is ready. Production still uses Muse Spark Contributor, the Gmail eval restriction, disabled Slack autonomous sends, and active development spending.
 
+## Authored voice samples
+
+Gmail and Slack now share a voice-sample cleaner. Gmail requires Sent mail from the bound mailbox's primary or verified send-as addresses; assistant accounts and the configured assistant alias are excluded. Slack verifies the token's live member and workspace, then checks those fields on every search result. Search terms and caller-supplied sample text cannot substitute for sender evidence.
+
+The cleaner removes recognised reply quotes, wrapped reply headers, configured signatures, mobile footers and confidentiality notices. It excludes forwarded and automated messages, missing authors or dates, and known Maraithon sends. HTML-only mail is rendered without link-attribute annotations. Profiles record removal and exclusion counts. Generated-send history is a bounded, authenticated read of prepared actions. More than 128 candidate actions or a purged action holds the refresh instead of silently dropping provenance.
+
+Older profiles without the cleaning version, failed refreshes, and successful JSON responses without actual guidance use explicit style instructions. Assistant turns retain their house style. This adds no provider or model calls to a delegated turn; collection runs only on voice refresh. Recognition of signature and quote formats is deterministic, not a claim that every possible mail-client format is covered.
+
+The server build and 23 focused local checks passed. They cover both providers' authorship, quoted and generated evidence, signatures, account isolation, draft and turn selection, history overflow, and a real prepared-action retention purge under the exact runtime. No live messages or paid model calls were made for these checks.
+
 ## Previously verified
 
 - A real information conversation between `kent@runner.now` and `kent.fenwick@gmail.com` reached Done with the counterparty reply as evidence. Two turns used four Muse calls and cost US$0.001421. [Live evidence](evidence/delegated-conversations/2026-09-15-live-information.json).
@@ -198,7 +208,7 @@ The completed information task is visible on the authenticated web app as Comple
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
-2. Finish voice sample cleaning and bound-author checks, including quotes, forwards, signatures, boilerplate, automated messages, and Slack self-authorship. Assistant identity, signatures, and account isolation now have live Gmail evidence.
+2. Verify the cleaned voice sampler against live mailbox evidence. The pilot's authored-sample checks pass locally; incremental learning and profile promotion remain a separate spec.
 3. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
 4. Add delegation proposals. Brief reporting is deployed and verified against production records.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.

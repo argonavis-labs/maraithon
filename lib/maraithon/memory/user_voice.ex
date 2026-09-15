@@ -9,6 +9,7 @@ defmodule Maraithon.Memory.UserVoice do
   alias Maraithon.{AssistantIdentities, Repo}
   alias Maraithon.Connectors.Slack
   alias Maraithon.Memory
+  alias Maraithon.Memory.VoiceSamples
   alias Maraithon.Memory.Item
   alias Maraithon.Tools.GmailHelpers
   alias Maraithon.Tools.SlackHelpers
@@ -44,7 +45,7 @@ defmodule Maraithon.Memory.UserVoice do
   def prompt_context(user_id, channel, opts \\ [])
 
   def prompt_context(user_id, channel, opts) when is_binary(user_id) do
-    case get_profile(user_id, channel, opts) do
+    case get_profile(user_id, channel, opts) |> verified_profile() do
       {:ok, %Item{} = item} ->
         %{
           "status" => "available",
@@ -81,7 +82,7 @@ defmodule Maraithon.Memory.UserVoice do
   def refresh_from_connectors(user_id, channel, opts) when is_binary(user_id) and is_list(opts) do
     with {:ok, channel} <- normalize_channel(channel),
          {:ok, _scope} <- profile_scope(user_id, channel, opts),
-         {:ok, samples, source_counts} <- collect_samples(user_id, channel, opts) do
+         {:ok, samples, source_counts} <- collect_connector_samples(user_id, channel, opts) do
       refresh_profile(
         user_id,
         channel,
@@ -91,6 +92,17 @@ defmodule Maraithon.Memory.UserVoice do
   end
 
   def refresh_from_connectors(_user_id, _channel, _opts), do: {:error, :invalid_user}
+
+  defp verified_profile({:ok, item} = result) do
+    metadata = item.metadata || %{}
+
+    if metadata["sample_cleaning_version"] == VoiceSamples.version() and
+         is_nil(metadata["fallback_reason"]),
+       do: result,
+       else: {:error, :voice_profile_needs_refresh}
+  end
+
+  defp verified_profile(error), do: error
 
   def refresh_profile(user_id, channel, opts \\ [])
 
@@ -153,37 +165,22 @@ defmodule Maraithon.Memory.UserVoice do
     end
   end
 
-  defp collect_samples(user_id, channel, opts) do
-    explicit = normalize_samples(Keyword.get(opts, :sample_texts, []))
-
-    if explicit == [] do
-      collect_connector_samples(user_id, channel, opts)
-    else
-      {:ok, explicit, %{"explicit" => length(explicit)}}
-    end
-  end
-
   defp collect_connector_samples(user_id, "gmail", opts) do
     max_samples = max_samples(opts)
     query = Keyword.get(opts, :gmail_query) || "from:me newer_than:#{lookback_days(opts)}d"
 
-    case GmailHelpers.list_messages(user_id,
-           query: query,
-           max_results: max_samples,
-           label_ids: [],
-           provider: Keyword.get(opts, :provider)
-         ) do
-      {:ok, messages} ->
-        samples =
-          messages
-          |> Enum.filter(&human_gmail_sample?/1)
-          |> Enum.map(&gmail_sample_text/1)
-          |> normalize_samples()
-
-        {:ok, samples, %{"gmail" => length(samples)}}
-
-      {:error, reason} ->
-        {:error, {:gmail_voice_scan_failed, reason}}
+    with {:ok, messages} <-
+           GmailHelpers.list_messages(user_id,
+             query: query,
+             max_results: max_samples,
+             label_ids: ["SENT"],
+             provider: Keyword.get(opts, :provider)
+           ),
+         {:ok, identities} <- VoiceSamples.gmail_identities(user_id, messages),
+         {:ok, writes} <- VoiceSamples.generated_writes(user_id, "gmail", messages) do
+      VoiceSamples.collect(messages, "gmail", identities, writes)
+    else
+      {:error, reason} -> {:error, {:gmail_voice_scan_failed, reason}}
     end
   end
 
@@ -211,24 +208,34 @@ defmodule Maraithon.Memory.UserVoice do
     with {:ok, token} <-
            SlackHelpers.resolve_access_token(user_id, team_id,
              token_preference: "user",
-             slack_user_id: slack_user_id
+             slack_user_id: slack_user_id,
+             strict_identity?: is_binary(slack_user_id),
+             required_scopes: ["search:read"]
            ),
+         {:ok, auth} <- Maraithon.OAuth.Slack.api_request(:post, "auth.test", token.access_token),
+         true <-
+           auth["team_id"] == team_id and is_binary(auth["user_id"]) and is_nil(auth["bot_id"]),
+         true <- token.provider == "slack:#{team_id}:user:#{auth["user_id"]}",
+         true <- is_nil(slack_user_id) or slack_user_id == auth["user_id"],
          {:ok, response} <-
            Slack.search_messages(token.access_token, query,
              count: max_samples(opts),
              sort: "timestamp",
              sort_dir: "desc"
            ) do
-      samples =
-        response
-        |> get_in(["messages", "matches"])
-        |> normalize_list()
-        |> Enum.map(&Map.get(&1, "text"))
-        |> normalize_samples()
+      messages = response |> get_in(["messages", "matches"]) |> normalize_list()
 
-      {:ok, samples, %{"slack" => length(samples)}}
+      with {:ok, writes} <- VoiceSamples.generated_writes(user_id, "slack", messages) do
+        VoiceSamples.collect(
+          messages,
+          "slack",
+          %{"slack" => %{"authors" => [auth["user_id"]], "team" => team_id}},
+          writes
+        )
+      end
     else
       {:error, reason} -> {:error, {:slack_voice_scan_failed, reason}}
+      _ -> {:error, :voice_identity_unavailable}
     end
   end
 
@@ -236,7 +243,7 @@ defmodule Maraithon.Memory.UserVoice do
     prompt = profile_prompt(channel, samples)
 
     case complete_profile(prompt, Keyword.get(opts, :llm_complete)) do
-      {:ok, profile} -> {:ok, normalize_profile(profile, channel, samples)}
+      {:ok, profile} -> {:ok, normalize_profile(profile)}
       {:error, reason} -> {:ok, fallback_profile(channel, samples, reason)}
     end
   end
@@ -294,13 +301,18 @@ defmodule Maraithon.Memory.UserVoice do
     |> strip_json_fence()
     |> Jason.decode()
     |> case do
-      {:ok, %{} = profile} -> {:ok, profile}
-      _ -> {:error, :invalid_json}
+      {:ok, %{} = profile} ->
+        if read_string(profile, "content"),
+          do: {:ok, profile},
+          else: {:error, :missing_voice_profile_content}
+
+      _ ->
+        {:error, :invalid_json}
     end
   end
 
-  defp normalize_profile(profile, channel, samples) do
-    content = read_string(profile, "content") || fallback_content(channel, samples)
+  defp normalize_profile(profile) do
+    content = read_string(profile, "content")
     summary = read_string(profile, "summary") || String.slice(content, 0, 240)
 
     %{
@@ -369,6 +381,7 @@ defmodule Maraithon.Memory.UserVoice do
           "channel" => channel,
           "account_id" => scope.account_id,
           "sample_count" => length(samples),
+          "sample_cleaning_version" => VoiceSamples.version(),
           "source_counts" => source_counts,
           "refreshed_at" => DateTime.to_iso8601(now),
           "do" => profile["do"] || [],
@@ -379,28 +392,6 @@ defmodule Maraithon.Memory.UserVoice do
       },
       source: "user_voice"
     )
-  end
-
-  defp human_gmail_sample?(message) do
-    labels = Map.get(message, :labels, Map.get(message, "labels", [])) || []
-
-    generated? =
-      Enum.any?([:internet_message_id, :original_internet_message_id], fn key ->
-        id = Map.get(message, key, Map.get(message, Atom.to_string(key), "")) || ""
-        String.starts_with?(String.downcase(String.trim(id)), "<maraithon.")
-      end)
-
-    "SENT" in labels and "DRAFT" not in labels and not generated?
-  end
-
-  defp gmail_sample_text(message) when is_map(message) do
-    [
-      read_string(message, :subject) || read_string(message, "subject"),
-      read_string(message, :text_body) || read_string(message, "text_body"),
-      read_string(message, :snippet) || read_string(message, "snippet")
-    ]
-    |> Enum.reject(&blank?/1)
-    |> Enum.join("\n")
   end
 
   defp normalize_samples(samples) when is_list(samples) do

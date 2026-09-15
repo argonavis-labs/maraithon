@@ -134,7 +134,11 @@ defmodule Maraithon.Memory.UserVoiceTest do
     for {id, labels, body, message_id, original_id} <- messages do
       Bypass.expect_once(bypass, "GET", "/users/me/messages/#{id}", fn conn ->
         assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer voice-work"]
-        headers = [%{"name" => "Message-ID", "value" => message_id}]
+
+        headers = [
+          %{"name" => "Message-ID", "value" => message_id},
+          %{"name" => "From", "value" => "Kent <work@example.invalid>"}
+        ]
 
         headers =
           if original_id,
@@ -144,6 +148,7 @@ defmodule Maraithon.Memory.UserVoiceTest do
         respond(conn, %{
           "id" => id,
           "threadId" => id,
+          "internalDate" => "1789500000000",
           "labelIds" => labels,
           "payload" => %{
             "mimeType" => "text/plain",
@@ -154,9 +159,24 @@ defmodule Maraithon.Memory.UserVoiceTest do
       end)
     end
 
+    Bypass.expect_once(bypass, "GET", "/users/me/settings/sendAs", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer voice-work"]
+
+      respond(conn, %{
+        "sendAs" => [
+          %{
+            "sendAsEmail" => "work@example.invalid",
+            "isPrimary" => true,
+            "signature" => "<div>Kent</div>"
+          }
+        ]
+      })
+    end)
+
     assert {:ok, profile} =
              UserVoice.refresh_from_connectors(c.user, "gmail",
                provider: work.provider,
+               sample_texts: ["Unverified supplied sample must not bypass provider authorship"],
                llm_complete: fn prompt ->
                  assert prompt =~ "Human sample"
 
@@ -164,7 +184,8 @@ defmodule Maraithon.Memory.UserVoiceTest do
                        "Draft sample",
                        "Agent sample",
                        "Rewritten agent sample",
-                       "Incoming sample"
+                       "Incoming sample",
+                       "Unverified supplied sample"
                      ],
                      do: refute(prompt =~ excluded)
 
@@ -173,7 +194,14 @@ defmodule Maraithon.Memory.UserVoiceTest do
              )
 
     assert profile.metadata["sample_count"] == 1
-    assert profile.metadata["source_counts"] == %{"gmail" => 1}
+
+    assert profile.metadata["source_counts"] == %{
+             "gmail" => 1,
+             "cleaning_version" => 1,
+             "excluded" => %{"not_sent" => 2, "generated" => 2},
+             "cleaned" => %{}
+           }
+
     assert profile.metadata["account_id"] == work.id
   end
 
@@ -189,6 +217,9 @@ defmodule Maraithon.Memory.UserVoiceTest do
 
     assert profile.metadata["fallback_reason"]
 
+    assert UserVoice.prompt_context(c.user, "gmail", provider: work.provider)["status"] ==
+             "missing"
+
     snapshot =
       Voice.freeze(%{}, c.user, %{
         "actor" => "as_user",
@@ -198,6 +229,136 @@ defmodule Maraithon.Memory.UserVoiceTest do
 
     assert snapshot["voice"]["source"] == "explicit_style"
     refute snapshot["voice"]["memory_id"]
+  end
+
+  test "valid JSON without a learned profile cannot promote generic fallback guidance", c do
+    work = account(c.user, "work")
+
+    assert {:ok, profile} =
+             UserVoice.refresh_profile(c.user, "gmail",
+               provider: work.provider,
+               sample_texts: ["A human writing sample"],
+               llm_complete: fn _ -> {:ok, ~s({"summary":"No actual guidance"})} end
+             )
+
+    assert profile.metadata["fallback_reason"] == ":missing_voice_profile_content"
+
+    assert UserVoice.prompt_context(c.user, "gmail", provider: work.provider)["status"] ==
+             "missing"
+  end
+
+  test "an older unaudited profile remains stored but cannot guide a new turn", c do
+    work = account(c.user, "work")
+    profile = refresh(c.user, work.provider, "An old profile containing quoted text")
+
+    profile
+    |> Maraithon.Memory.Item.changeset(%{
+      metadata: Map.delete(profile.metadata, "sample_cleaning_version")
+    })
+    |> Repo.update!()
+
+    assert {:ok, _} = UserVoice.get_profile(c.user, "gmail", provider: work.provider)
+    context = UserVoice.prompt_context(c.user, "gmail", provider: work.provider)
+    assert context["status"] == "missing"
+    assert context["reason"] == ":voice_profile_needs_refresh"
+    refute context["content"] =~ "quoted text"
+
+    snapshot =
+      Voice.freeze(%{}, c.user, %{
+        "actor" => "as_user",
+        "provider" => "gmail",
+        "identity" => %{"provider" => work.provider}
+      })
+
+    assert snapshot["voice"]["source"] == "explicit_style"
+  end
+
+  test "Slack refresh verifies token identity and each returned author before the model", c do
+    bypass = slack_account(c.user)
+
+    Bypass.expect_once(bypass, "POST", "/api/auth.test", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer voice-slack"]
+      respond(conn, %{"ok" => true, "team_id" => "TWORK", "user_id" => "UKENT"})
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/api/search.messages", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer voice-slack"]
+      assert URI.decode_query(conn.query_string)["query"] == "a broad query"
+      base = %{"user" => "UKENT", "team" => "TWORK", "ts" => "1789500000.000001"}
+
+      messages = [
+        Map.put(base, "text", "My actual answer.\n> Another person's question"),
+        Map.merge(base, %{"user" => "USAM", "text" => "Someone else's style"}),
+        Map.merge(base, %{"team" => "TOTHER", "text" => "Other workspace"}),
+        Map.merge(base, %{"bot_id" => "B123", "text" => "Bot writing"})
+      ]
+
+      respond(conn, %{"ok" => true, "messages" => %{"matches" => messages}})
+    end)
+
+    assert {:ok, profile} =
+             UserVoice.refresh_from_connectors(c.user, "slack",
+               provider: "slack:TWORK:user:UKENT",
+               slack_query: "a broad query",
+               llm_complete: fn prompt ->
+                 assert prompt =~ "My actual answer."
+
+                 for excluded <- [
+                       "Another person's",
+                       "Someone else's",
+                       "Other workspace",
+                       "Bot writing"
+                     ],
+                     do: refute(prompt =~ excluded)
+
+                 {:ok, Jason.encode!(%{"content" => "Short Slack answers"})}
+               end
+             )
+
+    assert profile.metadata["sample_count"] == 1
+
+    assert profile.metadata["source_counts"]["excluded"] == %{
+             "other_author" => 1,
+             "other_workspace" => 1,
+             "automated" => 1
+           }
+
+    assert profile.metadata["source_counts"]["cleaned"] == %{"quotes" => 1}
+  end
+
+  for auth <- [
+        %{"team_id" => "TWORK", "user_id" => "UOTHER"},
+        %{"team_id" => "TOTHER", "user_id" => "UKENT"},
+        %{"team_id" => "TWORK", "user_id" => "UKENT", "bot_id" => "B123"}
+      ] do
+    test "Slack identity mismatch #{inspect(auth)} never searches or calls a model", c do
+      bypass = slack_account(c.user)
+
+      Bypass.expect_once(bypass, "POST", "/api/auth.test", fn conn ->
+        respond(conn, Map.put(unquote(Macro.escape(auth)), "ok", true))
+      end)
+
+      assert {:error, :voice_identity_unavailable} =
+               UserVoice.refresh_from_connectors(c.user, "slack",
+                 provider: "slack:TWORK:user:UKENT",
+                 llm_complete: fn _ -> flunk("wrong Slack identity reached voice model") end
+               )
+    end
+  end
+
+  defp slack_account(user) do
+    {:ok, _} =
+      OAuth.store_tokens(user, "slack:TWORK:user:UKENT", %{
+        access_token: "voice-slack",
+        scopes: ["search:read"],
+        expires_in: 3600
+      })
+
+    bypass = Bypass.open()
+    original = Application.get_env(:maraithon, :slack, [])
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+    on_exit(fn -> Application.put_env(:maraithon, :slack, original) end)
+    bypass
   end
 
   defp account(user, name, assistant? \\ false) do

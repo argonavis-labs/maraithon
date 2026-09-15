@@ -74,7 +74,6 @@ defmodule Maraithon.Drafts do
     if truthy?(Map.get(attrs, "refresh_voice")) do
       refresh_opts =
         opts
-        |> Keyword.put(:sample_texts, read_string_list(attrs, "sample_texts"))
         |> Keyword.put(:team_id, read_string(attrs, "team_id"))
         |> Keyword.put(:slack_user_id, read_string(attrs, "slack_user_id"))
         |> Keyword.put(
@@ -374,22 +373,6 @@ defmodule Maraithon.Drafts do
           _other ->
             nil
         end)
-    end
-  end
-
-  defp read_string_list(attrs, key) when is_map(attrs) do
-    case read_value(attrs, key, []) do
-      values when is_list(values) ->
-        values
-        |> Enum.filter(&is_binary/1)
-        |> Enum.map(&String.trim/1)
-        |> Enum.reject(&(&1 == ""))
-
-      value when is_binary(value) ->
-        [String.trim(value)]
-
-      _ ->
-        []
     end
   end
 

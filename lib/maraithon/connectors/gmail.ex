@@ -1092,6 +1092,8 @@ defmodule Maraithon.Connectors.Gmail do
       in_reply_to: get_header(headers, "In-Reply-To"),
       references: get_header(headers, "References"),
       auto_submitted: get_header(headers, "Auto-Submitted"),
+      precedence: get_header(headers, "Precedence"),
+      list_id: get_header(headers, "List-ID"),
       return_path: get_header(headers, "Return-Path"),
       content_type: get_header(headers, "Content-Type"),
       date: get_header(headers, "Date"),
