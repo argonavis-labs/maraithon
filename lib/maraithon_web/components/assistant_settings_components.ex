@@ -7,7 +7,7 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
     <section :if={@settings.enabled} id="assistant-identity" class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-950/10 pb-2">
         <h2 class="text-base/7 font-semibold text-zinc-950">Your assistant</h2>
-        <.button href={~p"/auth/google?#{%{scopes: "gmail_compose", return_to: "/settings#assistant-identity"}}"} variant="outline">Connect your assistant's Google account</.button>
+        <.button href={~p"/auth/google?#{%{scopes: "gmail_compose", purpose: "assistant", return_to: "/settings#assistant-identity"}}"} variant="outline">Connect your assistant's Google account</.button>
       </div>
       <.form for={%{}} action={~p"/settings#assistant-identity"} method="get" class="flex items-end gap-3">
         <.field label="Google account" for="assistant-account" class="min-w-0 flex-1">

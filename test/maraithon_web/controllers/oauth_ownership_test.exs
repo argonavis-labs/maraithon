@@ -36,6 +36,26 @@ defmodule MaraithonWeb.OAuthOwnershipTest do
     assert json_response(conn, 400)["error"] =~ "different user"
   end
 
+  test "assistant setup freezes its account purpose in signed OAuth state", %{conn: conn} do
+    keys = [:delegations_enabled, :delegation_user_allowlist]
+    previous = Map.new(keys, &{&1, Application.fetch_env(:maraithon, &1)})
+    Application.put_env(:maraithon, :delegations_enabled, true)
+    Application.put_env(:maraithon, :delegation_user_allowlist, [@user])
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:maraithon, key, value)
+        {key, :error} -> Application.delete_env(:maraithon, key)
+      end)
+    end)
+
+    conn = get(conn, "/auth/google", %{scopes: "gmail_compose", purpose: "assistant"})
+    query = conn |> redirected_to() |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+    assert {:ok, %{"user_id" => @user, "purpose" => "assistant"}} =
+             Phoenix.Token.verify(MaraithonWeb.Endpoint, "oauth_state", query["state"])
+  end
+
   test "a signed callback for another user is rejected before token exchange", %{conn: conn} do
     state =
       Phoenix.Token.sign(MaraithonWeb.Endpoint, "oauth_state", %{

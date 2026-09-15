@@ -614,6 +614,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp source_discovery_accounts(limit, cursor) do
     query =
       ConnectedAccount
+      |> Maraithon.AssistantIdentities.user_accounts()
       |> join(:inner, [account], source_token in Token,
         on: source_token.user_id == account.user_id and source_token.provider == account.provider
       )

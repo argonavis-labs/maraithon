@@ -52,9 +52,22 @@ defmodule Maraithon.UserIdentity do
       identity ->
         identity
     end
+    |> exclude_assistant(user_id)
   end
 
   def identity(_user_id), do: empty()
+
+  # Account purpose is authoritative even when this node still has an older
+  # identity cache. Reconnecting or switching an assistant cannot make it "me".
+  defp exclude_assistant(identity, user_id) do
+    excluded = MapSet.new(Maraithon.AssistantIdentities.assistant_emails(user_id))
+
+    %{
+      identity
+      | emails: Enum.reject(identity.emails, &MapSet.member?(excluded, &1)),
+        handles: MapSet.difference(identity.handles, excluded)
+    }
+  end
 
   @doc "Normalized set of every handle that is the user."
   def handle_set(user_id), do: identity(user_id).handles

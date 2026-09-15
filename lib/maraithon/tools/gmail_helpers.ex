@@ -18,6 +18,7 @@ defmodule Maraithon.Tools.GmailHelpers do
     providers =
       user_id
       |> providers_for_search(provider)
+      |> user_providers(user_id)
       |> Enum.uniq()
 
     fetch_messages_from_providers(user_id, providers, max_results, query, label_ids)
@@ -25,7 +26,8 @@ defmodule Maraithon.Tools.GmailHelpers do
 
   def get_message(user_id, message_id, opts \\ [])
       when is_binary(user_id) and is_binary(message_id) do
-    providers = providers_for_search(user_id, Keyword.get(opts, :provider))
+    providers =
+      providers_for_search(user_id, Keyword.get(opts, :provider)) |> user_providers(user_id)
 
     providers
     |> Enum.reduce_while({:error, :no_token}, fn provider, _acc ->
@@ -133,6 +135,26 @@ defmodule Maraithon.Tools.GmailHelpers do
 
   defp providers_for_search(_user_id, provider) when is_binary(provider), do: [provider]
   defp providers_for_search(_user_id, _provider), do: ["google"]
+
+  defp user_providers(providers, user_id) do
+    excluded = Maraithon.AssistantIdentities.assistant_providers(user_id)
+
+    # The legacy "google" token lookup can fall back to any account. Resolve it
+    # explicitly whenever an assistant account is present so that an empty user
+    # account set cannot reopen the assistant's inbox through that fallback.
+    if excluded == [] do
+      providers
+    else
+      tokens = OAuth.list_user_tokens(user_id)
+      providers = if providers == ["google"], do: Enum.map(tokens, & &1.provider), else: providers
+
+      Enum.filter(providers, fn provider ->
+        provider not in excluded and
+          (String.starts_with?(provider, "google:") or
+             (provider == "google" and Enum.any?(tokens, &(&1.provider == "google"))))
+      end)
+    end
+  end
 
   defp connected_google_providers(user_id) when is_binary(user_id) do
     account_providers =

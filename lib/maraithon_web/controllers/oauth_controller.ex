@@ -28,8 +28,9 @@ defmodule MaraithonWeb.OAuthController do
   def google(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, services} <- google_services(params["scopes"]),
+         {:ok, purpose} <- google_connection_purpose(user_id, params),
          {:ok, return_to} <- optional_return_to(params) do
-      state = encode_google_state(user_id, services, return_to)
+      state = encode_google_state(user_id, services, return_to, purpose)
       auth_url = Google.authorize_url(google_authorize_scopes(services), state)
 
       auth_url =
@@ -753,7 +754,12 @@ defmodule MaraithonWeb.OAuthController do
         # Watches must be persisted against a connected_account row, so the
         # tokens are stored first and the resulting account is threaded
         # through to `setup_watches/4` for cursor bookkeeping.
-        case OAuth.store_tokens(user_id, provider, token_data) do
+        case Maraithon.AssistantIdentities.connect_google(
+               user_id,
+               provider,
+               token_data,
+               state_payload["purpose"]
+             ) do
           {:ok, _token} ->
             account = ConnectedAccounts.get(user_id, provider)
             watch_results = setup_watches(user_id, services, tokens.access_token, account)
@@ -784,7 +790,7 @@ defmodule MaraithonWeb.OAuthController do
               conn,
               state_payload["return_to"],
               "google",
-              token_storage_failed_message("google"),
+              google_connection_error(changeset),
               :internal_server_error
             )
         end
@@ -985,9 +991,38 @@ defmodule MaraithonWeb.OAuthController do
     end
   end
 
-  defp encode_google_state(user_id, services, return_to) do
+  defp google_connection_purpose(user_id, params) do
+    case params["purpose"] do
+      nil ->
+        {:ok, "user"}
+
+      "user" ->
+        {:ok, "user"}
+
+      "assistant" ->
+        if Maraithon.Delegations.Gates.enabled?(user_id),
+          do: {:ok, "assistant"},
+          else: {:error, "Assistant setup is not enabled"}
+
+      _ ->
+        {:error, "Invalid connection purpose"}
+    end
+  end
+
+  defp google_connection_error(:assistant_account_is_personal),
+    do:
+      "Choose your assistant's own Google account. Use a verified alias to send from your account."
+
+  defp google_connection_error({:assistant_setup_failed, _}),
+    do:
+      "The assistant account is connected. Check its sending address in assistant settings to finish setup."
+
+  defp google_connection_error(_), do: token_storage_failed_message("google")
+
+  defp encode_google_state(user_id, services, return_to, purpose) do
     %{"user_id" => user_id, "services" => services, "provider" => "google"}
     |> maybe_put_state("return_to", return_to)
+    |> Map.put("purpose", purpose)
     |> sign_oauth_state()
   end
 

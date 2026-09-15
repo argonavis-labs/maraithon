@@ -1,5 +1,6 @@
 defmodule Maraithon.AssistantIdentities do
   @moduledoc "User-owned assistant identities, never substitutes for a missing user grant."
+  import Ecto.Query
   alias Maraithon.{Repo, Accounts.ConnectedAccount}
   alias Maraithon.Delegations.AssistantIdentity
   alias Maraithon.PrivacyErasure.WriteFence
@@ -12,14 +13,53 @@ defmodule Maraithon.AssistantIdentities do
     do: Repo.get_by(AssistantIdentity, user_id: user_id) |> AssistantIdentity.hydrate()
 
   def assistant_account_ids(user_id) do
-    case get(user_id) do
-      %AssistantIdentity{gmail_mode: "account", gmail_connected_account_id: id}
-      when is_integer(id) ->
-        [id]
+    assistant_accounts(user_id)
+    |> select([a], a.id)
+    |> Repo.all()
+  end
 
-      _ ->
-        []
-    end
+  @doc "Exclude dedicated assistant accounts, including previous identities and pending setup."
+  def user_accounts(query \\ ConnectedAccount) do
+    excluded = assistant_filter()
+    from a in query, where: not (^excluded)
+  end
+
+  defp assistant_filter do
+    bound =
+      from i in AssistantIdentity,
+        where: i.gmail_mode == "account" and not is_nil(i.gmail_connected_account_id),
+        select: i.gmail_connected_account_id
+
+    dynamic(
+      [a],
+      fragment("COALESCE(?->>'assistant_account', 'false') = 'true'", a.metadata) or
+        a.id in subquery(bound)
+    )
+  end
+
+  defp assistant_accounts(user_id) do
+    excluded = assistant_filter()
+    from a in ConnectedAccount, where: a.user_id == ^user_id, where: ^excluded
+  end
+
+  def assistant_providers(user_id) do
+    assistant_accounts(user_id) |> select([a], a.provider) |> Repo.all()
+  end
+
+  def assistant_emails(user_id) do
+    assistant_accounts(user_id)
+    |> select([a], {a.external_account_id, a.metadata, a.provider})
+    |> Repo.all()
+    |> Enum.flat_map(fn {external_id, metadata, provider} ->
+      [
+        external_id,
+        metadata["account_email"],
+        metadata["email"],
+        String.replace_prefix(provider, "google:", "")
+      ]
+    end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&(String.trim(&1) |> String.downcase()))
   end
 
   def assistant_account?(%ConnectedAccount{id: id, user_id: user_id}),
@@ -27,10 +67,45 @@ defmodule Maraithon.AssistantIdentities do
 
   def assistant_account?(_), do: false
 
+  def connect_google(user_id, provider, tokens, "assistant") do
+    metadata = tokens.metadata
+    account = Maraithon.ConnectedAccounts.get(user_id, provider)
+
+    if metadata["account_email"] == user_id or (account && not assistant_account?(account)) do
+      {:error, :assistant_account_is_personal}
+    else
+      tokens = Map.put(tokens, :metadata, Map.put(metadata, "assistant_account", true))
+
+      with {:ok, token} <- Maraithon.OAuth.store_tokens(user_id, provider, tokens) do
+        Maraithon.UserIdentity.invalidate(user_id)
+        account = Maraithon.ConnectedAccounts.get(user_id, provider)
+        identity = get(user_id)
+
+        case configure(user_id, %{
+               "display_name" =>
+                 (identity && identity.data["display_name"]) || metadata["account_name"] ||
+                   "Your assistant",
+               "gmail_connected_account_id" => account.id,
+               "gmail_mode" => "account",
+               "gmail_send_as_email" => metadata["account_email"]
+             }) do
+          {:ok, _} -> {:ok, token}
+          {:error, reason} -> {:error, {:assistant_setup_failed, reason}}
+        end
+      end
+    end
+  end
+
+  def connect_google(user_id, provider, tokens, _),
+    do: Maraithon.OAuth.store_tokens(user_id, provider, tokens)
+
   def configure(user_id, attrs) do
     with {:ok, aliases} <- send_as(user_id, attrs["gmail_connected_account_id"]),
          %{} = sender <- Enum.find(aliases, &(&1["sendAsEmail"] == attrs["gmail_send_as_email"])),
-         true <- attrs["gmail_mode"] == "alias" or sender["isPrimary"] == true do
+         true <-
+           (attrs["gmail_mode"] == "alias" and sender["isPrimary"] != true) or
+             (attrs["gmail_mode"] == "account" and sender["isPrimary"] == true and
+                sender["sendAsEmail"] != user_id) do
       put(user_id, attrs)
     else
       {:error, _} = error -> error
@@ -44,8 +119,12 @@ defmodule Maraithon.AssistantIdentities do
       WriteFence.lock_user_writable!(user_id)
       row = get(user_id) || %AssistantIdentity{user_id: user_id, data: @defaults}
       data = Map.merge(row.data, Map.take(attrs, @fields))
+      account_id = Map.get(attrs, "gmail_connected_account_id", row.gmail_connected_account_id)
 
       with :ok <- validate(data),
+           true <- is_integer(account_id),
+           %ConnectedAccount{status: "connected"} <-
+             Repo.get_by(ConnectedAccount, id: account_id, user_id: user_id),
            {:ok, changed} <-
              row
              |> AssistantIdentity.changeset(
@@ -53,12 +132,35 @@ defmodule Maraithon.AssistantIdentities do
                |> Map.put("data", data)
              )
              |> Repo.insert_or_update() do
+        Enum.each([row, changed], &retain_account_purpose!/1)
         changed
       else
         {:error, reason} -> Repo.rollback(reason)
+        _ -> Repo.rollback(:google_account_not_connected)
       end
     end)
+    |> tap(fn
+      {:ok, _} -> Maraithon.UserIdentity.invalidate(user_id)
+      _ -> :ok
+    end)
   end
+
+  defp retain_account_purpose!(%AssistantIdentity{
+         gmail_mode: "account",
+         gmail_connected_account_id: id,
+         user_id: user_id
+       })
+       when is_integer(id) do
+    account = Repo.get_by!(ConnectedAccount, id: id, user_id: user_id)
+
+    account
+    |> Ecto.Changeset.change(
+      metadata: Map.put(account.metadata || %{}, "assistant_account", true)
+    )
+    |> Repo.update!()
+  end
+
+  defp retain_account_purpose!(_), do: :ok
 
   def send_as(user_id, account_id) do
     with true <- is_integer(account_id),

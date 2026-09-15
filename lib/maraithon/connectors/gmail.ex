@@ -1375,9 +1375,11 @@ defmodule Maraithon.Connectors.Gmail do
     route? =
       is_integer(identity.connected_account_id) and Maraithon.Delegations.Ingress.active?(user_id)
 
+    assistant? = identity.provider in Maraithon.AssistantIdentities.assistant_providers(user_id)
+
     failure_count =
       Enum.reduce(messages, 0, fn message, failures ->
-        case to_observation(message, user_id, identity) do
+        case if(assistant?, do: :skip, else: to_observation(message, user_id, identity)) do
           {:ok, changeset} ->
             case with_delegation_ingress(user_id, identity, message, route?, fn ->
                    Ingest.observe(user_id, changeset)

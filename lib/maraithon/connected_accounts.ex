@@ -111,7 +111,9 @@ defmodule Maraithon.ConnectedAccounts do
       refresh_token: token_data[:refresh_token] || token_data["refresh_token"],
       expires_at: token_data[:expires_at] || token_data["expires_at"],
       scopes: normalize_scopes(token_data[:scopes] || token_data["scopes"]),
-      metadata: normalize_metadata(token_data[:metadata] || token_data["metadata"]),
+      metadata:
+        normalize_metadata(token_data[:metadata] || token_data["metadata"])
+        |> retain_assistant_purpose(previous_account),
       connected_at: now,
       last_refreshed_at: now,
       external_account_id:
@@ -141,6 +143,11 @@ defmodule Maraithon.ConnectedAccounts do
         error
     end
   end
+
+  defp retain_assistant_purpose(metadata, %{metadata: %{"assistant_account" => true}}),
+    do: Map.put(metadata, "assistant_account", true)
+
+  defp retain_assistant_purpose(metadata, _), do: metadata
 
   def upsert_manual(user_id, provider, attrs \\ %{})
       when is_binary(user_id) and is_binary(provider) and is_map(attrs) do

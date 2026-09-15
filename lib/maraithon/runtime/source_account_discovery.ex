@@ -1974,9 +1974,17 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp validate_ownership(%ConnectedAccount{user_id: user_id}, %Agent{user_id: user_id}), do: :ok
-  defp validate_ownership(%ConnectedAccount{}, nil), do: :ok
+  defp validate_ownership(%ConnectedAccount{user_id: user_id} = account, %Agent{user_id: user_id}),
+    do: validate_user_account(account)
+
+  defp validate_ownership(%ConnectedAccount{} = account, nil), do: validate_user_account(account)
   defp validate_ownership(_account, _agent), do: {:error, :source_discovery_user_mismatch}
+
+  defp validate_user_account(account) do
+    if Maraithon.AssistantIdentities.assistant_account?(account),
+      do: {:error, :assistant_account_excluded},
+      else: :ok
+  end
 
   defp validate_payload_identity(account, %Agent{} = agent, payload) do
     if read_integer(payload, "account_id") == account.id and

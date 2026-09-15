@@ -9,7 +9,8 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
   alias Maraithon.OAuth.Token
 
   def resolve(user_id) when is_binary(user_id) do
-    tokens = OAuth.list_user_tokens(user_id)
+    assistant_providers = Maraithon.AssistantIdentities.assistant_providers(user_id)
+    tokens = OAuth.list_user_tokens(user_id) |> Enum.reject(&(&1.provider in assistant_providers))
     accounts = ConnectedAccounts.list_for_user(user_id)
 
     %{
