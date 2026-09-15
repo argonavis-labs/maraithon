@@ -21,6 +21,7 @@ defmodule MaraithonWeb.TodosLive do
     "attention" => "all",
     "due" => "all",
     "source" => "all",
+    "category" => "all",
     "project" => "all",
     "agent" => "all",
     "sort" => "rank",
@@ -35,7 +36,7 @@ defmodule MaraithonWeb.TodosLive do
     "project_id" => "",
     "notes" => ""
   }
-  @empty_state_filter_keys ~w(q status attention due source project agent)
+  @empty_state_filter_keys ~w(q status attention due source category project agent)
   @status_options [
     {"Active", "active"},
     {"Tracking", "tracking"},
@@ -947,6 +948,12 @@ defmodule MaraithonWeb.TodosLive do
               </.page_header>
 
               <.view_tabs id="todo-views" label="Task views" items={todo_view_tabs(@filters)} />
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <.view_tabs id="todo-categories" label="Personal or work" items={Enum.map(~w(all personal work), fn category ->
+                  %{label: String.capitalize(category), path: todos_path(@filters, %{"category" => category, "page" => "1"}), current?: @filters["category"] == category}
+                end)} />
+                <.button href={~p"/settings/accounts"} variant="plain">Account settings</.button>
+              </div>
 
           <details class="group">
             <summary class="inline-flex cursor-pointer list-none items-center gap-6 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
@@ -1077,6 +1084,7 @@ defmodule MaraithonWeb.TodosLive do
             phx-submit="update_filters"
             class="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(14rem,1.5fr)_repeat(6,minmax(8rem,1fr))_auto]"
           >
+            <input type="hidden" name="filters[category]" value={@filters["category"]} />
             <.field label="Search" for={@filter_form[:q].id}>
               <.c_input
                 id={@filter_form[:q].id}
@@ -3206,6 +3214,7 @@ defmodule MaraithonWeb.TodosLive do
       attention_mode: attention_filter(filters["attention"]),
       decision_only?: decision_filter?(filters["attention"]),
       source: source_filter(filters["source"]),
+      category: filters["category"],
       project_id: project_filter(filters["project"]),
       agent_actionability: agent_filter(filters["agent"]),
       sort_by: filters["sort"],
@@ -3286,6 +3295,7 @@ defmodule MaraithonWeb.TodosLive do
       "attention" =>
         normalize_choice(Map.get(params, "attention"), ~w(all act_now decision monitor), "all"),
       "due" => normalize_choice(Map.get(params, "due"), ~w(all overdue today week no_due), "all"),
+      "category" => normalize_choice(Map.get(params, "category"), ~w(all personal work), "all"),
       "source" => normalize_source(Map.get(params, "source")),
       "project" => normalize_project_filter(Map.get(params, "project")),
       "agent" => normalize_choice(Map.get(params, "agent"), ~w(all can_help needs_you), "all"),
@@ -3358,6 +3368,7 @@ defmodule MaraithonWeb.TodosLive do
       view_filters = Map.merge(@default_filters, %{
         "status" => status,
         "q" => filters["q"],
+        "category" => filters["category"],
         "sort" => if(status in ~w(done all), do: "updated", else: "rank")
       })
 

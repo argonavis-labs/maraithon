@@ -1,0 +1,25 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-6">
+    <.page_header title="Account settings">
+      <:actions><.button href={~p"/settings/assistant"} variant="plain">Assistant settings</.button></:actions>
+    </.page_header>
+    <p class="text-sm/6 text-zinc-600">Choose which accounts belong to Personal or Work. Unassigned accounts appear under All.</p>
+    <div class="divide-y divide-zinc-950/10">
+      <.form :for={account <- @accounts} for={%{}} action={~p"/settings/accounts/#{account.id}"}
+        method="post" class="flex flex-wrap items-center justify-between gap-4 py-4">
+        <div class="min-w-0">
+          <p class="text-sm/6 font-medium text-zinc-950"><%= account.label %></p>
+          <p class="text-xs/5 text-zinc-500"><%= Maraithon.SourceLabels.label(account.provider) %></p>
+        </div>
+        <div class="flex items-center gap-3">
+          <.c_select name="category" aria-label={"Category for #{account.label}"}>
+            <option :for={{label, value} <- [{"Unassigned", "unassigned"}, {"Personal", "personal"}, {"Work", "work"}]}
+              value={value} selected={account.category == value}><%= label %></option>
+          </.c_select>
+          <.button type="submit" variant="outline">Save</.button>
+        </div>
+      </.form>
+    </div>
+    <p :if={@accounts == []} class="text-sm/6 text-zinc-600">No connected accounts yet.</p>
+  </div>
+</Layouts.app>

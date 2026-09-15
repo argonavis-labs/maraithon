@@ -2625,6 +2625,7 @@ defmodule Maraithon.Todos do
     |> maybe_filter_open_due_only(open_due_only?)
     |> maybe_exclude_unsurfaceable_open_work(exclude_unsurfaceable?)
     |> maybe_filter_source(source)
+    |> Maraithon.AccountCategories.filter(user_id, Keyword.get(opts, :category))
     |> maybe_filter_source_account_id(source_account_id)
     |> maybe_filter_source_account_unassigned(source_account_unassigned?)
     |> maybe_filter_kind(kind)

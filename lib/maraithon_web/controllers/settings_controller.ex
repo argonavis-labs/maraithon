@@ -8,6 +8,31 @@ defmodule MaraithonWeb.SettingsController do
     render_settings(conn, assistant_settings_params: params)
   end
 
+  def accounts(conn, _params) do
+    render(conn, :accounts, page_title: "Account settings", current_path: ~p"/settings/accounts",
+      current_user: conn.assigns.current_user,
+      accounts: Maraithon.AccountCategories.list(conn.assigns.current_user.id))
+  end
+
+  def update_account_category(conn, %{"id" => id, "category" => category}) do
+    result = with {id, ""} <- Integer.parse(id),
+      do: Maraithon.AccountCategories.update(conn.assigns.current_user.id, id, category)
+    conn = case result do
+      {:ok, _} -> put_flash(conn, :info, "Account category saved.")
+      _ -> put_flash(conn, :error, "Account category could not be saved.")
+    end
+    redirect(conn, to: ~p"/settings/accounts")
+  end
+
+  def assistant(conn, params) do
+    render(conn, :assistant,
+      page_title: "Assistant settings",
+      current_path: ~p"/settings/assistant",
+      current_user: conn.assigns.current_user,
+      assistant_settings: MaraithonWeb.AssistantSettings.load(conn.assigns.current_user.id, params)
+    )
+  end
+
   def update_assistant_identity(conn, %{"assistant_identity" => attrs}),
     do: save_delegation_settings(conn, &MaraithonWeb.AssistantSettings.save_identity(&1, attrs))
 
@@ -23,7 +48,7 @@ defmodule MaraithonWeb.SettingsController do
       {:ok, _} -> put_flash(conn, :info, "Assistant settings saved.")
       {:error, reason} -> put_flash(conn, :error, MaraithonWeb.DelegationCopy.error(reason))
     end
-    redirect(conn, to: ~p"/settings#assistant-identity")
+    redirect(conn, to: ~p"/settings/assistant")
   end
 
   def update_calendar_links(conn, %{"calendar_links" => %{"links" => links}}) do

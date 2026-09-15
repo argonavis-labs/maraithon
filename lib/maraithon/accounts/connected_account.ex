@@ -12,6 +12,7 @@ defmodule Maraithon.Accounts.ConnectedAccount do
     field :provider, :string
     field :external_account_id, :string
     field :status, :string, default: "disconnected"
+    field :category, :string, default: "unassigned"
     field :access_token, Maraithon.Encrypted.Binary
     field :refresh_token, Maraithon.Encrypted.Binary
     field :expires_at, :utc_datetime_usec

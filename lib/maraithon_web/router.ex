@@ -107,6 +107,11 @@ defmodule MaraithonWeb.Router do
     post "/connectors/:provider/disconnect", ConnectorsController, :disconnect
     get "/conenctors", ConnectorsController, :legacy_redirect
     get "/how-it-works", HowItWorksController, :index
+    get "/settings/accounts", SettingsController, :accounts
+    post "/settings/accounts/:id", SettingsController, :update_account_category
+    get "/settings/assistant", SettingsController, :assistant
+    post "/settings/assistant-identity", SettingsController, :update_assistant_identity
+    post "/settings/delegation-preferences", SettingsController, :update_delegation_preferences
 
     # Companion desktop app pairing flow
     get "/companion/auth", CompanionAuthController, :show
@@ -128,8 +133,6 @@ defmodule MaraithonWeb.Router do
     get "/settings", SettingsController, :index
     post "/settings/calendar-links", SettingsController, :update_calendar_links
     post "/settings/assistant-model", SettingsController, :update_assistant_model
-    post "/settings/assistant-identity", SettingsController, :update_assistant_identity
-    post "/settings/delegation-preferences", SettingsController, :update_delegation_preferences
   end
 
   scope "/", MaraithonWeb do
@@ -195,6 +198,8 @@ defmodule MaraithonWeb.Router do
     post "/todos/:id/opened", MobileTodoController, :opened
     post "/todos/:id/chat", MobileTodoController, :chat_thread
     post "/todos/:id/workflow", MobileTodoController, :workflow
+    get "/account-categories", AccountCategoryController, :index
+    post "/account-categories/:id", AccountCategoryController, :update
     get "/delegation-settings", DelegationController, :settings
     post "/delegation-settings/identity", DelegationController, :update_identity
     post "/delegation-settings/preferences", DelegationController, :update_preferences
@@ -315,6 +320,8 @@ defmodule MaraithonWeb.Router do
     post "/todos/:id/reply", MobileTodoController, :reply
     post "/todos/:id/chat", MobileTodoController, :chat_thread
     post "/todos/:id/workflow", MobileTodoController, :workflow
+    get "/account-categories", AccountCategoryController, :index
+    post "/account-categories/:id", AccountCategoryController, :update
     get "/delegation-settings", DelegationController, :settings
     post "/delegation-settings/identity", DelegationController, :update_identity
     post "/delegation-settings/preferences", DelegationController, :update_preferences

@@ -48,6 +48,9 @@ defmodule MaraithonWeb.AdminNavigation do
               >
                 Apps
               </.link>
+              <.link href={~p"/settings/accounts"} class={nav_link_class(@normalized_path, "/settings")} aria-current={active?(@normalized_path, "/settings") && "page"}>
+                Settings
+              </.link>
             </nav>
           </div>
 

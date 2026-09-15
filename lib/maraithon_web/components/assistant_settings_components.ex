@@ -7,9 +7,9 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
     <section :if={@settings.enabled} id="assistant-identity" class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-950/10 pb-2">
         <h2 class="text-base/7 font-semibold text-zinc-950">Your assistant</h2>
-        <.button href={~p"/auth/google?#{%{scopes: "gmail_compose", purpose: "assistant", return_to: "/settings#assistant-identity"}}"} variant="outline">Connect your assistant's Google account</.button>
+        <.button href={~p"/auth/google?#{%{scopes: "gmail_compose", purpose: "assistant", return_to: "/settings/assistant"}}"} variant="outline">Connect your assistant's Google account</.button>
       </div>
-      <.form for={%{}} action={~p"/settings#assistant-identity"} method="get" class="flex items-end gap-3">
+      <.form for={%{}} action={~p"/settings/assistant"} method="get" class="flex items-end gap-3">
         <.field label="Google account" for="assistant-account" class="min-w-0 flex-1">
           <.c_select id="assistant-account" name="assistant_account">
             <option value="">Choose an account</option>
@@ -36,7 +36,7 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
           </.field>
           <.field label="Slack name" for="assistant-slack"><.c_input id="assistant-slack" name="assistant_identity[slack_username]" value={@settings.identity["slack_username"]} maxlength="2000" /></.field>
           <.field label="Slack icon URL" for="assistant-icon"><.c_input id="assistant-icon" name="assistant_identity[slack_icon_url]" value={@settings.identity["slack_icon_url"]} type="url" /></.field>
-          <.field label="Signature" for="assistant-signature"><.c_input id="assistant-signature" name="assistant_identity[signature_text]" value={@settings.identity["signature_text"]} maxlength="2000" /></.field>
+          <.field label="Signature override" for="assistant-signature"><.c_input id="assistant-signature" placeholder="Use mailbox signature" name="assistant_identity[signature_text]" value={@settings.identity["signature_text"]} maxlength="2000" /></.field>
         </div>
         <.field label="Disclosure line" for="assistant-disclosure"><.c_input id="assistant-disclosure" name="assistant_identity[disclosure_line]" value={@settings.identity["disclosure_line"] || "I'm an AI assistant handling scheduling and follow-ups."} maxlength="2000" /></.field>
         <div class="flex flex-wrap gap-5">

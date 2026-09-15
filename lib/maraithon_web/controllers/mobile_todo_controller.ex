@@ -22,8 +22,9 @@ defmodule MaraithonWeb.MobileTodoController do
     # invalidates every filtered view; card projections may lag until a todo
     # row changes — accepted). Computed before the expensive list query so a
     # 304 never runs it.
+    account_categories = Maraithon.AccountCategories.index(user_id)
     delegation_version = Maraithon.Delegations.collection_version(user_id)
-    prefix = "todos-#{Maraithon.Delegations.Scope.hash({delegation_version, Maraithon.Delegations.Gates.enabled?(user_id), Application.get_env(:maraithon, :delegation_sends_enabled, %{})})}"
+    prefix = "todos-#{Maraithon.Delegations.Scope.hash({account_categories, params, delegation_version, Maraithon.Delegations.Gates.enabled?(user_id), Application.get_env(:maraithon, :delegation_sends_enabled, %{})})}"
     etag = MobileConditional.collection_etag(prefix, Todos.collection_version(user_id))
 
     MobileConditional.with_collection_etag(conn, etag, fn conn ->
@@ -38,6 +39,7 @@ defmodule MaraithonWeb.MobileTodoController do
           statuses: status_filter(params),
           attention_mode: attention_filter(params),
           source: source_filter(params),
+          category: text_param(params, "category"),
           due_nil?: due_nil_filter(params),
           due_after: due_after_filter(params),
           due_before: due_before_filter(params),
@@ -53,6 +55,7 @@ defmodule MaraithonWeb.MobileTodoController do
 
       json_opts =
         json_opts
+        |> Keyword.put(:account_categories, account_categories)
         |> Keyword.put(:open_cards_only, truthy?(Map.get(params, "open_cards_only")))
         |> Keyword.put(:related_people_by_todo_id, related_people_by_todo_id)
         |> Keyword.put(:delegations_by_todo_id, Maraithon.Delegations.for_todos(user_id, Enum.map(todos, & &1.id)))

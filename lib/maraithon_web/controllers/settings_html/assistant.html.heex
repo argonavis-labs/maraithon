@@ -1,0 +1,7 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-6">
+    <.page_header title="Assistant settings"><:actions><.button href={~p"/settings/accounts"} variant="plain">Account settings</.button></:actions></.page_header>
+    <MaraithonWeb.AssistantSettingsComponents.settings settings={@assistant_settings} />
+    <p :if={!@assistant_settings.enabled} class="text-sm/6 text-zinc-600">Delegation is not available for this account yet.</p>
+  </div>
+</Layouts.app>

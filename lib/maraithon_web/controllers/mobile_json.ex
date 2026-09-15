@@ -39,6 +39,7 @@ defmodule MaraithonWeb.MobileJSON do
     base = %{
       id: todo.id,
       source: todo.source,
+      account_category: Maraithon.AccountCategories.for_todo(todo, opts[:account_categories]),
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       workflow: Maraithon.Todos.Workflow.current(todo),

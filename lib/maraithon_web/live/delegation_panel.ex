@@ -165,7 +165,7 @@ defmodule MaraithonWeb.DelegationPanel do
             variant={if(@actor == actor, do: "solid", else: "outline")} aria-pressed={@actor == actor}
             phx-click="actor" phx-value-actor={actor} phx-target={@myself}
             disabled={@busy? || (actor == "as_assistant" && !@assistant?)}><%= label %></.button>
-          <.link :if={!@assistant?} navigate={~p"/settings#assistant-identity"} class="self-center text-sm/6 text-zinc-600 underline">Set up your assistant</.link>
+          <.link :if={!@assistant?} href={~p"/settings/assistant"} class="self-center text-sm/6 text-zinc-600 underline">Set up your assistant</.link>
         </div>
         <p :if={@busy?} role="status" class="text-sm/6 text-zinc-500">Checking this conversation…</p>
         <.form :if={@scope} for={%{}} as={:delegation} phx-submit="delegate" phx-target={@myself} class="space-y-3">
