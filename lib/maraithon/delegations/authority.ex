@@ -104,29 +104,40 @@ defmodule Maraithon.Delegations.Authority do
 
   @doc "Lock in delegation, turn, run order under an existing runtime or user fence."
   def lock_context!(binding, user_id) when is_map(binding) do
+    context = lock_turn!(binding, user_id)
+    run = locked(Run, binding["run_id"], user_id) |> Run.hydrate_payloads()
+
+    unless context.turn.run_id == run.id and run.prompt_snapshot[Binding.key()] == binding,
+      do: Repo.rollback(:delegation_record_mismatch)
+
+    Map.put(context, :run, run)
+  end
+
+  def lock_context!(_, _), do: Repo.rollback(:delegation_binding_required)
+
+  @doc "The same lock prefix before a source-sync turn has a model Run."
+  def lock_turn!(binding, user_id) when is_map(binding) do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "delegation authority needs a transaction")
 
     d = locked(Delegation, binding["delegation_id"], user_id) |> Delegation.hydrate()
     turn = locked(Turn, binding["turn_id"], user_id) |> Turn.hydrate()
-    run = locked(Run, binding["run_id"], user_id) |> Run.hydrate_payloads()
 
     grant =
       Repo.get_by!(Grant, delegation_id: d.id, user_id: user_id, version: turn.grant_version)
       |> Grant.hydrate()
 
-    unless turn.delegation_id == d.id and turn.run_id == run.id and
+    unless binding["user_id"] == user_id and turn.delegation_id == d.id and
              turn.grant_version == binding["grant_version"] and
              turn.source_revision == binding["source_revision"] and
              binding["scope_hash"] == grant.data["scope_hash"] and
-             Scope.hash(grant.data["scope"]) == grant.data["scope_hash"] and
-             run.prompt_snapshot[Binding.key()] == binding,
+             Scope.hash(grant.data["scope"]) == grant.data["scope_hash"],
            do: Repo.rollback(:delegation_record_mismatch)
 
-    %{delegation: d, turn: turn, run: run, grant: grant}
+    %{delegation: d, turn: turn, grant: grant}
   end
 
-  def lock_context!(_, _), do: Repo.rollback(:delegation_binding_required)
+  def lock_turn!(_, _), do: Repo.rollback(:delegation_binding_required)
 
   @doc "Current authority for a new decision; late receipts use the historical grant above."
   def current?(%{delegation: d, turn: turn, grant: grant}, binding) do
