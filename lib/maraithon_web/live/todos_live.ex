@@ -107,6 +107,7 @@ defmodule MaraithonWeb.TodosLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: Phoenix.PubSub.subscribe(Maraithon.PubSub, "delegations:#{current_user_id(socket)}")
     {:ok,
      assign(socket,
        page_title: "Todos",
@@ -682,6 +683,13 @@ defmodule MaraithonWeb.TodosLive do
     do: TodoWorkspace.preview(thread_id, preview, socket)
 
   def handle_info({:workspace_poll, pulse}, socket), do: TodoWorkspace.poll(pulse, socket)
+
+  def handle_info({:delegation_changed, _id}, socket) do
+    if todo = socket.assigns.selected_todo do
+      send_update(MaraithonWeb.DelegationPanel, id: "delegation-#{todo.id}", todo: todo)
+    end
+    {:noreply, socket}
+  end
 
   def handle_info({:todo_brief_poll, todo_id}, socket) do
     with true <- todo_id == socket.assigns.brief_todo_id,

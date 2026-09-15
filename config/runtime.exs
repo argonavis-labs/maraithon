@@ -39,6 +39,18 @@ process_role =
 
 config :maraithon, process_role: process_role
 
+# Identity/control and each provider's execution are separate rollout gates.
+config :maraithon,
+  delegations_enabled: System.get_env("DELEGATIONS_ENABLED", "false") == "true",
+  delegation_user_allowlist:
+    System.get_env("DELEGATION_USER_ALLOWLIST", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1),
+  delegation_sends_enabled: %{
+    gmail: System.get_env("DELEGATION_GMAIL_SENDS_ENABLED", "false") == "true",
+    slack: System.get_env("DELEGATION_SLACK_SENDS_ENABLED", "false") == "true"
+  }
+
 todo_tool_protocol =
   case System.get_env("MARAITHON_TODO_TOOL_PROTOCOL", "native") do
     "native" -> :native

@@ -103,6 +103,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
         :nudge_sweep_initial_delay_ms
       ),
       interval_spec("critical_todo_push", :timer.minutes(5), :timer.seconds(15)),
+      interval_spec("delegation_due_sweep", :timer.minutes(5), :timer.seconds(30)),
       interval_spec("people_network_discovery", :timer.minutes(10), :timer.seconds(30)),
       configured_interval_spec(
         "staleness_triage_sweep",
@@ -357,6 +358,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
   defp bounded_schedule_integer(_value, _range, default), do: default
 
   defp run_cycle("llm_cost_monitor", job), do: CostMonitor.run_once(job)
+  defp run_cycle("delegation_due_sweep", job), do: Maraithon.Delegations.Wakes.run_once(job)
   defp run_cycle(name, _job), do: run_cycle(name)
 
   defp run_cycle("insight_notifier"), do: InsightNotifier.run_once()

@@ -42,6 +42,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       data-receipts={Jason.encode!(@receipts)} data-busy={to_string(@state.busy?)}
       class="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_16rem]">
       <div class="min-w-0 space-y-6">
+        <.live_component module={MaraithonWeb.DelegationPanel} id={"delegation-#{@todo.id}"} todo={@todo} />
         <section aria-label="Maraithon’s read" class="space-y-3">
           <p :if={@brief && @brief["summary"]} class="whitespace-pre-line text-base/7 text-zinc-800"><%= @brief["summary"] %></p>
           <p :if={@brief && @brief["done_when"]} class="text-sm/6 text-zinc-600"><span class="font-medium text-zinc-950">Done when:</span> <%= @brief["done_when"] %></p>

@@ -212,6 +212,26 @@ defmodule MaraithonWeb.CoreComponents do
     """
   end
 
+  @doc "Catalyst checkbox field with an explicit unchecked form value."
+  attr :label, :string, required: true
+  attr :name, :string, required: true
+  attr :value, :string, default: "true"
+  attr :unchecked_value, :string, default: "false"
+  attr :checked, :boolean, default: false
+
+  def checkbox_field(assigns) do
+    ~H"""
+    <div>
+      <input type="hidden" name={@name} value={@unchecked_value} />
+      <label class="grid cursor-pointer grid-cols-[1rem_1fr] items-start gap-x-3 text-sm/6 text-zinc-950">
+        <input type="checkbox" name={@name} value={@value} checked={@checked}
+          class="mt-1 size-4 rounded border-zinc-950/15 text-zinc-900 focus:ring-2 focus:ring-blue-500" />
+        <span><%= @label %></span>
+      </label>
+    </div>
+    """
+  end
+
   @doc """
   Catalyst-inspired badge.
   """

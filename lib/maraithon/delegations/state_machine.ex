@@ -17,7 +17,10 @@ defmodule Maraithon.Delegations.StateMachine do
       Map.put(
         d.data,
         "hold_reason",
-        if(d.state in ~w(sending reconciling), do: "send_may_be_in_flight", else: action)
+        if(d.state in ~w(sending reconciling) or d.data["hold_reason"] == "send_may_be_in_flight",
+          do: "send_may_be_in_flight",
+          else: action
+        )
       )
 
     {%{d | state: state, next_wake_at: nil, data: data}, [{:cancel_unentered, event.data}]}
@@ -30,7 +33,7 @@ defmodule Maraithon.Delegations.StateMachine do
     {%{d | state: "ready", data: Map.drop(d.data, ~w(question hold_reason))}, [:enqueue_sync]}
   end
 
-  def apply(%{state: "paused"} = d, _event), do: {d, []}
+  def apply(%{state: "paused"} = d, _event), do: {%{d | next_wake_at: nil}, []}
 
   def apply(d, %{kind: "inbound_message", data: %{"classification" => classification}} = event) do
     case classification do
@@ -71,8 +74,11 @@ defmodule Maraithon.Delegations.StateMachine do
 
   def apply(d, %{kind: "timer_due"} = event) do
     cond do
+      d.state == "reconciling" ->
+        {%{d | next_wake_at: nil}, [:observe_action]}
+
       d.state in @busy or d.state == "needs_user" ->
-        {d, []}
+        {%{d | next_wake_at: nil}, []}
 
       d.next_wake_at == nil or DateTime.compare(event.occurred_at, d.next_wake_at) == :lt ->
         {d, []}

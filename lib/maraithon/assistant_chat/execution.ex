@@ -11,9 +11,8 @@ defmodule Maraithon.AssistantChat.Execution do
   import Ecto.Query
 
   alias Maraithon.{AssistantChat, Repo}
-  alias Maraithon.PrivacyErasure.WriteFence
-  alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs}
-  alias Maraithon.Runtime.Coordination.{Scope, TaskAssignment, TaskClaims}
+  alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
+  alias Maraithon.Runtime.Coordination.TaskAssignment
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.Run
   alias Maraithon.TelegramConversations.{Conversation, Turn}
@@ -277,37 +276,7 @@ defmodule Maraithon.AssistantChat.Execution do
   end
 
   defp transaction(fun) do
-    Repo.transaction(fn ->
-      job = Process.get(@context_key)
-      fence_job!(job)
-      _ = WriteFence.lock_user_writable!(job.user_id)
-      fun.()
-    end)
-  end
-
-  defp fence_job!(job) do
-    if job.coordination_task_assignment_id do
-      case Repo.get(TaskAssignment, job.coordination_task_assignment_id) do
-        %TaskAssignment{work_kind: "background_job", work_id: id, claim_token: token} = assignment
-        when id == job.id and token == job.claim_token ->
-          TaskClaims.fence_running!(assignment)
-
-        _ ->
-          Repo.rollback(:task_authority_lost)
-      end
-    else
-      if Scope.enabled?(), do: Repo.rollback(:task_authority_required)
-    end
-
-    owned =
-      Repo.one(
-        from j in BackgroundJob,
-          where: j.id == ^job.id and j.claim_token == ^job.claim_token and j.status == "running",
-          select: j.id,
-          lock: "FOR SHARE"
-      )
-
-    if is_nil(owned), do: Repo.rollback(:claim_lost)
+    JobAuthority.transaction(Process.get(@context_key), fun, required: false)
   end
 
   @doc false

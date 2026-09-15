@@ -2846,6 +2846,28 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  # Coordinators reduce durable rows. They never load the user's broad memory
+  # or receive credentials; this closure proves the current directive lease.
+  defp build_context(%{behavior_module: Maraithon.Behaviors.DelegationCoordinator} = data) do
+    %{
+      agent_id: data.agent_id,
+      user_id: data.user_id,
+      timestamp: DateTime.utc_now(),
+      trigger: data.current_trigger,
+      event: data.current_event,
+      write: fn fun ->
+        AgentDirectives.with_live_claim(
+          data.agent_id,
+          data.current_directive_id,
+          data.owner_token,
+          data.current_directive_claim_token,
+          :ready,
+          fn _directive, now -> {:ok, fun.(now)} end
+        )
+      end
+    }
+  end
+
   defp build_context(data) do
     context = %{
       agent_id: data.agent_id,

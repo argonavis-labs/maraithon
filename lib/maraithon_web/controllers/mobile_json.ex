@@ -42,6 +42,8 @@ defmodule MaraithonWeb.MobileJSON do
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       workflow: Maraithon.Todos.Workflow.current(todo),
+      delegation: delegation(todo, opts),
+      can_delegate: Maraithon.Delegations.available?(todo),
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,
@@ -69,6 +71,14 @@ defmodule MaraithonWeb.MobileJSON do
     else
       base
     end
+  end
+
+  defp delegation(todo, opts) do
+    row = case Keyword.fetch(opts, :delegations_by_todo_id) do
+      {:ok, rows} -> Map.get(rows, todo.id)
+      :error -> Maraithon.Delegations.for_todo(todo.user_id, todo.id)
+    end
+    Maraithon.Delegations.summary(row)
   end
 
   defp include_action_card?(%Todo{status: status}, opts) do

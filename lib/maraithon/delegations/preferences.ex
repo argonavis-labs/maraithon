@@ -1,5 +1,6 @@
 defmodule Maraithon.Delegations.Preferences do
   @moduledoc "Shared scheduling, actor, and rolling-budget defaults."
+  import Ecto.Query
   alias Maraithon.{BriefingSchedules, Repo, Timezones}
   alias Maraithon.Delegations.Preference
   alias Maraithon.PrivacyErasure.WriteFence
@@ -57,16 +58,51 @@ defmodule Maraithon.Delegations.Preferences do
       row = Repo.get_by(Preference, user_id: user_id) |> Preference.hydrate()
       data = Map.merge((row && row.data) || @defaults, Map.take(attrs, Map.keys(@defaults)))
 
-      case validate(data) do
-        :ok ->
+      case {validate(data),
+            owned_calendars?(user_id, data["calendar_account_ids"]) and
+              owned_link?(user_id, data["calendar_link_id"])} do
+        {:ok, true} ->
           (row || %Preference{user_id: user_id})
           |> Preference.changeset(%{data: data})
           |> Repo.insert_or_update!()
 
-        error ->
+        {:ok, false} ->
+          Repo.rollback(:invalid_calendar_accounts)
+
+        {error, _} ->
           Repo.rollback(error)
       end
     end)
+  end
+
+  defp owned_calendars?(_, []), do: true
+
+  defp owned_calendars?(user_id, ids) when is_list(ids) do
+    assistant_ids = Maraithon.AssistantIdentities.assistant_account_ids(user_id)
+
+    valid_accounts?(ids) and
+      Repo.aggregate(
+        from(a in Maraithon.Accounts.ConnectedAccount,
+          where:
+            a.user_id == ^user_id and a.id in ^ids and a.status == "connected" and
+              (a.provider == "google" or like(a.provider, "google:%"))
+        ),
+        :count,
+        :id
+      ) == length(Enum.uniq(ids)) and
+      Enum.all?(ids, &(&1 not in assistant_ids))
+  end
+
+  defp owned_calendars?(_, _), do: false
+
+  defp owned_link?(_, id) when id in [nil, ""], do: true
+
+  defp owned_link?(user_id, id) do
+    match?({:ok, _}, Ecto.UUID.cast(id)) and
+      Repo.exists?(
+        from l in Maraithon.CalendarLinks.CalendarLink,
+          where: l.id == ^id and l.user_id == ^user_id
+      )
   end
 
   def validate(data) do

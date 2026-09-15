@@ -696,6 +696,14 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
+  @doc "Normalized participants from a fetched message, without inferring reply-all."
+  def message_participants(message) when is_map(message) do
+    Enum.flat_map([:from, :to, :cc], fn role ->
+      parse_address_list(Map.get(message, role) || Map.get(message, to_string(role)), role)
+    end)
+    |> Enum.uniq_by(&{&1["role"], &1["identifier"]})
+  end
+
   @doc """
   Sends a Gmail message, optionally within an existing thread.
   """
@@ -1381,17 +1389,7 @@ defmodule Maraithon.Connectors.Gmail do
         :skip
 
       message_id ->
-        from_value = Map.get(message, :from) || Map.get(message, "from")
-        to_value = Map.get(message, :to) || Map.get(message, "to")
-        cc_value = Map.get(message, :cc) || Map.get(message, "cc")
-
-        from_participants = parse_address_list(from_value, :from)
-        to_participants = parse_address_list(to_value, :to)
-        cc_participants = parse_address_list(cc_value, :cc)
-
-        participants =
-          (from_participants ++ to_participants ++ cc_participants)
-          |> Enum.uniq_by(& &1["identifier"])
+        participants = message_participants(message) |> Enum.uniq_by(& &1["identifier"])
 
         if participants == [] do
           :skip
@@ -1415,6 +1413,9 @@ defmodule Maraithon.Connectors.Gmail do
              "excerpt" => Map.get(message, :snippet) || Map.get(message, "snippet"),
              "metadata" => %{
                "thread_id" => Map.get(message, :thread_id) || Map.get(message, "thread_id"),
+               "internet_message_id" => Map.get(message, :internet_message_id) || Map.get(message, "internet_message_id"),
+               "in_reply_to" => Map.get(message, :in_reply_to) || Map.get(message, "in_reply_to"),
+               "references" => Map.get(message, :references) || Map.get(message, "references"),
                "labels" => Map.get(message, :labels) || Map.get(message, "labels") || [],
                "google_provider" => identity.provider,
                "connected_account_id" => identity.connected_account_id,

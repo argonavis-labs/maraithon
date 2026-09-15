@@ -103,6 +103,71 @@ defmodule Maraithon.Runtime do
 
   def start_agent(_params), do: {:error, :invalid_agent_start}
 
+  @doc "Ensures the user's one active delegation coordinator without resetting a crash guard."
+  def ensure_delegation_coordinator(user_id, consent, opts \\ []) when is_binary(user_id) do
+    import Ecto.Query
+
+    with :ok <- exact_runtime_request_ready(),
+         :ok <- local_start_preflight(),
+         :ok <- AgentIsolation.validate_binding_consent_input(user_id, consent),
+         {:ok, {agent, created?}} <-
+           Repo.transaction(fn ->
+             if job = Keyword.get(opts, :job), do: Maraithon.Runtime.JobAuthority.fence!(job)
+             Maraithon.DurablePayload.require_current_mutation!()
+             Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(user_id)
+
+             unless Repo.exists?(
+                      from d in Maraithon.Delegations.Delegation,
+                        where:
+                          d.user_id == ^user_id and d.state not in ~w(completed stopped expired)
+                    ),
+                    do: Repo.rollback(:no_live_conversations)
+
+             existing =
+               Repo.one(
+                 from a in Agent,
+                   where:
+                     a.user_id == ^user_id and a.behavior == "delegation_coordinator" and
+                       a.install_status != "removed",
+                   order_by: [desc: a.inserted_at],
+                   limit: 1
+               )
+
+             case existing do
+               nil ->
+                 attrs = %{
+                   user_id: user_id,
+                   behavior: "delegation_coordinator",
+                   config: %{"budget" => default_budget()},
+                   installed_at: DatabaseClock.now!()
+                 }
+
+                 case create_consented_running_agent(attrs, consent) do
+                   {:ok, agent} -> {agent, true}
+                   {:error, reason} -> Repo.rollback(reason)
+                 end
+
+               %{status: status, install_status: "enabled"} = agent
+               when status in ~w(running recovering degraded) ->
+                 {agent, false}
+
+               _ ->
+                 Repo.rollback(:coordinator_requires_recovery)
+             end
+           end) do
+      if created? do
+        case start_or_enqueue_with_failure_fence(agent) do
+          {:ok, _} -> {:ok, agent}
+          {:error, :runtime_lease_owned} -> {:ok, agent}
+          error -> error
+        end
+      else
+        WakeCoordinator.nudge()
+        {:ok, agent}
+      end
+    end
+  end
+
   @doc """
   Install the latest package version for a user and start its runtime process.
   """

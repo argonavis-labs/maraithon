@@ -4,6 +4,7 @@ defmodule Maraithon.Behaviors do
   """
 
   @behaviors %{
+    "delegation_coordinator" => Maraithon.Behaviors.DelegationCoordinator,
     "codebase_advisor" => Maraithon.Behaviors.CodebaseAdvisor,
     "watchdog_summarizer" => Maraithon.Behaviors.WatchdogSummarizer,
     "repo_planner" => Maraithon.Behaviors.RepoPlanner,

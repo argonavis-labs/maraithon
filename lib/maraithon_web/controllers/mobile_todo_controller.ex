@@ -22,7 +22,9 @@ defmodule MaraithonWeb.MobileTodoController do
     # invalidates every filtered view; card projections may lag until a todo
     # row changes — accepted). Computed before the expensive list query so a
     # 304 never runs it.
-    etag = MobileConditional.collection_etag("todos", Todos.collection_version(user_id))
+    delegation_version = Maraithon.Delegations.collection_version(user_id)
+    prefix = "todos-#{Maraithon.Delegations.Scope.hash({delegation_version, Maraithon.Delegations.Gates.enabled?(user_id), Application.get_env(:maraithon, :delegation_sends_enabled, %{})})}"
+    etag = MobileConditional.collection_etag(prefix, Todos.collection_version(user_id))
 
     MobileConditional.with_collection_etag(conn, etag, fn conn ->
       json_opts = json_opts(params, user_id)
@@ -53,6 +55,7 @@ defmodule MaraithonWeb.MobileTodoController do
         json_opts
         |> Keyword.put(:open_cards_only, truthy?(Map.get(params, "open_cards_only")))
         |> Keyword.put(:related_people_by_todo_id, related_people_by_todo_id)
+        |> Keyword.put(:delegations_by_todo_id, Maraithon.Delegations.for_todos(user_id, Enum.map(todos, & &1.id)))
 
       json(conn, %{
         todos: Enum.map(todos, &MobileJSON.todo(&1, json_opts)),

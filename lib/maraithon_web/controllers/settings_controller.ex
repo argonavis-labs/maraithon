@@ -4,8 +4,26 @@ defmodule MaraithonWeb.SettingsController do
   alias Maraithon.Accounts
   alias Maraithon.CalendarLinks
 
-  def index(conn, _params) do
-    render_settings(conn)
+  def index(conn, params) do
+    render_settings(conn, assistant_settings_params: params)
+  end
+
+  def update_assistant_identity(conn, %{"assistant_identity" => attrs}),
+    do: save_delegation_settings(conn, &MaraithonWeb.AssistantSettings.save_identity(&1, attrs))
+
+  def update_delegation_preferences(conn, %{"delegation_preferences" => attrs}),
+    do: save_delegation_settings(conn, &MaraithonWeb.AssistantSettings.save_preferences(&1, attrs))
+
+  defp save_delegation_settings(conn, save) do
+    result = case conn.assigns[:current_user] do
+      %{id: id} -> save.(id)
+      _ -> {:error, :not_signed_in}
+    end
+    conn = case result do
+      {:ok, _} -> put_flash(conn, :info, "Assistant settings saved.")
+      {:error, reason} -> put_flash(conn, :error, MaraithonWeb.DelegationCopy.error(reason))
+    end
+    redirect(conn, to: ~p"/settings#assistant-identity")
   end
 
   def update_calendar_links(conn, %{"calendar_links" => %{"links" => links}}) do
@@ -73,7 +91,7 @@ defmodule MaraithonWeb.SettingsController do
   defp assistant_model_saved_message(model),
     do: "Assistant model set to #{model}. New chats, briefs, and check-ins use it from now on."
 
-  defp render_settings(conn, extra_assigns \\ []) do
+  defp render_settings(conn, extra_assigns) do
     current_user = conn.assigns.current_user
     settings_user = settings_user(conn)
 
@@ -89,6 +107,7 @@ defmodule MaraithonWeb.SettingsController do
         oauth_items: oauth_items(),
         settings_user: settings_user,
         assistant_model: settings_user && settings_user.assistant_model,
+        assistant_settings: if(current_user, do: MaraithonWeb.AssistantSettings.load(current_user.id, Keyword.get(extra_assigns, :assistant_settings_params, %{})), else: %{enabled: false}),
         default_model: Maraithon.LLM.chat_model() || "not configured",
         calendar_link_rows:
           Keyword.get_lazy(extra_assigns, :calendar_link_rows, fn ->

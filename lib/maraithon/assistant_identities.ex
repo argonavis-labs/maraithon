@@ -27,6 +27,17 @@ defmodule Maraithon.AssistantIdentities do
 
   def assistant_account?(_), do: false
 
+  def configure(user_id, attrs) do
+    with {:ok, aliases} <- send_as(user_id, attrs["gmail_connected_account_id"]),
+         %{} = sender <- Enum.find(aliases, &(&1["sendAsEmail"] == attrs["gmail_send_as_email"])),
+         true <- attrs["gmail_mode"] == "alias" or sender["isPrimary"] == true do
+      put(user_id, attrs)
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :sending_identity_unavailable}
+    end
+  end
+
   def put(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     Repo.transaction(fn ->
       Maraithon.DurablePayload.require_current_mutation!()
