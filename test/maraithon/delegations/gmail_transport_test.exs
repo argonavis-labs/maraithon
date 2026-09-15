@@ -83,6 +83,45 @@ defmodule Maraithon.Delegations.GmailTransportTest do
     assert {:ok, _} = Gmail.send_message(c.user_id, Map.put(c.attrs, :from_name, "Kent Fenwick"))
   end
 
+  test "signature links survive in HTML and never leak evidence annotations into plain mail", c do
+    sender(c.bypass)
+    parent(c.bypass)
+    html = "<div>Kent<br>Co-founder of <a href=\"https://runner.now/\">Runner</a></div>"
+    signature = Maraithon.Connectors.Gmail.BodyText.signature(html)
+    scope = %{"identity" => %{"signature" => signature, "signature_html" => html}}
+    body = "Works for me. <not markup>"
+    plain = Maraithon.Delegations.EmailBody.plain(scope, body)
+    rich = Maraithon.Delegations.EmailBody.html(scope, plain)
+    refute plain =~ "[href:"
+    assert rich =~ "&lt;not markup&gt;"
+    assert length(String.split(rich, html)) == 2
+    assert Maraithon.Connectors.Gmail.BodyText.from_message(%{"html_body" => html}) =~ "[href:"
+
+    Bypass.expect_once(c.bypass, "POST", "/users/me/messages/send", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      mime = raw |> Jason.decode!() |> Map.fetch!("raw") |> Base.url_decode64!(padding: false)
+      assert mime =~ "Content-Type: multipart/alternative"
+      [_, boundary] = Regex.run(~r/boundary="([^"]+)"/, mime)
+      assert byte_size(boundary) <= 70
+
+      parts =
+        Regex.scan(~r/Content-Type: text\/(plain|html);.*?\r\n\r\n(.*?)(?=\r\n--)/s, mime)
+        |> Map.new(fn [_, type, data] ->
+          {type, Base.decode64!(String.replace(data, ~r/\s/, ""))}
+        end)
+
+      assert parts == %{"plain" => plain, "html" => rich}
+      assert parts["html"] =~ ~s(href="https://runner.now/")
+      json(conn, %{"id" => "445566", "threadId" => "aabbcc"})
+    end)
+
+    args =
+      Map.new(c.attrs, fn {key, value} -> {to_string(key), value} end)
+      |> Map.merge(%{"user_id" => c.user_id, "body" => plain, "html_body" => rich})
+
+    assert {:ok, _} = Maraithon.Tools.GmailSendMessage.execute(args)
+  end
+
   test "sender names cannot inject recipients", c do
     assert {:error, :invalid_mail_headers} =
              Gmail.send_message(

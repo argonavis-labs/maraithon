@@ -98,14 +98,7 @@ defmodule Maraithon.Delegations.Policy do
   end
 
   @doc "The exact email body reviewed and frozen, with the grant's saved signature."
-  def email_body(scope, body) when is_binary(body) do
-    signature = String.trim(get_in(scope, ["identity", "signature"]) || "")
-    body = String.trim_trailing(body)
-
-    if signature == "" or body == signature or String.ends_with?(body, "\n" <> signature),
-      do: body,
-      else: body <> "\n\n" <> signature
-  end
+  def email_body(scope, body), do: Maraithon.Delegations.EmailBody.plain(scope, body)
 
   def validate(context, decision) when is_map(decision) do
     snapshot = context.run.prompt_snapshot["sources"] || %{}

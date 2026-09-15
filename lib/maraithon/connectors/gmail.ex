@@ -723,6 +723,7 @@ defmodule Maraithon.Connectors.Gmail do
         Maraithon.Tools.GmailApiHelpers.raw_message(to, subject, body,
           from: optional_attr(attrs, "from"),
           from_name: optional_attr(attrs, "from_name"),
+          html_body: optional_attr(attrs, "html_body"),
           cc: optional_attr(attrs, "cc"),
           in_reply_to: reply_headers["message_id"],
           references: reply_headers["references"],

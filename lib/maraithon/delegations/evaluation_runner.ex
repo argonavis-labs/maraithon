@@ -308,6 +308,11 @@ defmodule Maraithon.Delegations.EvaluationRunner do
           "from_name" => job.payload["sender_identity"]["display_name"],
           "body" =>
             Policy.email_body(%{"identity" => job.payload["sender_identity"]}, content["body"]),
+          "html_body" =>
+            Maraithon.Delegations.EmailBody.html(
+              %{"identity" => job.payload["sender_identity"]},
+              content["body"]
+            ),
           "to" => @user,
           "cc" => "",
           "subject" => job.payload["subject"]

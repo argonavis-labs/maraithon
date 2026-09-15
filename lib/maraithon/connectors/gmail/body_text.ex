@@ -45,12 +45,15 @@ defmodule Maraithon.Connectors.Gmail.BodyText do
     end
   end
 
-  defp render_html(html) do
+  @doc "Visible signature text, without the attribute annotations used in model evidence."
+  def signature(html) when is_binary(html), do: render_html(html, false)
+
+  defp render_html(html, attributes? \\ true) do
     html
     # CSS and executable script are not the message's visible evidence. Keep
     # comment contents (including Outlook conditional content) conservatively.
     |> String.replace(~r/<(style|script)\b[^>]*>.*?<\/\1\s*>/isu, " ")
-    |> then(&Regex.replace(@tag, &1, fn tag -> render_tag(tag) end))
+    |> then(&Regex.replace(@tag, &1, fn tag -> render_tag(tag, attributes?) end))
     |> then(
       &Regex.replace(~r/&(#(?:x|X)[0-9a-fA-F]{1,8}|#[0-9]{1,7}|[A-Za-z]{1,31});/, &1, fn entity,
                                                                                          name ->
@@ -63,7 +66,7 @@ defmodule Maraithon.Connectors.Gmail.BodyText do
     |> String.trim()
   end
 
-  defp render_tag(tag) do
+  defp render_tag(tag, attributes?) do
     # Attribute values can contain '>'; the tokenizer keeps quoted values
     # together. Preserve link destinations and descriptive text before removing
     # markup, including calls to action carried by linked images.
@@ -84,7 +87,7 @@ defmodule Maraithon.Connectors.Gmail.BodyText do
          do: "\n",
          else: ""
 
-    attributes <> separator
+    if(attributes?, do: attributes, else: "") <> separator
   end
 
   defp decode_entity(original, "#x" <> digits), do: decode_codepoint(original, digits, 16)

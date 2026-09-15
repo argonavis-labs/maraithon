@@ -217,8 +217,12 @@ defmodule Maraithon.AssistantIdentities do
          "actor" => actor,
          "email" => sender["sendAsEmail"],
          "display_name" =>
-           if(identity, do: identity.data["display_name"], else: sender["displayName"]),
+           if(identity,
+             do: identity.data["display_name"],
+             else: nonempty(sender["displayName"]) || account.metadata["account_name"]
+           ),
          "signature" => signature(identity, sender),
+         "signature_html" => signature_html(identity, sender),
          "disclose_ai" => not is_nil(identity) and identity.data["disclose_ai"] == true,
          "cc_user_on_first_send" =>
            not is_nil(identity) and identity.data["cc_user_on_first_send"] == true,
@@ -251,9 +255,28 @@ defmodule Maraithon.AssistantIdentities do
   end
 
   defp mailbox_signature(sender),
-    do:
-      Maraithon.Connectors.Gmail.BodyText.from_message(%{"html_body" => sender["signature"] || ""}) ||
-        ""
+    do: Maraithon.Connectors.Gmail.BodyText.signature(sender["signature"] || "")
+
+  defp signature_html(identity, sender) do
+    override = identity && nonempty(identity.data["signature_text"])
+
+    footer =
+      if override,
+        do: Maraithon.Delegations.EmailBody.text_html(override),
+        else: sender["signature"] || ""
+
+    disclosure =
+      if identity && identity.data["disclose_ai"],
+        do:
+          identity.data["disclosure_line"] ||
+            "I'm an AI assistant handling scheduling and follow-ups."
+
+    footer <>
+      if(disclosure,
+        do: "<br>" <> Maraithon.Delegations.EmailBody.text_html(disclosure),
+        else: ""
+      )
+  end
 
   defp nonempty(value) when is_binary(value), do: if(String.trim(value) != "", do: value)
   defp nonempty(_), do: nil

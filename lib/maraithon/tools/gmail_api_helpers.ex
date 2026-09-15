@@ -106,16 +106,43 @@ defmodule Maraithon.Tools.GmailApiHelpers do
       "Date: #{Calendar.strftime(DateTime.utc_now(), "%a, %d %b %Y %H:%M:%S +0000")}",
       message_id_header(Keyword.get(opts, :message_id_header)),
       "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=UTF-8",
       maybe_header("In-Reply-To", Keyword.get(opts, :in_reply_to)),
-      maybe_header("References", Keyword.get(opts, :references)),
-      "",
-      body
+      maybe_header("References", Keyword.get(opts, :references))
     ]
     |> Enum.reject(&is_nil/1)
+    |> Kernel.++(mime_body(body, Keyword.get(opts, :html_body)))
     |> Enum.join("\r\n")
     |> Base.url_encode64(padding: false)
   end
+
+  defp mime_body(body, html) when is_binary(html) and html != "" do
+    boundary =
+      "maraithon_" <>
+        (:crypto.hash(:sha256, body <> html)
+         |> Base.encode16(case: :lower)
+         |> String.slice(0, 32))
+
+    ["Content-Type: multipart/alternative; boundary=\"#{boundary}\"", ""] ++
+      Enum.flat_map([{"plain", body}, {"html", html}], fn {type, content} ->
+        [
+          "--#{boundary}",
+          "Content-Type: text/#{type}; charset=UTF-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          encode_part(content)
+        ]
+      end) ++ ["--#{boundary}--"]
+  end
+
+  defp mime_body(body, _), do: ["Content-Type: text/plain; charset=UTF-8", "", body]
+
+  defp encode_part(content),
+    do:
+      content
+      |> Base.encode64()
+      |> String.codepoints()
+      |> Enum.chunk_every(76)
+      |> Enum.map_join("\r\n", &Enum.join/1)
 
   defp named_sender(email, name) when is_binary(email) and is_binary(name) and name != "",
     do: "=?UTF-8?B?#{Base.encode64(name)}?= <#{email}>"
