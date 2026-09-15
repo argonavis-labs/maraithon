@@ -1,0 +1,214 @@
+{
+  "recorded_at": "2026-09-15",
+  "actor": "as_assistant",
+  "model": "meta/muse-spark-1.3-contributor",
+  "execution": "maraithon-todo-validation-9nnh8",
+  "started_revision": "maraithon-00366-r29",
+  "development_spending": true,
+  "passed": true,
+  "successful_model_calls": 8,
+  "successful_cost_micro_usd": 3740,
+  "iteration_cost_micro_usd_including_two_failed_attempts": 4902,
+  "scope": "Controlled Gmail evals only. Calendar copy was verified before cancellation of the temporary test event. Recorded delegation costs exclude other OpenRouter workloads.",
+  "scenarios": {
+    "schedule_and_book": {
+      "messages": [
+        {
+          "action_id": "4246e652-eece-ae7f-eb7a-ffcd12761a2a",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        },
+        {
+          "action_id": "692897d1-6677-4bf7-beb8-fbc3f42c46ad",
+          "fixture": false,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        },
+        {
+          "action_id": "46d976b1-36da-90cf-8996-4c25e9768300",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        }
+      ],
+      "at": "2026-09-15T20:52:29.892854Z",
+      "state": "completed",
+      "result": {
+        "accepted_slot": {
+          "end_at": "2026-09-21T13:00:00Z",
+          "start_at": "2026-09-21T12:30:00Z",
+          "timezone": "America/Toronto"
+        },
+        "agent_messages": 1,
+        "booked_events": 1,
+        "calendar_cleanup": "completed",
+        "completion_cites_reply": true,
+        "copy_checks": 1,
+        "cost_micro_usd": 2615,
+        "delegation_id": "fc5e4ce6-8d3c-40f7-8bea-6db91244a3d2",
+        "event_id": "cbgkla663ngmb3lh6geb3idh7b6r73tqpk4ru6vven9jiv782tdg",
+        "model_calls": 4,
+        "offered_slots_count": 3,
+        "phase": "passed",
+        "recipient_calendar_copy": true,
+        "reoffered": false,
+        "reply_count": 1,
+        "reply_message_id": "1a0a6d6145bb9849",
+        "todo_id": "5e885138-84e0-414d-a7b2-d60b30ef7bc0",
+        "todo_state": "waiting",
+        "turns": 2,
+        "verified_booked_action_id": "0ea8cede-88d3-49ee-b43f-6b0006f23bfa"
+      },
+      "job_id": "2d8688f9-28f9-4b78-8a8f-e0ca1894a6e5",
+      "delegation_id": "fc5e4ce6-8d3c-40f7-8bea-6db91244a3d2",
+      "lifetime_sends": 1,
+      "turns": [
+        {
+          "id": "3631b526-4b6d-4a32-b948-b7479bcda39c",
+          "status": "settled",
+          "cost_micro_usd": 1320,
+          "calls": 2
+        },
+        {
+          "id": "4684f794-046f-40ca-8f8c-860c301a4754",
+          "status": "settled",
+          "cost_micro_usd": 1295,
+          "calls": 2
+        }
+      ],
+      "cost_micro_usd": 2615,
+      "assistant_isolation": {
+        "email": "october@ewakened.com",
+        "account_id": 9,
+        "actor": "as_assistant",
+        "bound_to_assistant": true,
+        "excluded_from_personal_accounts": true,
+        "default_google_excludes_assistant": true,
+        "excluded_from_user_handles": true
+      },
+      "job_status": "completed"
+    },
+    "information_reply": {
+      "messages": [
+        {
+          "action_id": "9481b945-d01e-55d5-49a4-4ca00a9646e1",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        },
+        {
+          "action_id": "939abf37-d6d3-40ad-b0fd-3dfe73fa0fa6",
+          "fixture": false,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        },
+        {
+          "action_id": "a9bb6cd7-ec83-9b20-c2e1-c39405dbd5c9",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        }
+      ],
+      "at": "2026-09-15T20:48:58.394386Z",
+      "state": "completed",
+      "result": {
+        "accepted_slot": null,
+        "agent_messages": 1,
+        "completion_cites_reply": true,
+        "cost_micro_usd": 1125,
+        "delegation_id": "311f0248-ac08-497c-94ae-3ce63854a1ad",
+        "model_calls": 4,
+        "offered_slots_count": 0,
+        "phase": "passed",
+        "reply_count": 1,
+        "reply_message_id": "1a0a6d3e6ecd1cfe",
+        "todo_id": "911d4a71-c486-4160-b5f9-ccc654e3c0eb",
+        "todo_state": "done",
+        "turns": 2
+      },
+      "job_id": "c05e709e-a9e2-4545-8b81-13f6d14b2d00",
+      "delegation_id": "311f0248-ac08-497c-94ae-3ce63854a1ad",
+      "lifetime_sends": 1,
+      "turns": [
+        {
+          "id": "6f4f3319-d362-443b-8fa5-e6b71d0aa2ef",
+          "status": "settled",
+          "cost_micro_usd": 515,
+          "calls": 2
+        },
+        {
+          "id": "b9fe1af7-99a8-4ebb-984f-bb74c56c53fc",
+          "status": "settled",
+          "cost_micro_usd": 610,
+          "calls": 2
+        }
+      ],
+      "cost_micro_usd": 1125,
+      "assistant_isolation": {
+        "email": "october@ewakened.com",
+        "account_id": 9,
+        "actor": "as_assistant",
+        "bound_to_assistant": true,
+        "excluded_from_personal_accounts": true,
+        "default_google_excludes_assistant": true,
+        "excluded_from_user_handles": true
+      },
+      "job_status": "completed"
+    }
+  }
+}

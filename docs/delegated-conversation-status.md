@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information, regular calendar, and busy-slot recovery paths have passed controlled live evals as the user. The booking approval correction and rich mailbox signatures are deployed and verified live. October's sending permission is enabled. It has delivered its first signed email, but its reply eval exposed a mailbox lookup defect and has not passed yet. Brief reporting and the budget preflight are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -153,10 +153,18 @@ The next assistant run made two calls, cost US$0.000512, and sent no assistant e
 
 Composition and review now share explicit routing instructions: use `send` to obtain the requested information from the granted counterparty; use `needs_user` for a decision, permission, preference, or authority gap that requires the operator. The review also checks the chosen recipient. Signature-composition instructions now appear only in the composition prompt. The server build and 13 focused policy checks passed. [Failed-run evidence](evidence/delegated-conversations/2026-09-15-october-question-routing.json).
 
+## October information and scheduling passed
+
+Commit `d7c71162` deployed successfully in workflow `35021093988`, revision `maraithon-00366-r29`. The controlled assistant run then passed both scenarios. October asked for the project colour, received indigo, cited the reply, and marked the task Done. Scheduling offered three times, received acceptance of the second, and created exactly one meeting on Kent's source calendar for September 21, 8:30 to 9:00 AM Toronto time. The recipient calendar copy was verified before the temporary event was cancelled.
+
+Both flows used four Muse calls each. Information cost US$0.001125; scheduling cost US$0.002615; together they cost US$0.003740. Including the two failed attempts during this iteration, recorded model cost was US$0.004902. These are delegation eval charges, not total OpenRouter account spending. All six sent emails matched the frozen plain-text and HTML bodies, mailbox signatures, and display names. Assistant account isolation passed in both runs. [Live October evidence](evidence/delegated-conversations/2026-09-15-live-october.json).
+
+The completed information task is visible on the authenticated web app as Completed, October, as your assistant. That check also found that the panel still said Sent a message instead of showing the learned answer. Commit `b89a789e` projects the verified completed outcome through the existing shared `last_action` field consumed by web, Mac, and iPhone. The server build passed; this presentation change adds no model or provider calls. Workflow `35022106548` deployed revision `maraithon-00367-9p7` successfully. The production web panel now displays the learned indigo answer beneath Completed and October, as your assistant.
+
 ## Remaining work
 
-1. Run October's information and scheduling conversations with development spending enabled. Sending consent is complete. The Kent-pair information, regular scheduling, and busy-slot evals have passed as the user.
-2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
+1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
+2. Finish voice sample cleaning and bound-author checks, including quotes, forwards, signatures, boilerplate, automated messages, and Slack self-authorship. Assistant identity, signatures, and account isolation now have live Gmail evidence.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals. Brief reporting is deployed and verified against production records.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
