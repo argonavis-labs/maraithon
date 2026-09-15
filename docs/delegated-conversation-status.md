@@ -38,6 +38,8 @@ The server build and all 14 assistant-isolation checks passed. The new cases cov
 
 Calendar watch renewal also keeps the bound account's token when retiring the old channel. Previously, an assistant or secondary-calendar renewal could create the replacement correctly, then try to stop the old watch with the default personal account. That could leave both channels delivering notifications. The existing renewal checks now include an assistant account alongside a different default account; all three checks and the server build passed.
 
+Commit `f63e0af7` deployed through workflow `35029135398`; revision `maraithon-00373-4c8` is ready. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. Default Google watch helpers also use the shared OAuth fallback, which already excludes assistant accounts; explicit per-account renewal remains available.
+
 ## Authored voice samples
 
 Gmail and Slack now share a voice-sample cleaner. Gmail requires Sent mail from the bound mailbox's primary or verified send-as addresses; assistant accounts and the configured assistant alias are excluded. Slack verifies the token's live member and workspace, then checks those fields on every search result. Search terms and caller-supplied sample text cannot substitute for sender evidence.
@@ -47,6 +49,8 @@ The cleaner removes recognised reply quotes, wrapped reply headers, configured s
 Older profiles without the cleaning version, failed refreshes, and successful JSON responses without actual guidance use explicit style instructions. Assistant turns retain their house style. This adds no provider or model calls to a delegated turn; collection runs only on voice refresh. Recognition of signature and quote formats is deterministic, not a claim that every possible mail-client format is covered.
 
 The server build and 23 focused local checks passed. They cover both providers' authorship, quoted and generated evidence, signatures, account isolation, draft and turn selection, history overflow, and a real prepared-action retention purge under the exact runtime. No live messages or paid model calls were made for these checks.
+
+Commit `49bcd252` deployed through workflow `35028690308`; revision `maraithon-00372-thq` is ready. A read-only production job then sampled eight messages from Kent's Runner mailbox. All four controlled eval emails were excluded as generated writing. Two ordinary messages were excluded as forwards; two were retained after footer removal. The check used 39 authenticated prepared-action records and wrote no profile, made no model call, and sent no message. This verifies the deployed sampling path on a small real mailbox sample, not learned-profile quality. [Live sampling evidence](evidence/delegated-conversations/2026-09-15-voice-sampling.json).
 
 ## Previously verified
 
@@ -210,10 +214,11 @@ The completed information task is visible on the authenticated web app as Comple
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
-2. Verify the cleaned voice sampler against live mailbox evidence. The pilot's authored-sample checks pass locally; incremental learning and profile promotion remain a separate spec.
-3. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
-4. Add delegation proposals. Brief reporting is deployed and verified against production records.
-5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
-6. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
+2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
+3. Add delegation proposals. Brief reporting is deployed and verified against production records.
+4. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
+5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
+
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Long-thread pagination, scheduling preference refinements, and the full conversation ledger also remain unfinished.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.

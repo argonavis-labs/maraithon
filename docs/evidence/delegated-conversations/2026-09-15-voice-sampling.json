@@ -1,0 +1,59 @@
+{
+  "checked_at": "2026-09-15T22:07:53.731807Z",
+  "code_commit": "49bcd252116c07243a6756a583971b6b2645876d",
+  "deployment_workflow": 35028690308,
+  "revision": "maraithon-00372-thq",
+  "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:034938270cfc194bc54bd0fad88d8c823ca03f21b00f6b32ee810cf8c0af3670",
+  "execution": "maraithon-todo-validation-bnfvp",
+  "execution_completed": true,
+  "mailbox": "kent@runner.now",
+  "cleaning_version": 1,
+  "samples": [
+    {
+      "sample": "controlled_eval",
+      "status": "ok",
+      "fetched": 4,
+      "accepted": 0,
+      "all_bound_to_requested_account": true,
+      "authored_characters": [],
+      "known_actions": 39,
+      "counts": {
+        "cleaned": {},
+        "cleaning_version": 1,
+        "excluded": {"generated": 4},
+        "gmail": 0
+      }
+    },
+    {
+      "sample": "ordinary_sent",
+      "status": "ok",
+      "fetched": 4,
+      "accepted": 2,
+      "all_bound_to_requested_account": true,
+      "authored_characters": [447, 1117],
+      "known_actions": 39,
+      "counts": {
+        "cleaned": {"footer": 2},
+        "cleaning_version": 1,
+        "excluded": {"forwarded": 2},
+        "gmail": 2
+      }
+    }
+  ],
+  "profiles_written": 0,
+  "model_calls": 0,
+  "messages_sent": 0,
+  "config": {
+    "LLM_MODEL": "meta/muse-spark-1.3-contributor",
+    "LLM_PROJECTED_DAILY_USD": "3.00",
+    "DELEGATION_EVAL_ONLY": "true",
+    "DELEGATION_GMAIL_SENDS_ENABLED": "true",
+    "DELEGATION_SLACK_SENDS_ENABLED": "false",
+    "LLM_DEVELOPMENT_SPENDING": "true"
+  },
+  "limitations": [
+    "Small read-only Gmail sample; no profile quality evaluation or promotion.",
+    "No live Slack requests. Kent deferred the controlled live Slack eval.",
+    "No mailbox content, subjects, recipients, or credentials retained in this artifact."
+  ]
+}
