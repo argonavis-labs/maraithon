@@ -15,6 +15,47 @@ defmodule MaraithonWeb.FocusedTodosLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
+  test "a delegated workspace mounts and shows its ledger without competing draft actions", %{
+    conn: conn
+  } do
+    alias Maraithon.Delegations.Delegation
+
+    account =
+      Repo.insert!(%Maraithon.Accounts.ConnectedAccount{
+        user_id: @user_email,
+        provider: "google:workspace-eval",
+        status: "connected"
+      })
+
+    todo =
+      Repo.insert!(%Todo{
+        user_id: @user_email,
+        source: "manual",
+        title: "Schedule the eval",
+        summary: "Arrange the test meeting.",
+        next_action: "Attend the confirmed meeting.",
+        dedupe_key: Ecto.UUID.generate()
+      })
+
+    %Delegation{user_id: @user_email}
+    |> Delegation.changeset(%{
+      todo_id: todo.id,
+      provider: "gmail",
+      connected_account_id: account.id,
+      state: "completed",
+      data: %{"last_action" => "Booked the agreed meeting."}
+    })
+    |> Repo.insert!()
+
+    {:ok, view, _} = live(conn, "/todos/#{todo.id}")
+    render_async(view)
+    assert has_element?(view, "#delegation-#{todo.id}"), render(view)
+    assert has_element?(view, "#delegation-#{todo.id}", "Booked the agreed meeting.")
+    refute has_element?(view, "section[aria-label='Maraithon’s read']")
+    refute has_element?(view, "#todo-next-actions-title")
+    refute render(view) =~ "Gmail draft ready"
+  end
+
   test "authenticated shell keeps Todos primary and Apps available for connections", %{conn: conn} do
     assert {:ok, [_todo]} =
              Todos.upsert_many(@user_email, [

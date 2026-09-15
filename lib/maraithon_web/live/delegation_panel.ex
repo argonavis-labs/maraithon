@@ -131,7 +131,7 @@ defmodule MaraithonWeb.DelegationPanel do
   @impl true
   def render(assigns) do
     ~H"""
-    <section id={@id} :if={@available? || @delegation} aria-label="Delegated conversation" class="space-y-3">
+    <section id={@id} hidden={not @available? and is_nil(@delegation)} aria-label="Delegated conversation" class="space-y-3">
       <div :if={@delegation} class="space-y-2 border-y border-zinc-950/10 py-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="min-w-0">
@@ -145,6 +145,7 @@ defmodule MaraithonWeb.DelegationPanel do
             </.button>
           </div>
         </div>
+        <p :if={@delegation["last_action"]} class="text-sm/6 text-zinc-700"><%= @delegation["last_action"] %></p>
         <p :if={@delegation["hold_reason"] == "send_may_be_in_flight"} class="text-sm/6 text-amber-700">One message may already be sending. Maraithon is checking its delivery.</p>
         <.form :if={"answer" in @delegation["controls"]} for={%{}} phx-submit="control" phx-target={@myself} class="space-y-2">
           <input type="hidden" name="action" value="answer" />
