@@ -66,6 +66,28 @@ defmodule Maraithon.SourceLabels do
 
   def label(source, _opts), do: to_string(source)
 
+  def account(account) do
+    metadata = account.metadata || %{}
+
+    if String.starts_with?(account.provider, "slack:") do
+      workspace =
+        metadata["team_name"] || metadata["workspace_name"] || account.external_account_id ||
+          account.provider |> String.split(":") |> Enum.at(1)
+
+      workspace <>
+        if(String.contains?(account.provider, ":user:"),
+          do: " · Direct messages",
+          else: " · Channels"
+        )
+    else
+      metadata["account_email"] || metadata["email"] || account.external_account_id ||
+        if(String.starts_with?(account.provider, "google:"),
+          do: String.replace_prefix(account.provider, "google:", ""),
+          else: label(account.provider)
+        )
+    end
+  end
+
   defp normalize(source) do
     source
     |> String.trim()

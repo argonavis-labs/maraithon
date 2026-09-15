@@ -1,6 +1,8 @@
 defmodule MaraithonWeb.AssistantSettings do
   @moduledoc "Shared, credential-free assistant settings for web and native clients."
-  alias Maraithon.{AssistantIdentities, ConnectedAccounts}
+  import Ecto.Query
+  alias Maraithon.{AssistantIdentities, Repo, SourceLabels}
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Delegations.{Gates, Preferences}
 
   def load(user_id, params \\ %{}) do
@@ -8,12 +10,14 @@ defmodule MaraithonWeb.AssistantSettings do
       identity = AssistantIdentities.get(user_id)
 
       accounts =
-        ConnectedAccounts.list_for_user(user_id)
-        |> Enum.filter(
-          &(&1.status == "connected" and
-              (&1.provider == "google" or String.starts_with?(&1.provider, "google:")))
+        from(a in ConnectedAccount,
+          where:
+            a.user_id == ^user_id and a.status == "connected" and
+              (a.provider == "google" or like(a.provider, "google:%")),
+          select: map(a, [:id, :provider, :external_account_id, :metadata])
         )
-        |> Enum.map(&%{id: &1.id, label: &1.external_account_id || &1.provider})
+        |> Repo.all()
+        |> Enum.map(&%{id: &1.id, label: SourceLabels.account(&1)})
 
       selected =
         integer(params["assistant_account"]) || (identity && identity.gmail_connected_account_id)
@@ -43,7 +47,12 @@ defmodule MaraithonWeb.AssistantSettings do
         aliases: aliases,
         error: error,
         identity: Map.put(data, "gmail_mode", (identity && identity.gmail_mode) || "account"),
-        preferences: Preferences.get(user_id)
+        preferences: Preferences.get(user_id),
+        timezones: Maraithon.Timezones.options(),
+        numeric_preferences:
+          Enum.map(numeric_preferences(), fn {key, label, min, max} ->
+            %{key: key, label: label, min: min, max: max}
+          end)
       }
     else
       %{enabled: false}
@@ -95,6 +104,18 @@ defmodule MaraithonWeb.AssistantSettings do
       {:error, :delegations_disabled}
     end
   end
+
+  def numeric_preferences,
+    do: [
+      {"default_duration_min", "Meeting length (minutes)", 5, 240},
+      {"buffer_min", "Meeting buffer (minutes)", 0, 120},
+      {"lead_time_hours", "Scheduling notice (hours)", 0, 720},
+      {"max_meetings_per_day", "Meetings per day", 1, 24},
+      {"as_user_undo_seconds", "Undo window as me (seconds)", 0, 3600},
+      {"as_assistant_undo_seconds", "Undo window as assistant (seconds)", 0, 3600},
+      {"follow_up_business_days", "Working days between follow-ups", 1, 180},
+      {"reminders_per_cycle", "Reminders before waiting", 0, 10}
+    ]
 
   defp integer(value) when is_integer(value), do: value
 

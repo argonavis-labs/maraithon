@@ -72,7 +72,7 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
           <.field :for={{key, label} <- [{"work_start", "Start of day"}, {"work_end", "End of day"}]} label={label} for={"delegation-#{key}"}>
             <.c_input id={"delegation-#{key}"} name={"delegation_preferences[#{key}]"} type="time" value={@preferences[key]} required />
           </.field>
-          <.field :for={{key, label, min, max} <- numeric_preferences()} label={label} for={"delegation-#{key}"}>
+          <.field :for={{key, label, min, max} <- MaraithonWeb.AssistantSettings.numeric_preferences()} label={label} for={"delegation-#{key}"}>
             <.c_input id={"delegation-#{key}"} name={"delegation_preferences[#{key}]"} type="number" value={@preferences[key]} min={min} max={max} required />
           </.field>
           <.field label="Video link" for="delegation-video-link"><.c_input id="delegation-video-link" name="delegation_preferences[video_link]" value={@preferences["video_link"]} type="url" /></.field>
@@ -83,16 +83,4 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
     </details>
     """
   end
-
-  defp numeric_preferences,
-    do: [
-      {"default_duration_min", "Meeting length (minutes)", 5, 240},
-      {"buffer_min", "Meeting buffer (minutes)", 0, 120},
-      {"lead_time_hours", "Scheduling notice (hours)", 0, 720},
-      {"max_meetings_per_day", "Meetings per day", 1, 24},
-      {"as_user_undo_seconds", "Undo window as me (seconds)", 0, 3600},
-      {"as_assistant_undo_seconds", "Undo window as assistant (seconds)", 0, 3600},
-      {"follow_up_business_days", "Working days between follow-ups", 1, 180},
-      {"reminders_per_cycle", "Reminders before waiting", 0, 10}
-    ]
 end
