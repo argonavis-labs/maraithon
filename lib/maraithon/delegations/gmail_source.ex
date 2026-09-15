@@ -18,7 +18,7 @@ defmodule Maraithon.Delegations.GmailSource do
 
     with true <- is_integer(account),
          {:ok, token} <- GoogleAccount.access_token(d.user_id, account),
-         {:ok, messages} <- Gmail.fetch_thread_metadata(token, thread, access_token: true),
+         {:ok, messages} <- Gmail.fetch_thread(token, thread, access_token: true),
          {:ok, index} <- metadata(messages, thread) do
       {:ok, %{account: account, thread: thread, token: token, messages: index}}
     else
