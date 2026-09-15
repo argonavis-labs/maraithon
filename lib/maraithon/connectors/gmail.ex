@@ -680,9 +680,18 @@ defmodule Maraithon.Connectors.Gmail do
   more consistent than hydrating every message with a separate point read.
   """
   def fetch_thread_content(user_id_or_token, thread_id, opts \\ []) do
+    fetch_thread(user_id_or_token, thread_id, "full", opts)
+  end
+
+  @doc "Read the complete thread index without downloading every message body."
+  def fetch_thread_metadata(user_id_or_token, thread_id, opts \\ []) do
+    fetch_thread(user_id_or_token, thread_id, "metadata", opts)
+  end
+
+  defp fetch_thread(user_id_or_token, thread_id, format, opts) do
     with id when is_binary(id) <- normalize_id(thread_id),
          {:ok, access_token} <- request_access_token(user_id_or_token, opts),
-         {:ok, response} <- fetch_gmail_point_resource(access_token, "threads", id, "full") do
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "threads", id, format) do
       case response do
         %{"messages" => messages} when is_list(messages) ->
           {:ok, Enum.map(messages, &parse_message_content/1)}

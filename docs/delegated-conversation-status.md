@@ -52,6 +52,16 @@ The server build and 23 focused local checks passed. They cover both providers' 
 
 Commit `49bcd252` deployed through workflow `35028690308`; revision `maraithon-00372-thq` is ready. A read-only production job then sampled eight messages from Kent's Runner mailbox. All four controlled eval emails were excluded as generated writing. Two ordinary messages were excluded as forwards; two were retained after footer removal. The check used 39 authenticated prepared-action records and wrote no profile, made no model call, and sent no message. This verifies the deployed sampling path on a small real mailbox sample, not learned-profile quality. [Live sampling evidence](evidence/delegated-conversations/2026-09-15-voice-sampling.json).
 
+## Long Gmail conversations
+
+Gmail delegation sync no longer stops when a thread passes 100 messages. It reads the complete header index, records progress in the existing event ledger eight messages at a time, and keeps six recent bodies in the turn snapshot. An unfinished batch reschedules the same job. A new worker resumes from committed events without admitting a model decision early. Unchanged bodies can be reused from three prior authenticated turn snapshots.
+
+Before sending, the worker compares the full thread fingerprint. A late reply invalidates the pending send, including before October opens a separate thread. That first sync uses Kent's source account and provider queue. Missing or foreign account bindings cannot fall back to another mailbox. The index remains bounded at 10,000 messages and the recent snapshot at 240 KB; unreadable or oversized recent evidence still holds the conversation.
+
+The server build and 35 focused checks passed. The long-thread fixture covers 180 messages across 180 days and 23 separately leased workers. It fetched six bodies; the next unchanged turn fetched none. It also covered a late reply, old-message removal, a mismatched body, source-account isolation, and durable deduplication. The existing Gmail delivery and local Slack sender checks passed. The accelerated fixture raises only its local admission rate so one-second retries can run immediately. It does not prove whole-app crash recovery or a six-month production run.
+
+This removes the Gmail history-size failure. The compact fact ledger, retrieval of older cited evidence, Slack pagination, and the real longevity canary remain unfinished. Deployment and live metadata verification are pending.
+
 ## Previously verified
 
 - A real information conversation between `kent@runner.now` and `kent.fenwick@gmail.com` reached Done with the counterparty reply as evidence. Two turns used four Muse calls and cost US$0.001421. [Live evidence](evidence/delegated-conversations/2026-09-15-live-information.json).

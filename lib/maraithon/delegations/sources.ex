@@ -1,16 +1,22 @@
 defmodule Maraithon.Delegations.Sources do
   @moduledoc "A bounded, account-scoped source refresh outside the coordinator and DB transaction."
-  alias Maraithon.{DurablePayload, Repo}
-  alias Maraithon.Connectors.{Gmail, GoogleAccount}
-  alias Maraithon.Delegations.{Ingress, Jobs, SlackSource, SlackIngress}
+  alias Maraithon.Repo
+  alias Maraithon.Delegations.{GmailSource, Ingress, Jobs, SlackSource, SlackIngress}
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.TelegramAssistant.Run
 
-  @max_messages 100
-  @max_bytes 240_000
-
-  def verify_before_send(_job, %{delegation: %{provider: "gmail", provider_thread_id: nil}}),
-    do: :ok
+  def verify_before_send(job, %{delegation: %{provider: "gmail"} = d} = context) do
+    with {:ok, index} <- GmailSource.index(d, context.grant.data["scope"]) do
+      if GmailSource.unchanged?(index, context.run.prompt_snapshot["sources"]) do
+        :ok
+      else
+        with {:ok, messages, sources} <- GmailSource.read(context, index),
+             {:ok, _} <-
+               Jobs.transaction(job, fn current -> route!(current, messages, sources) end),
+             do: {:error, :source_changed}
+      end
+    end
+  end
 
   def verify_before_send(job, context) do
     d = context.delegation
@@ -52,48 +58,44 @@ defmodule Maraithon.Delegations.Sources do
         %{state: "synced", run_id: current.run.id}
       end)
     else
-      d = context.delegation
-      scope = context.grant.data["scope"]
-
-      with {:ok, messages, sources} <- fetch(d, scope) do
-        persist(job, context, messages, sources)
+      with {:ok, messages, sources} <- read(context) do
+        persist(job, messages, sources)
       else
         {:error, reason} -> source_error(job, reason)
       end
     end
   end
 
-  defp persist(job, context, messages, sources) do
+  defp read(%{delegation: %{provider: "gmail"}} = context), do: GmailSource.read(context)
+  defp read(context), do: fetch(context.delegation, context.grant.data["scope"])
+
+  defp persist(job, messages, sources) do
     # Ingestion and the source snapshot share the worker's ownership fence. A
     # missed reply advances the revision here before any decision can be made.
     Jobs.transaction(job, fn current ->
-      if context.delegation.provider_thread_id do
-        route!(context, messages, sources)
-      end
+      if current.delegation.provider == "gmail" or current.delegation.provider_thread_id,
+        do: route!(current, messages, sources)
 
       d = Repo.get!(Maraithon.Delegations.Delegation, current.delegation.id)
 
-      if d.source_revision != current.turn.source_revision do
-        %{state: "new_messages", run_id: current.run.id}
-      else
-        snapshot = Map.put(current.run.prompt_snapshot, "sources", sources)
-        current.run |> Run.changeset(%{prompt_snapshot: snapshot}) |> Repo.update!()
-        Jobs.result!(current, "sync_result", %{})
-        %{state: "synced", run_id: current.run.id}
+      cond do
+        d.source_revision != current.turn.source_revision ->
+          %{state: "new_messages", run_id: current.run.id}
+
+        is_nil(sources) ->
+          %{state: "syncing", run_id: current.run.id}
+
+        true ->
+          snapshot = Map.put(current.run.prompt_snapshot, "sources", sources)
+          current.run |> Run.changeset(%{prompt_snapshot: snapshot}) |> Repo.update!()
+          Jobs.result!(current, "sync_result", %{})
+          %{state: "synced", run_id: current.run.id}
       end
     end)
-  end
-
-  defp fetch(%{provider: "gmail"} = d, scope) do
-    account =
-      if d.provider_thread_id, do: d.connected_account_id, else: scope["source_account_id"]
-
-    thread = d.provider_thread_id || scope["source_thread_id"]
-
-    with {:ok, token} <- GoogleAccount.access_token(d.user_id, account),
-         {:ok, messages} <- Gmail.fetch_thread_content(token, thread, access_token: true),
-         {:ok, sources} <- snapshot(messages, account, thread),
-         do: {:ok, messages, sources}
+    |> case do
+      {:ok, %{state: "syncing"} = result} -> {:ok, result, {:reschedule_in, 1_000}}
+      result -> result
+    end
   end
 
   defp fetch(%{provider: "slack"} = d, scope) do
@@ -121,8 +123,11 @@ defmodule Maraithon.Delegations.Sources do
   defp route!(%{delegation: %{provider: "slack"} = d, grant: grant}, messages, _sources),
     do: Enum.each(messages, &SlackIngress.accept!(d.user_id, grant.data["scope"]["team_id"], &1))
 
-  defp route!(%{delegation: d}, messages, sources),
-    do: Enum.each(messages, &Ingress.gmail!(d.user_id, sources["account_id"], &1))
+  defp route!(%{delegation: %{provider_thread_id: nil} = d, grant: grant}, messages, _),
+    do: Enum.each(messages, &Ingress.gmail_source!(d, grant.data["scope"], &1))
+
+  defp route!(%{delegation: d}, messages, _),
+    do: Enum.each(messages, &Ingress.gmail!(d.user_id, d.connected_account_id, &1))
 
   defp source_error(job, reason) do
     # A rate limit is a queue cooldown, not a new model call or a tight retry.
@@ -147,45 +152,7 @@ defmodule Maraithon.Delegations.Sources do
     end
   end
 
-  @doc "Never label a partial, empty, cross-thread, or oversized read as complete."
-  def snapshot(messages, account_id, thread_id) when is_list(messages) do
-    messages = Enum.reject(messages, &("DRAFT" in (&1.labels || [])))
-    ids = Enum.map(messages, & &1.message_id)
-
-    if length(messages) in 1..@max_messages and length(Enum.uniq(ids)) == length(ids) and
-         Enum.all?(messages, &valid_message?(&1, thread_id)) do
-      data = %{
-        "account_id" => account_id,
-        "thread_id" => thread_id,
-        "read_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "complete" => true,
-        "messages" =>
-          messages |> Enum.sort_by(& &1.internal_date, DateTime) |> Enum.map(&public_message/1)
-      }
-
-      case DurablePayload.prepare_map(data, @max_bytes) do
-        {:ok, bounded} -> {:ok, bounded}
-        _ -> {:error, :source_gap}
-      end
-    else
-      {:error, :source_gap}
-    end
-  end
-
-  def snapshot(_, _, _), do: {:error, :source_gap}
-
-  defp valid_message?(m, thread_id) do
-    Gmail.valid_id?(m.message_id) and m.thread_id == thread_id and
-      is_struct(m.internal_date, DateTime) and is_binary(m.internet_message_id) and
-      m.internet_message_id != "" and is_binary(m.text_body) and
-      length(Enum.filter(Gmail.message_participants(m), &(&1["role"] == "from"))) == 1
-  end
-
-  defp public_message(m) do
-    Map.take(
-      m,
-      ~w(message_id thread_id from to cc subject internet_message_id in_reply_to references text_body auto_submitted return_path content_type labels)a
-    )
-    |> Map.put(:internal_date, DateTime.to_iso8601(m.internal_date))
-  end
+  @doc "Keep a complete thread fingerprint and its six most recent message bodies."
+  def snapshot(messages, account_id, thread_id),
+    do: GmailSource.snapshot(messages, account_id, thread_id)
 end

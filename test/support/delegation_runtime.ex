@@ -7,7 +7,14 @@ defmodule Maraithon.TestSupport.DelegationRuntime do
   def run_leased_job(node, partitions, type, fun) do
     alias Maraithon.Runtime.{BackgroundJob, JobAuthority}
     alias Maraithon.Runtime.Coordination.{FairScheduler, TaskClaims, TaskSupervisor}
-    job = Repo.get_by!(BackgroundJob, job_type: type) |> BackgroundJob.hydrate_payloads()
+
+    job =
+      case type do
+        %BackgroundJob{} = job -> job
+        type -> Repo.get_by!(BackgroundJob, job_type: type)
+      end
+      |> BackgroundJob.hydrate_payloads()
+
     queue = "delegation-eval:#{job.id}"
 
     job
@@ -27,12 +34,30 @@ defmodule Maraithon.TestSupport.DelegationRuntime do
         {:ok, assignment} = TaskClaims.mark_provider_entered(assignment)
         result = fun.(job)
 
+        {outcome, attrs} =
+          case result do
+            {:ok, _, {:reschedule_in, delay}} ->
+              {"retry_scheduled",
+               %{
+                 status: "pending",
+                 attempts: 0,
+                 scheduled_at: DateTime.add(DateTime.utc_now(), delay, :millisecond),
+                 claimed_by: nil,
+                 claimed_at: nil,
+                 last_error: nil
+               }}
+
+            _ ->
+              {"completed", %{status: "completed"}}
+          end
+
         assert {:ok, _} =
                  JobAuthority.transaction(job, fn ->
-                   TaskClaims.settle_in_transaction(assignment, "completed")
+                   TaskClaims.settle_in_transaction(assignment, outcome)
 
                    job
-                   |> BackgroundJob.changeset(%{status: "completed", result: elem(result, 1)})
+                   |> BackgroundJob.changeset(Map.put(attrs, :result, elem(result, 1)))
+                   |> Ecto.Changeset.force_change(:claim_token, nil)
                    |> Repo.update!()
                  end)
 

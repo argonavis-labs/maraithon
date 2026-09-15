@@ -23,7 +23,7 @@ defmodule Maraithon.Delegations.Ingress do
           limit: 10,
           lock: "FOR UPDATE"
       )
-      |> Enum.each(&accept!(Delegation.hydrate(&1), message))
+      |> Enum.each(&accept!(Delegation.hydrate(&1), message, account_id))
     end
 
     :ok
@@ -31,9 +31,20 @@ defmodule Maraithon.Delegations.Ingress do
 
   def gmail!(_, _, _), do: :ok
 
-  defp accept!(d, message) do
+  @doc "Record the original mailbox evidence before an assistant opens its own thread."
+  def gmail_source!(d, scope, message) do
+    unless Repo.in_transaction?(), do: raise(ArgumentError, "source routing needs a transaction")
+
+    if is_nil(d.provider_thread_id) and field(message, :thread_id) == scope["source_thread_id"] and
+         is_integer(scope["source_account_id"]) do
+      d = Repo.get!(Delegation, d.id) |> Delegation.hydrate()
+      accept!(d, message, scope["source_account_id"])
+    end
+  end
+
+  defp accept!(d, message, account_id) do
     id = field(message, :message_id)
-    key = "gmail:#{d.connected_account_id}:#{id}"
+    key = "gmail:#{account_id}:#{id}"
 
     unless Repo.exists?(from e in Event, where: e.delegation_id == ^d.id and e.event_key == ^key) do
       grant = Delegations.current_grant(d)

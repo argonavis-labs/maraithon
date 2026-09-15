@@ -58,13 +58,38 @@ defmodule Maraithon.Delegations.SourcesTest do
     assert {:error, :source_gap} = Sources.snapshot([], 42, "abcdef")
   end
 
-  test "duplicate IDs and oversized history are held without silently truncating", %{message: m} do
+  test "duplicate IDs and oversized recent evidence are held without silently truncating", %{
+    message: m
+  } do
     assert {:error, :source_gap} = Sources.snapshot([m, m], 42, "abcdef")
 
     assert {:error, :source_gap} =
              Sources.snapshot([%{m | text_body: String.duplicate("a", 240_001)}], 42, "abcdef")
+  end
 
-    messages = for n <- 1..101, do: %{m | message_id: Integer.to_string(n, 16)}
-    assert {:error, :source_gap} = Sources.snapshot(messages, 42, "abcdef")
+  test "long threads retain a complete fingerprint with only six recent bodies", %{message: m} do
+    messages =
+      for n <- 1..180,
+          do: %{
+            m
+            | message_id: Integer.to_string(n, 16),
+              internal_date: DateTime.add(m.internal_date, n * 86_400),
+              text_body: String.duplicate("old history ", 3_000)
+          }
+
+    messages =
+      Enum.map(Enum.with_index(messages), fn {message, n} ->
+        if n >= 174, do: %{message | text_body: "Recent answer #{n}"}, else: message
+      end)
+
+    assert {:ok, snapshot} = Sources.snapshot(messages, 42, "abcdef")
+    assert snapshot["message_count"] == 180
+    assert length(snapshot["messages"]) == 6
+    assert byte_size(Jason.encode!(snapshot)) < 8_000
+    assert List.last(snapshot["messages"])["text_body"] == "Recent answer 179"
+
+    assert {:ok, shortened} = Sources.snapshot(tl(messages), 42, "abcdef")
+    refute snapshot["fingerprint"] == shortened["fingerprint"]
+    assert snapshot["messages"] == shortened["messages"]
   end
 end

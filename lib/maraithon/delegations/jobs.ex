@@ -70,9 +70,14 @@ defmodule Maraithon.Delegations.Jobs do
 
   def enqueue!(kind, d, binding, available_at, extra \\ %{})
       when kind in ~w(delegation_sync delegation_decide delegation_send) do
+    account_id =
+      if kind == "delegation_sync" and d.provider == "gmail" and is_nil(d.provider_thread_id),
+        do: Maraithon.Delegations.current_grant(d).data["scope"]["source_account_id"],
+        else: d.connected_account_id
+
     account =
       Repo.get_by!(Maraithon.Accounts.ConnectedAccount,
-        id: d.connected_account_id,
+        id: account_id,
         user_id: d.user_id
       )
 
@@ -163,6 +168,11 @@ defmodule Maraithon.Delegations.Jobs do
   def finish({:ok, result}, job) do
     Outbox.publish_pending(job.user_id)
     {:ok, result}
+  end
+
+  def finish({:ok, _, {:reschedule_in, _}} = result, job) do
+    Outbox.publish_pending(job.user_id)
+    result
   end
 
   def finish(error, _job), do: error
