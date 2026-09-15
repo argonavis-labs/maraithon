@@ -81,16 +81,18 @@ defmodule Maraithon.OAuth do
   Returns nil if no token exists.
   """
   def get_token(user_id, "google") do
+    excluded = Maraithon.AssistantIdentities.assistant_providers(user_id)
+
     case get_exact_token(user_id, "google") do
       %Token{} = token ->
-        if reauth_required_account?(user_id, token.provider) do
-          latest_google_account_token(user_id)
+        if token.provider in excluded or reauth_required_account?(user_id, token.provider) do
+          latest_google_account_token(user_id, excluded)
         else
           token
         end
 
       nil ->
-        latest_google_account_token(user_id)
+        latest_google_account_token(user_id, excluded)
     end
   end
 
@@ -571,7 +573,7 @@ defmodule Maraithon.OAuth do
   defp put_metadata_if_present(metadata, _key, nil), do: metadata
   defp put_metadata_if_present(metadata, key, value), do: Map.put(metadata, key, value)
 
-  defp latest_google_account_token(user_id) when is_binary(user_id) do
+  defp latest_google_account_token(user_id, excluded) when is_binary(user_id) do
     account_by_provider =
       ConnectedAccounts.list_for_user(user_id)
       |> Map.new(&{&1.provider, &1})
@@ -579,6 +581,7 @@ defmodule Maraithon.OAuth do
     Token
     |> where([t], t.user_id == ^user_id)
     |> where([t], like(t.provider, "google:%"))
+    |> where([t], t.provider not in ^excluded)
     |> Repo.all()
     |> Enum.max_by(
       fn token ->
@@ -589,7 +592,7 @@ defmodule Maraithon.OAuth do
     )
   end
 
-  defp latest_google_account_token(_user_id), do: nil
+  defp latest_google_account_token(_user_id, _excluded), do: nil
 
   defp google_token_rank(%Token{} = token, account) do
     account_score =

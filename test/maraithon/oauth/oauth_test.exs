@@ -7,7 +7,7 @@ defmodule Maraithon.OAuthTest do
 
   describe "store_tokens/3" do
     test "creates new token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
 
       token_data = %{
         access_token: "access_123",
@@ -30,7 +30,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "updates existing token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       initial_data = %{access_token: "old_token", refresh_token: "refresh_123"}
       {:ok, _} = OAuth.store_tokens(user_id, "google", initial_data)
 
@@ -46,7 +46,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "preserves existing refresh token when update omits it" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
 
       {:ok, _} =
         OAuth.store_tokens(user_id, "google", %{
@@ -67,7 +67,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "stores token with expires_at" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expires_at = DateTime.add(DateTime.utc_now(), 7200, :second)
       token_data = %{access_token: "access_123", expires_at: expires_at}
 
@@ -77,7 +77,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "stores token without expiration" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       token_data = %{access_token: "access_123"}
 
       {:ok, token} = OAuth.store_tokens(user_id, "google", token_data)
@@ -86,7 +86,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "stores exact provider without mutating existing google account providers" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
 
       {:ok, _} =
         OAuth.store_tokens(user_id, "google:account@example.com", %{
@@ -113,7 +113,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns token when exists" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       {:ok, _} = OAuth.store_tokens(user_id, "google", %{access_token: "test_token"})
 
       token = OAuth.get_token(user_id, "google")
@@ -123,7 +123,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns correct provider token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       {:ok, _} = OAuth.store_tokens(user_id, "google", %{access_token: "google_token"})
       {:ok, _} = OAuth.store_tokens(user_id, "linear", %{access_token: "linear_token"})
 
@@ -170,7 +170,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns access_token when not expired" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expires_at = DateTime.add(DateTime.utc_now(), 3600, :second)
 
       {:ok, _} =
@@ -185,7 +185,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns access_token when no expiration set" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       {:ok, _} = OAuth.store_tokens(user_id, "google", %{access_token: "no_expiry_token"})
 
       {:ok, token} = OAuth.get_valid_access_token(user_id, "google")
@@ -223,7 +223,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns existing token when not expired" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expires_at = DateTime.add(DateTime.utc_now(), 3600, :second)
 
       {:ok, stored} =
@@ -238,7 +238,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns error when expired without refresh_token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expires_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -269,7 +269,7 @@ defmodule Maraithon.OAuthTest do
         Application.delete_env(:maraithon, :google)
       end)
 
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expires_soon = DateTime.add(DateTime.utc_now(), 120, :second)
 
       {:ok, _} =
@@ -346,7 +346,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "deletes token from database" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       {:ok, _} = OAuth.store_tokens(user_id, "linear", %{access_token: "token"})
 
       {:ok, _} = OAuth.revoke(user_id, "linear")
@@ -361,7 +361,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns all tokens for user" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       {:ok, _} = OAuth.store_tokens(user_id, "google", %{access_token: "google_token"})
       {:ok, _} = OAuth.store_tokens(user_id, "linear", %{access_token: "linear_token"})
 
@@ -373,8 +373,8 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "does not return other users tokens" do
-      user1 = "user_#{System.unique_integer()}"
-      user2 = "user_#{System.unique_integer()}"
+      user1 = create_user()
+      user2 = create_user()
       {:ok, _} = OAuth.store_tokens(user1, "google", %{access_token: "user1_token"})
       {:ok, _} = OAuth.store_tokens(user2, "google", %{access_token: "user2_token"})
 
@@ -391,8 +391,8 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns all tokens for whatsapp provider" do
-      user1 = "user_#{System.unique_integer()}"
-      user2 = "user_#{System.unique_integer()}"
+      user1 = create_user()
+      user2 = create_user()
 
       {:ok, _} = OAuth.store_tokens(user1, "whatsapp", %{access_token: "token1"})
       {:ok, _} = OAuth.store_tokens(user2, "whatsapp", %{access_token: "token2"})
@@ -410,7 +410,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns tokens expiring within timeframe" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       # Token expiring in 60 seconds
       expires_soon = DateTime.add(DateTime.utc_now(), 60, :second)
 
@@ -429,7 +429,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "does not return tokens without refresh_token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expires_soon = DateTime.add(DateTime.utc_now(), 60, :second)
 
       {:ok, _} =
@@ -448,7 +448,7 @@ defmodule Maraithon.OAuthTest do
 
   describe "get_valid_access_token/2 - expired token with refresh" do
     test "returns error when expired without refresh token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -462,7 +462,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "attempts refresh when expired with refresh token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -481,7 +481,7 @@ defmodule Maraithon.OAuthTest do
 
   describe "update token metadata" do
     test "preserves metadata when updating token" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
 
       initial_data = %{
         access_token: "initial_token",
@@ -506,7 +506,7 @@ defmodule Maraithon.OAuthTest do
 
   describe "refresh_if_expired/2 - non-google provider" do
     test "returns error for linear provider (no refresh support)" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -521,7 +521,7 @@ defmodule Maraithon.OAuthTest do
     end
 
     test "returns error for whatsapp provider (no refresh support)" do
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -545,7 +545,7 @@ defmodule Maraithon.OAuthTest do
         revoke_url: "http://localhost:#{bypass.port}/revoke"
       )
 
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       {:ok, _} = OAuth.store_tokens(user_id, "google", %{access_token: "google_token_to_revoke"})
 
       # Mock the revoke endpoint
@@ -573,7 +573,7 @@ defmodule Maraithon.OAuthTest do
         client_secret: "test_secret"
       )
 
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -619,7 +619,7 @@ defmodule Maraithon.OAuthTest do
         client_secret: "test_secret"
       )
 
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -662,7 +662,7 @@ defmodule Maraithon.OAuthTest do
         redirect_uri: "http://localhost:4000/auth/notaui/callback"
       )
 
-      user_id = "user_#{System.unique_integer()}"
+      user_id = create_user()
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       {:ok, _} =
@@ -707,5 +707,11 @@ defmodule Maraithon.OAuthTest do
 
       Application.delete_env(:maraithon, :notaui)
     end
+  end
+
+  defp create_user do
+    email = "oauth-#{Ecto.UUID.generate()}@example.invalid"
+    {:ok, _} = Accounts.get_or_create_user_by_email(email)
+    email
   end
 end

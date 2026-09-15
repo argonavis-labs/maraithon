@@ -1,0 +1,274 @@
+{
+  "to": "2026-09-15T18:48:46.336665Z",
+  "from": "2026-09-15T18:47:45.971079Z",
+  "checkpoints": [
+    [
+      "delegation_coordinator",
+      "checkpoint_created",
+      1,
+      "2026-09-15T18:45:37.295646"
+    ],
+    [
+      "manifest_agent",
+      "checkpoint_created",
+      1,
+      "2026-09-15T18:45:37.855793"
+    ]
+  ],
+  "agents": [
+    [
+      "0e80687b-8c4d-47d8-9a86-664dbcacf1d0",
+      "delegation_coordinator",
+      "running",
+      "enabled",
+      1,
+      false,
+      false,
+      "unknown_error"
+    ],
+    [
+      "ebc6bc1a-98b1-4465-8e26-8cd8564450e8",
+      "prompt_agent",
+      "stopped",
+      "enabled",
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "bf2e8ff7-e57c-4ff4-ade8-45419d23ec79",
+      "prompt_agent",
+      "stopped",
+      "enabled",
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+      "manifest_agent",
+      "running",
+      "enabled",
+      1,
+      false,
+      false,
+      "unknown_error"
+    ]
+  ],
+  "evals": [
+    {
+      "error": null,
+      "status": "completed",
+      "result": {
+        "accepted_slot": {
+          "end_at": "2026-09-16T20:30:00Z",
+          "start_at": "2026-09-16T20:00:00Z",
+          "timezone": "America/Toronto"
+        },
+        "agent_messages": 2,
+        "booked_events": 1,
+        "calendar_cleanup": "completed",
+        "completion_cites_reply": true,
+        "cost_micro_usd": 4483,
+        "delegation_id": "9304a220-2dce-4870-8d6a-60fdc02b5124",
+        "event_id": "g303ju9616dm42b1dccdfhmvc1erl84lcp1q0mjf8h2q49upsk80",
+        "model_calls": 6,
+        "offered_slots_count": 3,
+        "phase": "passed",
+        "received_offer_verified": true,
+        "recipient_calendar_copy": true,
+        "reoffered": true,
+        "reply_action_id": "deae3eb5-6ae2-bbfd-74f9-28cfd911701c",
+        "reply_count": 2,
+        "reply_message_id": "1a0a6621f049363a",
+        "todo_id": "9e11c7e9-1749-4d81-9df1-d6e0a98ff916",
+        "todo_state": "waiting",
+        "turns": 3,
+        "verified_booked_action_id": "610bb1c8-a65c-49e4-820d-7ace7aee8daf"
+      },
+      "job_id": "582b343d-555c-4148-bedd-a9abf69cd998"
+    }
+  ],
+  "partitions": [
+    [
+      "ready",
+      64,
+      64
+    ]
+  ],
+  "termination_requested": [],
+  "recurring": [
+    {
+      "type": "runtime_recurring:assistant_run_recovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:48:46.979651Z",
+      "updated_at": "2026-09-15T18:47:46.979651Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:telegram_run_reaper",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:48:48.213640Z",
+      "updated_at": "2026-09-15T18:47:48.213640Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:brief_notifier",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:48:49.401042Z",
+      "updated_at": "2026-09-15T18:47:49.401042Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:insight_notifier",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:48:50.605218Z",
+      "updated_at": "2026-09-15T18:47:50.605218Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:privacy_erasure_discovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:48:53.995202Z",
+      "updated_at": "2026-09-15T18:47:53.995202Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:privacy_retention",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:49:16.150773Z",
+      "updated_at": "2026-09-15T18:48:16.150773Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:todo_outcome_learning_recovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:51:09.719385Z",
+      "updated_at": "2026-09-15T18:46:09.719385Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:token_refresher",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:51:12.059016Z",
+      "updated_at": "2026-09-15T18:46:12.059016Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:critical_todo_push",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:51:30.024834Z",
+      "updated_at": "2026-09-15T18:46:30.024834Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:delegation_due_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:51:38.847690Z",
+      "updated_at": "2026-09-15T18:46:38.847690Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:source_account_discovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:52:32.650690Z",
+      "updated_at": "2026-09-15T18:37:32.650690Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:nudge_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:58:40.007757Z",
+      "updated_at": "2026-09-15T18:28:40.007757Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:people_network_discovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:58:43.067599Z",
+      "updated_at": "2026-09-15T18:48:43.067599Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:proactive_check_in",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:58:45.155431Z",
+      "updated_at": "2026-09-15T18:48:45.155431Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:watch_renewer",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:59:11.375703Z",
+      "updated_at": "2026-09-15T18:29:11.375703Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:todo_completion_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T19:01:08.075320Z",
+      "updated_at": "2026-09-15T18:46:08.075320Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:freshness_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T19:28:24.626425Z",
+      "updated_at": "2026-09-15T18:28:24.626425Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:llm_cost_monitor",
+      "state": "pending",
+      "scheduled_at": "2026-09-16T00:45:17.904960Z",
+      "updated_at": "2026-09-15T18:45:17.904960Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:dogfood_digest",
+      "state": "pending",
+      "scheduled_at": "2026-09-16T11:30:00.000000Z",
+      "updated_at": "2026-09-15T11:30:00.810586Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:staleness_triage_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-16T15:28:00.979564Z",
+      "updated_at": "2026-09-15T15:28:00.979564Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:briefing_cron",
+      "state": "running",
+      "scheduled_at": "2026-09-15T18:48:45.565863Z",
+      "updated_at": "2026-09-15T18:48:46.173444Z",
+      "advanced": true
+    }
+  ],
+  "query_deltas": {
+    "not_visible_to_job_role": {
+      "calls": 168,
+      "ms": 330.2832830026746
+    },
+    "other": {
+      "calls": 16231,
+      "ms": 10867.127483040094
+    },
+    "renewal": {
+      "calls": 186,
+      "ms": 24.98598599995603
+    },
+    "storage_verification": {
+      "calls": 0,
+      "ms": 0.0
+    }
+  },
+  "effect_proofs": [],
+  "serving_revision": "maraithon-00353-79v",
+  "reader_execution": "maraithon-todo-validation-xjbzd",
+  "all_runtime_health_criteria_proven": false,
+  "limitation": "No recent effect-completion evidence in this sample; do not infer full runtime health."
+}

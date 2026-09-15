@@ -89,6 +89,17 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     refute UserIdentity.own_handle?(user, "cached-assistant@example.invalid")
   end
 
+  test "the default Google token never falls back to an assistant mailbox", %{user: user} do
+    assistant = account(user, "assistant@example.invalid", true)
+    assert OAuth.get_token(user, "google") == nil
+    assert {:error, :no_token} = OAuth.get_valid_access_token(user, "google")
+    assert {:ok, _} = OAuth.get_valid_access_token(user, assistant.provider, exact?: true)
+
+    own = account(user, user)
+    account(user, "newer-assistant@example.invalid", true)
+    assert OAuth.get_token(user, "google").provider == own.provider
+  end
+
   test "an assistant mailbox is not a personal source or a connector prerequisite", %{user: user} do
     assistant = account(user, "assistant@example.invalid", true)
 
