@@ -1064,7 +1064,7 @@ defmodule Maraithon.Delegations.IngressTest do
                        },
                        "policy_review" => %{
                          "allowed" => true,
-                         "outcome_proven" => true,
+                         "outcome_proven" => false,
                          "reason" => "Accepted offered time"
                        }
                      })

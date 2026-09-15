@@ -86,8 +86,14 @@ defmodule Maraithon.Delegations.Policy do
         For times, verify every offered date and timezone exactly matches the computed
         slots. Booking needs explicit acceptance by the actual counterparty of one
         previously offered slot. Never infer approval from the user's own draft.
+        An authorized booking may have allowed=true and outcome_proven=false:
+        the meeting does not exist until the calendar provider confirms the write.
+        outcome_proven is required for complete, meaning the requested outcome has
+        already happened. For book, allowed still requires explicit counterparty
+        acceptance of the offered slot and all of the booking checks above.
         Return JSON with allowed (boolean), outcome_proven (boolean), and reason (string).
-        Be conservative: a missing fact or unproven outcome means allowed=false.
+        Be conservative: a missing required fact or an unproven complete decision
+        means allowed=false.
         """
       },
       %{
@@ -179,7 +185,7 @@ defmodule Maraithon.Delegations.Policy do
   def approved?(decision, verdict) do
     is_map(verdict) and verdict["allowed"] == true and
       text?(verdict["reason"], 2_000) and
-      (decision["kind"] not in ~w(complete book) or verdict["outcome_proven"] == true)
+      (decision["kind"] != "complete" or verdict["outcome_proven"] == true)
   end
 
   def slot_id(slot), do: Scope.hash(Map.take(slot, ~w(start_at end_at timezone)))

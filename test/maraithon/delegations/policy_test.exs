@@ -74,6 +74,19 @@ defmodule Maraithon.Delegations.PolicyTest do
              c.decision["body"]
   end
 
+  test "permission to book is distinct from proof that the meeting already exists" do
+    verdict = %{
+      "allowed" => true,
+      "outcome_proven" => false,
+      "reason" =>
+        "The counterparty accepted an offered slot; the calendar write is still pending."
+    }
+
+    assert Policy.approved?(%{"kind" => "book"}, verdict)
+    refute Policy.approved?(%{"kind" => "complete"}, verdict)
+    refute Policy.approved?(%{"kind" => "book"}, Map.put(verdict, "allowed", false))
+  end
+
   test "completion requires a counterparty source and independent outcome proof", c do
     decision = %{c.decision | "kind" => "complete"}
     assert {:ok, _} = Policy.validate(c.context, decision)
