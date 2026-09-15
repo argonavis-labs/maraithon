@@ -25,6 +25,7 @@ defmodule Maraithon.Delegations.Gates do
     d.user_id == "kent@runner.now" and d.provider == "gmail" and
       get_in(scope, ["identity", "email"]) in pair and
       is_binary(scope["subject"]) and String.starts_with?(scope["subject"], "[Maraithon eval]") and
-      scope["to"] != [] and Enum.all?(scope["to"] ++ scope["cc"], &(&1 in pair))
+      scope["to"] != [] and
+      Enum.all?(Maraithon.Delegations.Scope.email_participants(scope), &(&1 in pair))
   end
 end

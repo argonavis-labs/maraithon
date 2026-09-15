@@ -46,6 +46,7 @@ defmodule Maraithon.Delegations.IngressTest do
       },
       "to" => ["kent.fenwick@gmail.com"],
       "cc" => [],
+      "first_send_cc" => tags[:first_send_cc] || [],
       "subject" => "[Maraithon eval] A question",
       "task_owner" => owner,
       "outcome" => "Get the test colour"
@@ -495,6 +496,39 @@ defmodule Maraithon.Delegations.IngressTest do
              Maraithon.TelegramAssistant.execute_granted_action(action)
 
     assert Repo.get!(PreparedAction, action.id).status == "confirmed"
+  end
+
+  for previous_sends <- [0, 1] do
+    @tag first_send_cc: ["observer@example.invalid"]
+    test "prepared send after #{previous_sends} proven sends freezes the correct first-message Cc",
+         c do
+      enable_gmail(c.user_id)
+
+      assert {:ok, :checked} =
+               Repo.transaction(fn ->
+                 {d, grant, event} = decision_turn(c)
+
+                 d =
+                   d
+                   |> Delegation.changeset(%{lifetime_sends: unquote(previous_sends)})
+                   |> Repo.update!()
+
+                 next =
+                   Maraithon.Delegations.Execution.prepare!(d, grant, event, DateTime.utc_now())
+
+                 assert next.state == "sending"
+
+                 action =
+                   Repo.one!(Maraithon.TelegramAssistant.PreparedAction)
+                   |> Maraithon.TelegramAssistant.PreparedAction.hydrate_payload()
+
+                 expected =
+                   if unquote(previous_sends) == 0, do: "observer@example.invalid", else: ""
+
+                 assert action.payload["cc"] == expected
+                 :checked
+               end)
+    end
   end
 
   test "a changed todo prevents even a reviewed model decision from becoming a send", c do

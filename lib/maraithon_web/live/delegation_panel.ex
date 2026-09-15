@@ -178,6 +178,7 @@ defmodule MaraithonWeb.DelegationPanel do
           <.field label="Outcome" for="delegation-outcome"><.c_input id="delegation-outcome" name="delegation[outcome]" value={@scope["outcome"]} required maxlength="2000" /></.field>
           <.field :if={@scope["provider"] == "gmail"} label="With" for="delegation-to"><.c_input id="delegation-to" name="delegation[to]" value={Enum.join(@scope["to"], ", ")} required /></.field>
           <.field :if={@scope["provider"] == "gmail"} label="Cc" for="delegation-cc"><.c_input id="delegation-cc" name="delegation[cc]" value={Enum.join(@scope["cc"], ", ")} /></.field>
+          <p :if={(@scope["first_send_cc"] || []) != []} class="text-sm/6 text-zinc-600">Copy on first message: <%= Enum.join(@scope["first_send_cc"], ", ") %></p>
           <p :if={@scope["provider"] == "slack"} class="text-sm/6 text-zinc-600">With <%= @scope["counterparty_label"] %> in <%= @scope["channel"] %></p>
           <.field label="Instruction (optional)" for="delegation-instruction"><.c_input id="delegation-instruction" name="delegation[instruction]" value="" maxlength="2000" /></.field>
           <div class="flex justify-end"><.button type="submit" disabled={@busy?}>Delegate</.button></div>

@@ -71,6 +71,7 @@ defmodule Maraithon.Delegations.Scope do
        %{
          "provider" => "gmail",
          "source_account_id" => account.id,
+         "source_user_email" => source_email,
          "source_message_id" => message.message_id,
          "source_thread_id" => message.thread_id,
          "thread_id" => thread,
@@ -103,9 +104,17 @@ defmodule Maraithon.Delegations.Scope do
     instruction = Map.get(attrs, "instruction", "")
     gmail? = source["provider"] == "gmail"
 
+    first_send_cc =
+      if gmail? and identity["actor"] == "as_assistant" and
+           identity["cc_user_on_first_send"] == true,
+         do: [source["source_user_email"]],
+         else: []
+
     valid_destination =
       if gmail?,
-        do: valid_emails?(to, false) and valid_emails?(cc, true),
+        do:
+          valid_emails?(to, false) and valid_emails?(cc, true) and
+            valid_emails?(first_send_cc, true),
         else: to == source["to"] and cc == []
 
     if valid_destination and text?(outcome, 2_000, false) and text?(instruction, 2_000, true) do
@@ -118,6 +127,7 @@ defmodule Maraithon.Delegations.Scope do
          "instruction" => instruction,
          "to" => Enum.uniq(to),
          "cc" => Enum.uniq(cc),
+         "first_send_cc" => first_send_cc,
          "policy_version" => 1,
          "todo_fingerprint" => todo_fingerprint(todo),
          "workflow_revision" => workflow["revision"],
@@ -148,6 +158,20 @@ defmodule Maraithon.Delegations.Scope do
         &(is_binary(&1) and byte_size(&1) <= 320 and
             Regex.match?(~r/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/, &1))
       )
+  end
+
+  @doc "All granted observers remain allowed on replies, even after the first-message copy."
+  def email_participants(scope),
+    do: Enum.uniq(scope["to"] ++ scope["cc"] ++ (scope["first_send_cc"] || []))
+
+  @doc "Only the first proven send copies the user unless they explicitly added a permanent Cc."
+  def email_cc(scope, first_send?) do
+    copies = scope["cc"] ++ if(first_send?, do: scope["first_send_cc"] || [], else: [])
+    to = MapSet.new(scope["to"], &String.downcase/1)
+
+    copies
+    |> Enum.uniq_by(&String.downcase/1)
+    |> Enum.reject(&MapSet.member?(to, String.downcase(&1)))
   end
 
   @doc "Only the bound mailbox and actor are self here; another connected Kent address can reply."

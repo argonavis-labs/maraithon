@@ -219,6 +219,84 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     refute Repo.exists?(from o in Maraithon.Crm.Observation, where: o.user_id == ^user)
   end
 
+  test "assistant previews freeze the source owner's first-message copy setting", %{user: user} do
+    own = account(user, user)
+    assistant = account(user, "assistant@example.invalid", true)
+    bypass = Bypass.open()
+    original = Application.get_env(:maraithon, :gmail, [])
+    Application.put_env(:maraithon, :gmail, api_base_url: "http://localhost:#{bypass.port}")
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, original) end)
+
+    Bypass.expect(bypass, "GET", "/users/me/settings/sendAs", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "sendAs" => [%{"sendAsEmail" => "assistant@example.invalid", "isPrimary" => true}]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/users/me/messages/aa11", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "id" => "aa11",
+          "threadId" => "bb22",
+          "labelIds" => ["INBOX"],
+          "internalDate" => "1789491600000",
+          "payload" => %{
+            "headers" => [
+              %{"name" => "From", "value" => "Charlie <charlie@example.invalid>"},
+              %{"name" => "To", "value" => user},
+              %{"name" => "Subject", "value" => "Delivery date"},
+              %{"name" => "Message-ID", "value" => "<fixture@example.invalid>"}
+            ]
+          }
+        })
+      )
+    end)
+
+    {:ok, _} =
+      AssistantIdentities.put(user, %{
+        "display_name" => "October",
+        "gmail_connected_account_id" => assistant.id,
+        "gmail_mode" => "account",
+        "gmail_send_as_email" => "assistant@example.invalid",
+        "cc_user_on_first_send" => true
+      })
+
+    todo = %Maraithon.Todos.Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user,
+      owner_user_id: user,
+      title: "Get the delivery date",
+      summary: "Charlie is confirming the delivery date.",
+      next_action: "Ask Charlie",
+      source: "gmail",
+      source_account_id: own.id,
+      source_item_id: "aa11"
+    }
+
+    assert {:ok, scope} = Maraithon.Delegations.Scope.preview(todo, %{"actor" => "as_assistant"})
+    assert scope["to"] == ["charlie@example.invalid"]
+    assert scope["cc"] == []
+    assert scope["first_send_cc"] == [user]
+    assert scope["source_user_email"] == user
+    assert scope["identity"]["cc_user_on_first_send"] == true
+
+    {:ok, _} = AssistantIdentities.put(user, %{"cc_user_on_first_send" => false})
+
+    assert {:ok, changed} =
+             Maraithon.Delegations.Scope.preview(todo, %{"actor" => "as_assistant"})
+
+    assert changed["first_send_cc"] == []
+    refute scope["scope_hash"] == changed["scope_hash"]
+  end
+
   test "reconnection and changing assistants cannot restore an old assistant as the user", %{
     user: user
   } do

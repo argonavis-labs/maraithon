@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.Ingress do
   import Ecto.Query
   alias Maraithon.{Delegations, Repo}
   alias Maraithon.Connectors.Gmail
-  alias Maraithon.Delegations.{Delegation, Event, Outbox}
+  alias Maraithon.Delegations.{Delegation, Event, Outbox, Scope}
   alias Maraithon.TelegramAssistant.PreparedAction
 
   def active?(user_id), do: Repo.exists?(from d in Delegation, where: d.user_id == ^user_id)
@@ -75,7 +75,8 @@ defmodule Maraithon.Delegations.Ingress do
     participants = Gmail.message_participants(message)
     senders = for p <- participants, p["role"] == "from", do: p["identifier"]["email"]
     own = String.downcase(scope["identity"]["email"])
-    allowed = MapSet.new([own | scope["to"] ++ scope["cc"]], &String.downcase/1)
+    allowed = MapSet.new([own | Scope.email_participants(scope)], &String.downcase/1)
+    user = if scope["actor"] == "as_assistant", do: scope["source_user_email"]
     auto = field(message, :auto_submitted)
     text = (field(message, :text_body) || "") |> String.trim() |> String.downcase()
 
@@ -89,7 +90,7 @@ defmodule Maraithon.Delegations.Ingress do
       length(senders) != 1 ->
         "source_gap"
 
-      senders == [own] ->
+      senders == [own] or (is_binary(user) and senders == [String.downcase(user)]) ->
         "human_send"
 
       field(message, :return_path) == "<>" and

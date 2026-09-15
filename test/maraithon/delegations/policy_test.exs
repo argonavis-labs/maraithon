@@ -1,6 +1,6 @@
 defmodule Maraithon.Delegations.PolicyTest do
   use ExUnit.Case, async: true
-  alias Maraithon.Delegations.{Budget, Policy}
+  alias Maraithon.Delegations.{Budget, Ingress, Policy, Scope}
 
   setup do
     message = %{
@@ -92,6 +92,41 @@ defmodule Maraithon.Delegations.PolicyTest do
 
       assert {:error, :unverified_outcome} = Policy.validate(context, decision)
     end
+  end
+
+  test "first-message copies remain observers and the user's reply pauses the assistant", c do
+    scope = %{
+      "actor" => "as_assistant",
+      "identity" => %{"email" => "october@example.invalid"},
+      "source_user_email" => "kent@runner.now",
+      "to" => ["kent.fenwick@gmail.com"],
+      "cc" => [],
+      "first_send_cc" => ["kent@runner.now"]
+    }
+
+    assert Scope.email_cc(scope, true) == ["kent@runner.now"]
+    assert Scope.email_cc(scope, false) == []
+    assert Scope.email_cc(%{scope | "cc" => ["KENT@runner.now"]}, true) == ["KENT@runner.now"]
+    assert Scope.email_cc(%{scope | "to" => ["KENT@runner.now"]}, true) == []
+
+    [message] = c.context.run.prompt_snapshot["sources"]["messages"]
+    message = Map.merge(message, %{"to" => "october@example.invalid", "cc" => "kent@runner.now"})
+    assert Ingress.classify(message, scope) == "reply"
+
+    assert Ingress.classify(Map.put(message, "cc", "other@example.invalid"), scope) ==
+             "scope_change"
+
+    assert Ingress.classify(Map.put(message, "from", "kent@runner.now"), scope) == "human_send"
+
+    context =
+      c.context
+      |> put_in([:grant, :data, "scope"], scope)
+      |> put_in([:run, :prompt_snapshot, "sources", "messages"], [
+        Map.put(message, "from", "kent@runner.now")
+      ])
+
+    assert {:error, :unverified_outcome} =
+             Policy.validate(context, %{c.decision | "kind" => "complete"})
   end
 
   test "invented evidence and incomplete sources cannot authorize a reply", c do

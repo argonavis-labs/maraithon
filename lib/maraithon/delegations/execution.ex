@@ -12,6 +12,7 @@ defmodule Maraithon.Delegations.Execution do
     Jobs,
     Policy,
     Preferences,
+    Scope,
     Turn
   }
 
@@ -220,7 +221,7 @@ defmodule Maraithon.Delegations.Execution do
          "account_id" => d.connected_account_id,
          "from" => scope["identity"]["email"],
          "to" => Enum.join(scope["to"], ", "),
-         "cc" => Enum.join(scope["cc"], ", "),
+         "cc" => Enum.join(Scope.email_cc(scope, d.lifetime_sends == 0), ", "),
          "subject" => scope["subject"],
          "body" => Policy.email_body(scope, decision["body"]),
          "todo_id" => d.todo_id,

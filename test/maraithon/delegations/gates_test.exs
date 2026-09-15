@@ -36,6 +36,7 @@ defmodule Maraithon.Delegations.GatesTest do
     for changed <- [
           %{"to" => ["charlie@example.invalid"]},
           %{"cc" => ["other@example.invalid"]},
+          %{"first_send_cc" => ["other@example.invalid"]},
           %{"identity" => %{"email" => "someone@example.invalid"}},
           %{"subject" => "A real project"}
         ] do

@@ -227,6 +227,8 @@ defmodule Maraithon.AssistantIdentities do
                }) || ""
            ),
          "disclose_ai" => not is_nil(identity) and identity.data["disclose_ai"] == true,
+         "cc_user_on_first_send" =>
+           not is_nil(identity) and identity.data["cc_user_on_first_send"] == true,
          "assistant_identity_id" => identity && identity.id
        }}
     else
