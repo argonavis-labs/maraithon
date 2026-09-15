@@ -32,6 +32,9 @@ defmodule Maraithon.Release do
     {:ok, _} = Application.ensure_all_started(:req)
     {:ok, vault} = Maraithon.Vault.start_link([])
 
+    {:ok, tool_call_supervisor} =
+      Task.Supervisor.start_link(name: Maraithon.Runtime.ToolCallSupervisor)
+
     try do
       {:ok, report, _} =
         Ecto.Migrator.with_repo(Maraithon.Repo, fn _ ->
@@ -40,6 +43,7 @@ defmodule Maraithon.Release do
 
       IO.puts("DELEGATION_EVAL_PREFLIGHT=" <> Jason.encode!(report))
     after
+      Supervisor.stop(tool_call_supervisor)
       GenServer.stop(vault)
     end
   end
