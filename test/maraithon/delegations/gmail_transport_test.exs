@@ -69,6 +69,28 @@ defmodule Maraithon.Delegations.GmailTransportTest do
              Gmail.send_message(c.user_id, c.attrs)
   end
 
+  test "the frozen mailbox name accompanies the verified address", c do
+    sender(c.bypass)
+    parent(c.bypass)
+
+    Bypass.expect_once(c.bypass, "POST", "/users/me/messages/send", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      mime = raw |> Jason.decode!() |> Map.fetch!("raw") |> Base.url_decode64!(padding: false)
+      assert mime =~ "From: =?UTF-8?B?#{Base.encode64("Kent Fenwick")}?= <kent@runner.now>\r\n"
+      json(conn, %{"id" => "445566", "threadId" => "aabbcc"})
+    end)
+
+    assert {:ok, _} = Gmail.send_message(c.user_id, Map.put(c.attrs, :from_name, "Kent Fenwick"))
+  end
+
+  test "sender names cannot inject recipients", c do
+    assert {:error, :invalid_mail_headers} =
+             Gmail.send_message(
+               c.user_id,
+               Map.put(c.attrs, :from_name, "Kent\r\nBcc: attacker@example.invalid")
+             )
+  end
+
   test "a deleted parent blocks the send instead of starting an unrelated thread", c do
     sender(c.bypass)
 

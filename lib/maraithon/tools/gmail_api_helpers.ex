@@ -99,7 +99,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   def raw_message(to, subject, body, opts \\ []) do
     [
       "To: #{to}",
-      maybe_header("From", Keyword.get(opts, :from)),
+      maybe_header("From", named_sender(Keyword.get(opts, :from), Keyword.get(opts, :from_name))),
       maybe_header("Cc", Keyword.get(opts, :cc)),
       maybe_header("Bcc", Keyword.get(opts, :bcc)),
       "Subject: #{subject}",
@@ -116,6 +116,11 @@ defmodule Maraithon.Tools.GmailApiHelpers do
     |> Enum.join("\r\n")
     |> Base.url_encode64(padding: false)
   end
+
+  defp named_sender(email, name) when is_binary(email) and is_binary(name) and name != "",
+    do: "=?UTF-8?B?#{Base.encode64(name)}?= <#{email}>"
+
+  defp named_sender(email, _), do: email
 
   @doc false
   def message_id_header(id) when is_binary(id) do

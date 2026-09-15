@@ -220,6 +220,7 @@ defmodule Maraithon.Delegations.Execution do
        %{
          "account_id" => d.connected_account_id,
          "from" => scope["identity"]["email"],
+         "from_name" => scope["identity"]["display_name"],
          "to" => Enum.join(scope["to"], ", "),
          "cc" => Enum.join(Scope.email_cc(scope, d.lifetime_sends == 0), ", "),
          "subject" => scope["subject"],

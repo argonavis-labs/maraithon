@@ -17,6 +17,7 @@ defmodule Maraithon.Tools.GmailSendMessage do
              account: ActionHelpers.optional_string(args, "account"),
              account_id: args["account_id"],
              from: ActionHelpers.optional_string(args, "from"),
+             from_name: ActionHelpers.optional_string(args, "from_name"),
              cc: ActionHelpers.optional_string(args, "cc"),
              to: to,
              subject: subject,

@@ -722,6 +722,7 @@ defmodule Maraithon.Connectors.Gmail do
       raw =
         Maraithon.Tools.GmailApiHelpers.raw_message(to, subject, body,
           from: optional_attr(attrs, "from"),
+          from_name: optional_attr(attrs, "from_name"),
           cc: optional_attr(attrs, "cc"),
           in_reply_to: reply_headers["message_id"],
           references: reply_headers["references"],
@@ -1195,7 +1196,7 @@ defmodule Maraithon.Connectors.Gmail do
 
   defp valid_send_headers(attrs) do
     if Enum.all?(
-         ~w(to cc from subject message_id_header),
+         ~w(to cc from from_name subject message_id_header),
          &valid_header?(optional_attr(attrs, &1))
        ),
        do: :ok,
