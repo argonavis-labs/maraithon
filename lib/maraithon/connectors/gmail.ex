@@ -1086,6 +1086,7 @@ defmodule Maraithon.Connectors.Gmail do
       cc: get_header(headers, "Cc"),
       subject: get_header(headers, "Subject"),
       internet_message_id: get_header(headers, "Message-ID"),
+      original_internet_message_id: get_header(headers, "X-Google-Original-Message-ID"),
       in_reply_to: get_header(headers, "In-Reply-To"),
       references: get_header(headers, "References"),
       auto_submitted: get_header(headers, "Auto-Submitted"),

@@ -84,6 +84,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
       maybe_header("Cc", Keyword.get(opts, :cc)),
       maybe_header("Bcc", Keyword.get(opts, :bcc)),
       "Subject: #{subject}",
+      "Date: #{Calendar.strftime(DateTime.utc_now(), "%a, %d %b %Y %H:%M:%S +0000")}",
       message_id_header(Keyword.get(opts, :message_id_header)),
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=UTF-8",

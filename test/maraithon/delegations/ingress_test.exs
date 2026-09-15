@@ -662,10 +662,26 @@ defmodule Maraithon.Delegations.IngressTest do
       assert mime =~ "From: kent.fenwick@gmail.com\r\n"
       assert mime =~ "To: kent@runner.now\r\n"
       assert mime =~ "Subject: [Maraithon eval] local\r\n"
+      assert mime =~ ~r/Message-ID: <maraithon\.[a-f0-9-]+@maraithon\.com>\r\n/
       json(conn, %{"id" => "778899", "threadId" => "aabbcc"})
     end)
 
-    Bypass.expect(bypass, "GET", "/users/me/messages", &json(&1, %{"messages" => []}))
+    Bypass.expect(bypass, "GET", "/users/me/messages/778899", fn conn ->
+      json(conn, %{
+        "id" => "778899",
+        "threadId" => "aabbcc",
+        "labelIds" => ["SENT"],
+        "payload" => %{
+          "headers" => [%{"name" => "Message-ID", "value" => "<rewritten@mail.gmail.com>"}]
+        }
+      })
+    end)
+
+    Bypass.expect(bypass, "GET", "/users/me/messages", fn conn ->
+      conn = Plug.Conn.fetch_query_params(conn)
+      assert conn.query_params["q"] == "in:anywhere rfc822msgid:<rewritten@mail.gmail.com>"
+      json(conn, %{"messages" => []})
+    end)
 
     assert {:ok, _} =
              BackgroundJobs.enqueue("delegation_eval", %{
@@ -1039,6 +1055,29 @@ defmodule Maraithon.Delegations.IngressTest do
           assert {:ok, %{state: ^expected}} = result
           result
         end)
+      end
+
+      if c.send_response in [:accepted, :lost_response] do
+        assert {:ok, :ok} =
+                 Repo.transaction(fn ->
+                   Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+
+                   Ingress.gmail!(
+                     c.user_id,
+                     c.account.id,
+                     Map.merge(c.message, %{
+                       message_id: "445566",
+                       internet_message_id: "<changed@mail.gmail.com>",
+                       from: "kent@runner.now",
+                       to: "kent.fenwick@gmail.com",
+                       labels: ["SENT"],
+                       internal_date: DateTime.utc_now()
+                     })
+                   )
+                 end)
+
+        echo = Repo.get_by!(Event, event_key: "gmail:#{c.account.id}:445566") |> Event.hydrate()
+        assert echo.data["classification"] == "own_send"
       end
 
       if c.send_response == :unproven do

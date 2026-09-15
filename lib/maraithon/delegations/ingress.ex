@@ -111,10 +111,29 @@ defmodule Maraithon.Delegations.Ingress do
   end
 
   defp own_action?(d, message) do
+    sent? = "SENT" in (field(message, :labels) || [])
+    message_id = field(message, :message_id)
+
+    sent? and
+      (Repo.exists?(
+         from e in Event,
+           where:
+             e.delegation_id == ^d.id and e.user_id == ^d.user_id and
+               e.kind == "send_receipt" and e.source_ref == ^message_id
+       ) or original_action?(d, message))
+  end
+
+  defp original_action?(d, message) do
+    ids = [field(message, :internet_message_id), field(message, :original_internet_message_id)]
+
+    Enum.any?(ids, &matches_action?(d, &1))
+  end
+
+  defp matches_action?(d, message_id) do
     with [_, id] <-
            Regex.run(
              ~r/^<maraithon\.([a-f0-9-]+)@maraithon\.com>$/,
-             field(message, :internet_message_id) || ""
+             message_id || ""
            ),
          {:ok, id} <- Ecto.UUID.cast(id),
          %PreparedAction{} = action <-
@@ -126,9 +145,7 @@ defmodule Maraithon.Delegations.Ingress do
            ),
          action = PreparedAction.hydrate_payload(action) do
       # A forged inbound Message-ID cannot claim to be our outbound message.
-      "SENT" in (field(message, :labels) || []) and
-        field(message, :internet_message_id) ==
-          Maraithon.TelegramAssistant.ActionReconciliation.message_id(action)
+      message_id == Maraithon.TelegramAssistant.ActionReconciliation.message_id(action)
     else
       _ -> false
     end

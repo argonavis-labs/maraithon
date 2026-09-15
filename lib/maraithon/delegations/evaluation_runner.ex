@@ -321,12 +321,22 @@ defmodule Maraithon.Delegations.EvaluationRunner do
 
   defp inbox_message(job, sent) do
     account = Repo.get!(Maraithon.Accounts.ConnectedAccount, job.payload["owner_account_id"])
-    query = "in:anywhere rfc822msgid:#{ActionReconciliation.message_id(sent)}"
 
-    with {:ok, ids} <-
+    # A positive send receipt identifies the sender's exact message even when
+    # Gmail replaces our RFC Message-ID. Never guess from subject or timestamp.
+    with {:ok, sender_token} <-
+           GoogleAccount.access_token(@user, job.payload["sender_account_id"]),
+         {:ok, delivered} <-
+           Gmail.fetch_message_content(
+             sender_token,
+             sent.payload["_maraithon_execution_result"]["message_id"],
+             access_token: true
+           ),
+         true <- "SENT" in delivered.labels and is_binary(delivered.internet_message_id),
+         {:ok, ids} <-
            GmailApiHelpers.list_message_ids(
              %{"user_id" => @user, "provider" => account.provider, "exact_account" => true},
-             query,
+             "in:anywhere rfc822msgid:#{delivered.internet_message_id}",
              2
            ),
          [id] <- ids,
@@ -336,6 +346,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     else
       [] -> :wait
       [_ | _] -> {:error, :ambiguous_eval_message}
+      false -> {:error, :eval_sender_receipt_not_proven}
       error -> error
     end
   end

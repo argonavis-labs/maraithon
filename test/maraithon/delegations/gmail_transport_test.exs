@@ -59,6 +59,7 @@ defmodule Maraithon.Delegations.GmailTransportTest do
       assert mime =~ "From: kent@runner.now\r\n"
       assert mime =~ "To: kent.fenwick@gmail.com\r\n"
       assert mime =~ "Message-ID: <maraithon.eval@maraithon.com>\r\n"
+      assert mime =~ ~r/Date: \w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} \+0000\r\n/
       assert mime =~ "In-Reply-To: <parent@example.invalid>\r\n"
       assert mime =~ "References: <root@example.invalid> <parent@example.invalid>\r\n"
       json(conn, %{"id" => "445566", "threadId" => "aabbcc"})

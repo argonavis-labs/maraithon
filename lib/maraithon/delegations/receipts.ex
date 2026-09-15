@@ -107,7 +107,7 @@ defmodule Maraithon.Delegations.Receipts do
             ),
           else: payload
 
-      Outbox.append!(d, kind, key, payload)
+      Outbox.append!(d, kind, key, payload, %{source_ref: receipt["message_id"]})
     end
 
     action
