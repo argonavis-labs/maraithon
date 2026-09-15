@@ -1,7 +1,7 @@
 defmodule Maraithon.Delegations.Outcomes do
   @moduledoc "Apply proven conversation progress to the todo while preserving its owner."
   alias Maraithon.{Repo, Todos}
-  alias Maraithon.Delegations.{Actions, Authority, Jobs, Policy, Preferences, Turn}
+  alias Maraithon.Delegations.{Actions, Authority, Jobs, Ledger, Policy, Preferences, Turn}
   alias Maraithon.Todos.{Todo, Workflow}
 
   def follow_up(d, grant, now) do
@@ -40,13 +40,9 @@ defmodule Maraithon.Delegations.Outcomes do
         data =
           if context && is_map(context.turn.data["decision"]) do
             decision = context.turn.data["decision"]
-            sources = context.run.prompt_snapshot["sources"]
 
             Map.merge(d.data, %{
-              "evidence" =>
-                Enum.map(decision["evidence"] || [], fn id ->
-                  %{"source" => "gmail", "account_id" => sources["account_id"], "id" => id}
-                end),
+              "evidence" => Ledger.outcome_evidence(context, decision["evidence"] || []),
               "ledger" => Map.put(d.data["ledger"] || %{}, "latest_outcome", decision["reason"])
             })
           else

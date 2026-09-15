@@ -53,6 +53,22 @@ defmodule Maraithon.Delegations.Ledger do
   def references(context),
     do: facts(context) |> Map.values() |> Enum.flat_map(& &1["evidence"]) |> Enum.uniq()
 
+  def outcome_evidence(context, ids) do
+    messages = messages(context)
+
+    Enum.map(ids, fn id ->
+      ref = source_reference(context, Enum.find(messages, &(&1["message_id"] == id)))
+
+      %{
+        "source" => ref["provider"],
+        "account_id" => ref["account_id"],
+        "id" => id,
+        "thread_id" => ref["thread_id"],
+        "channel" => ref["channel"]
+      }
+    end)
+  end
+
   def requested_ids(decision) when is_map(decision) do
     updates = Map.get(decision, "facts", [])
     evidence = decision["evidence"]

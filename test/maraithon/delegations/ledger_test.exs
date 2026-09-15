@@ -213,6 +213,26 @@ defmodule Maraithon.Delegations.LedgerTest do
     assert {:error, :unverified_evidence} = Toolbox.read(context, c.decision)
   end
 
+  test "completion evidence preserves the recalled mailbox instead of relabelling it as the current one",
+       c do
+    later = later_context(c)
+    serve(c, c.message)
+    assert {:ok, recalled} = Toolbox.read(later, Map.put(c.decision, "facts", []))
+    later = put_in(later, [:run, :prompt_snapshot, "recalled_sources"], recalled)
+    later = put_in(later, [:run, :prompt_snapshot, "sources", "account_id"], 999_999)
+
+    assert [
+             %{
+               "source" => "gmail",
+               "account_id" => account,
+               "id" => "aa11",
+               "thread_id" => "aabbcc"
+             }
+           ] = Ledger.outcome_evidence(later, ["aa11"])
+
+    assert account == c.context.delegation.connected_account_id
+  end
+
   test "facts not cited by the current decision cause no history reads", c do
     later = later_context(c)
     assert {:ok, []} = Toolbox.read(later, %{"evidence" => [], "facts" => []})
