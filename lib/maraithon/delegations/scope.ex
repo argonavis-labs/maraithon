@@ -60,7 +60,11 @@ defmodule Maraithon.Delegations.Scope do
            OAuth.get_valid_access_token(todo.user_id, account.provider, exact?: true),
          {:ok, message} <- Gmail.fetch_message(token, todo.source_item_id, access_token: true),
          false <- "DRAFT" in message.labels do
-      to = counterparties(message, [identity["email"], account.metadata["email"]])
+      source_email =
+        account.metadata["account_email"] || account.metadata["email"] ||
+          account.external_account_id
+
+      to = counterparties(message, [identity["email"], source_email])
       thread = if identity["account_id"] == account.id, do: message.thread_id
 
       {:ok,

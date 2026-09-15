@@ -222,7 +222,7 @@ defmodule Maraithon.Delegations.Execution do
          "to" => Enum.join(scope["to"], ", "),
          "cc" => Enum.join(scope["cc"], ", "),
          "subject" => scope["subject"],
-         "body" => decision["body"],
+         "body" => Policy.email_body(scope, decision["body"]),
          "todo_id" => d.todo_id,
          "thread_id" => d.provider_thread_id,
          "reply_to_message_id" => if(d.provider_thread_id, do: parent["message_id"])

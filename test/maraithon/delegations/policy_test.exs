@@ -46,6 +46,34 @@ defmodule Maraithon.Delegations.PolicyTest do
     assert {:ok, _} = Policy.validate(c.context, c.decision)
   end
 
+  test "policy reviews the exact saved signature and honours the disclosure setting", c do
+    for {disclose?, signature} <- [
+          {true, "October\nI'm Kent's AI assistant."},
+          {false, "October"}
+        ] do
+      context =
+        update_in(c.context, [:grant, :data, "scope"], fn scope ->
+          scope
+          |> Map.put("actor", "as_assistant")
+          |> Map.put("identity", %{
+            "email" => "october@example.invalid",
+            "signature" => signature,
+            "disclose_ai" => disclose?
+          })
+        end)
+
+      expected = c.decision["body"] <> "\n\n" <> signature
+      scope = context.grant.data["scope"]
+      assert Policy.email_body(scope, c.decision["body"]) == expected
+      assert Policy.email_body(scope, expected) == expected
+      [_, input] = Policy.messages(context, c.decision)
+      assert Jason.decode!(input["content"])["candidate"]["body"] == expected
+    end
+
+    assert Policy.email_body(c.context.grant.data["scope"], c.decision["body"]) ==
+             c.decision["body"]
+  end
+
   test "completion requires a counterparty source and independent outcome proof", c do
     decision = %{c.decision | "kind" => "complete"}
     assert {:ok, _} = Policy.validate(c.context, decision)

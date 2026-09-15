@@ -39,7 +39,11 @@ defmodule Maraithon.Delegations.IngressTest do
       end
 
     scope = %{
-      "identity" => %{"email" => "kent@runner.now", "account_id" => account.id},
+      "identity" => %{
+        "email" => "kent@runner.now",
+        "account_id" => account.id,
+        "signature" => tags[:signature]
+      },
       "to" => ["kent.fenwick@gmail.com"],
       "cc" => [],
       "subject" => "[Maraithon eval] A question",
@@ -447,6 +451,7 @@ defmodule Maraithon.Delegations.IngressTest do
              end)
   end
 
+  @tag signature: "-Kent"
   test "a verified turn freezes the exact mailbox, recipients, body and reply parent before the undo window",
        c do
     enable_gmail(c.user_id)
@@ -466,6 +471,7 @@ defmodule Maraithon.Delegations.IngressTest do
                assert action.payload["account_id"] == c.account.id
                assert action.payload["to"] == "kent.fenwick@gmail.com"
                assert action.payload["from"] == "kent@runner.now"
+               assert action.payload["body"] == "Got it. Indigo.\n\n-Kent"
                assert action.payload["thread_id"] == "aabbcc"
                assert action.payload["reply_to_message_id"] == c.message.message_id
                assert is_binary(action.payload["_maraithon_confirmed_payload_sha256"])

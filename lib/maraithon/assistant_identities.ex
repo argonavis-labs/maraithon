@@ -217,7 +217,15 @@ defmodule Maraithon.AssistantIdentities do
          "email" => sender["sendAsEmail"],
          "display_name" =>
            if(identity, do: identity.data["display_name"], else: sender["displayName"]),
-         "signature" => if(identity, do: signature(identity), else: sender["signature"] || ""),
+         "signature" =>
+           if(identity,
+             do: signature(identity),
+             else:
+               Maraithon.Connectors.Gmail.BodyText.from_message(%{
+                 "html_body" => sender["signature"] || ""
+               }) || ""
+           ),
+         "disclose_ai" => not is_nil(identity) and identity.data["disclose_ai"] == true,
          "assistant_identity_id" => identity && identity.id
        }}
     else

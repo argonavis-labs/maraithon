@@ -57,6 +57,13 @@ defmodule Maraithon.Delegations.Policy do
   end
 
   def messages(context, decision) do
+    candidate =
+      if decision["kind"] in ~w(send propose_times) do
+        Map.put(decision, "body", email_body(context.grant.data["scope"], decision["body"]))
+      else
+        decision
+      end
+
     [
       %{
         "role" => "system",
@@ -80,9 +87,19 @@ defmodule Maraithon.Delegations.Policy do
       },
       %{
         "role" => "user",
-        "content" => Jason.encode!(%{"context" => context(context), "candidate" => decision})
+        "content" => Jason.encode!(%{"context" => context(context), "candidate" => candidate})
       }
     ]
+  end
+
+  @doc "The exact email body reviewed and frozen, with the grant's saved signature."
+  def email_body(scope, body) when is_binary(body) do
+    signature = String.trim(get_in(scope, ["identity", "signature"]) || "")
+    body = String.trim_trailing(body)
+
+    if signature == "" or body == signature or String.ends_with?(body, "\n" <> signature),
+      do: body,
+      else: body <> "\n\n" <> signature
   end
 
   def validate(context, decision) when is_map(decision) do
@@ -190,9 +207,9 @@ defmodule Maraithon.Delegations.Policy do
 
   defp actor_instruction(context) do
     if actor(context) == "as_assistant" do
-      "Write as the user's assistant, using the granted display name. Be brief, disclose that you are an AI assistant, and use no em dashes."
+      "Write as the user's assistant, using the granted display name. Be brief and use no em dashes. When composing, omit the signature: the server appends the granted signature and disclosure exactly. Respect that disclosure setting, and answer honestly if asked whether you are a person."
     else
-      "Write AS THE USER, in first person from the granted mailbox. Do not introduce yourself as an assistant or claim to represent the user. Be brief and natural, with no em dashes."
+      "Write AS THE USER, in first person from the granted mailbox. Do not introduce yourself as an assistant or claim to represent the user. Be brief and natural, with no em dashes. When composing, omit the signature: the server appends the granted signature exactly."
     end
   end
 

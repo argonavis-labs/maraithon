@@ -100,7 +100,11 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
-        Jason.encode!(%{"sendAs" => [%{"sendAsEmail" => user, "isPrimary" => true}]})
+        Jason.encode!(%{
+          "sendAs" => [
+            %{"sendAsEmail" => user, "isPrimary" => true, "signature" => "<div>-Kent</div>"}
+          ]
+        })
       )
     end)
 
@@ -115,6 +119,9 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     end
 
     assert AssistantIdentities.get(user) == nil
+    assert {:ok, snapshot} = AssistantIdentities.gmail_snapshot(user, "as_user", own.id)
+    assert snapshot["signature"] == "-Kent"
+    assert snapshot["disclose_ai"] == false
   end
 
   test "pending assistant setup is excluded from user sources, identity, voice reads and CRM", %{
