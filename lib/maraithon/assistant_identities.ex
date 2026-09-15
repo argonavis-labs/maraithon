@@ -46,6 +46,26 @@ defmodule Maraithon.AssistantIdentities do
     assistant_accounts(user_id) |> select([a], a.provider) |> Repo.all()
   end
 
+  def user_google_providers(providers, user_id) do
+    excluded = assistant_providers(user_id)
+
+    # The legacy "google" token lookup can fall back to any account. Resolve it
+    # explicitly whenever an assistant account is present so that an empty user
+    # account set cannot reopen the assistant's inbox through that fallback.
+    if excluded == [] do
+      providers
+    else
+      tokens = Maraithon.OAuth.list_user_tokens(user_id)
+      providers = if providers == ["google"], do: Enum.map(tokens, & &1.provider), else: providers
+
+      Enum.filter(providers, fn provider ->
+        provider not in excluded and
+          (String.starts_with?(provider, "google:") or
+             (provider == "google" and Enum.any?(tokens, &(&1.provider == "google"))))
+      end)
+    end
+  end
+
   def assistant_emails(user_id) do
     assistant_accounts(user_id)
     |> select([a], {a.external_account_id, a.metadata, a.provider})

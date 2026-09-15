@@ -7,6 +7,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
   alias Maraithon.OAuth.Google
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Tools.GmailHelpers
+  alias Maraithon.Tools.GoogleCalendarHelpers
 
   setup do
     user = "isolation-#{Ecto.UUID.generate()}@example.invalid"
@@ -131,6 +132,9 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     assert {:error, :no_token} =
              GmailHelpers.get_message(user, "assistant-message", provider: assistant.provider)
 
+    assert {:error, :no_token} =
+             GoogleCalendarHelpers.list_events(user, provider: assistant.provider)
+
     assert {:error, :assistant_account_excluded} = SourceAccountDiscovery.acquire(assistant, nil)
 
     assert {:error, :assistant_account_excluded} =
@@ -188,6 +192,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     assert SourceScope.google_account_providers(SourceScope.resolve(user)) == []
     assert {:error, :no_token} = GmailHelpers.list_messages(user, query: "from:me")
     assert {:error, :no_token} = GmailHelpers.list_messages(user, provider: "google")
+    assert {:error, :no_token} = GoogleCalendarHelpers.list_events(user)
   end
 
   test "an identity cannot bind another user's account and an alias keeps the user's mailbox", %{

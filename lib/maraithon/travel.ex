@@ -655,6 +655,7 @@ defmodule Maraithon.Travel do
     else
       providers
     end
+    |> Maraithon.AssistantIdentities.user_google_providers(user_id)
   end
 
   defp normalized_source_scope(user_id, source_scope) do

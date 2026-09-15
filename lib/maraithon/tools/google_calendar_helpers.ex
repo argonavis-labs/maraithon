@@ -20,6 +20,7 @@ defmodule Maraithon.Tools.GoogleCalendarHelpers do
     providers =
       user_id
       |> providers_for_search(provider)
+      |> Maraithon.AssistantIdentities.user_google_providers(user_id)
       |> Enum.uniq()
 
     fetch_events_from_providers(
