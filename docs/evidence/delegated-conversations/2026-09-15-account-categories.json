@@ -20,11 +20,14 @@
     "mac_account_settings": "loaded from production",
     "cross_device_change": "Temporary Personal setting on Gmail saved from Mac; web Personal filter showed 7 existing tasks.",
     "restored": "Gmail category returned to Unassigned after verification",
-    "ios_visual_check": "not performed"
+    "ios_visual_check": "not performed",
+    "readable_account_labels": "Verified Google email addresses, Agora and Runner channels and direct messages in production."
   },
   "defaults": "Unassigned accounts and tasks without source accounts remain under All.",
   "ios_migration": "Optional accountCategory field; additive lightweight SwiftData migration; populated by sync.",
   "followup_server_workflow": 35004585260,
   "ios_release_workflow": 35004585337,
-  "followup_status": "in progress"
+  "followup_status": "deployed",
+  "followup_revision": "maraithon-00351-j2n",
+  "ios_release_result": "success"
 }
