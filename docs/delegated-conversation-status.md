@@ -100,6 +100,12 @@ The eval commands now share a configuration reader that pins the serving image a
 
 The saved sending hours are 08:00 to 18:00 Eastern on weekdays. A live eval started in the evening now queues for the next working window, and its one-hour deadline starts there. A late-day start without a full hour also waits. This uses the existing durable background job schedule and leaves user preferences and send checks intact. The server build and two focused evaluation checks passed, including the weekend daylight-saving transition and short working windows. The memory eval still needs to finish with real provider evidence.
 
+The corrected read-only production preflight, `maraithon-todo-validation-4wvrt`, passed for both Kent accounts and October. It confirmed Muse Spark Contributor, development spending, execution readiness, and October's separation from personal sources. It sent no messages, created no events, and made no model calls. [Durable memory evidence and current limits](evidence/delegated-conversations/2026-09-15-durable-facts.json).
+
+Commit `358d5360` deployed successfully through workflow `35036148839`. Revision `maraithon-00378-lqv` is ready and serves all traffic. The controlled Gmail gate, disabled Slack sends, Muse model, and development spending remain configured.
+
+Launcher `maraithon-todo-validation-dk94d` completed and committed one October information eval: job `04a64f25-c24a-42ee-a819-a94cbe07e917`, scheduled for September 16 at 08:00 America/Toronto (`12:00 UTC`). Observe this job when checking the live learned facts and recalled source; do not launch a duplicate. The conversation result and subsequent read-only recall probe are pending.
+
 ## Previously verified
 
 - A real information conversation between `kent@runner.now` and `kent.fenwick@gmail.com` reached Done with the counterparty reply as evidence. Two turns used four Muse calls and cost US$0.001421. [Live evidence](evidence/delegated-conversations/2026-09-15-live-information.json).

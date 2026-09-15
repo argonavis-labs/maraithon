@@ -1,0 +1,152 @@
+{
+  "date": "2026-09-15",
+  "feature": "Durable reviewed facts and cited history recall",
+  "implementation_commits": [
+    "5adf1c584f77ce24d7ecb9a4aebae97854e4e750",
+    "3e9ad3f5c18d59f0a4f1bbcb429faac350804c02"
+  ],
+  "deployment": {
+    "workflow_id": 35035265999,
+    "conclusion": "success",
+    "revision": "maraithon-00377-xkw",
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:53eb95dc3dba837c312966d56d532e882a31098f9bf2ea2ec541adaf003de834"
+  },
+  "local": {
+    "build": "passed",
+    "focused_runs": [
+      {
+        "tests": 105,
+        "failures": 0
+      },
+      {
+        "tests": 62,
+        "failures": 0,
+        "description": "Outcome reference follow-up, including one additional case"
+      }
+    ],
+    "distinct_tests": 106,
+    "simulated_days": 180,
+    "older_evidence_provider_fetches": 1,
+    "model_calls_per_reviewed_turn": 2,
+    "additional_replay_model_calls": 0,
+    "additional_replay_provider_calls": 0,
+    "coverage": [
+      "Reviewed fact persistence and correction",
+      "Explicit removal and retained facts",
+      "Rejected facts do not persist",
+      "Unknown or foreign citations rejected",
+      "Original mailbox retained in outcome evidence",
+      "Bounded exact-message recall",
+      "Changed evidence blocks sending",
+      "Slack channel and DM recall through provider fixtures"
+    ]
+  },
+  "live": {
+    "learned_memory_verified": false,
+    "first_attempt": {
+      "execution": "maraithon-todo-validation-kts9t",
+      "phase": "preflight_failed",
+      "reason": "Validation job retained stale model and omitted rollout configuration",
+      "messages_sent": 0
+    },
+    "corrected_preflight": {
+      "execution": "maraithon-todo-validation-4wvrt",
+      "report": {
+        "accounts": [
+          {
+            "account_id": 2,
+            "email": "kent@runner.now",
+            "status": "ready"
+          },
+          {
+            "account_id": 1,
+            "email": "kent.fenwick@gmail.com",
+            "status": "ready"
+          }
+        ],
+        "accounts_ready": true,
+        "actor": "as_assistant",
+        "assistant": {
+          "account_id": 9,
+          "disclose_ai": true,
+          "display_name": "October",
+          "email": "october@ewakened.com",
+          "isolated_from_personal_sources": true,
+          "status": "ready"
+        },
+        "budget_ready": true,
+        "development_spending": true,
+        "events_created": 0,
+        "execution_ready": true,
+        "expected_model": "meta/muse-spark-1.3-contributor",
+        "live_eval_passed": false,
+        "messages_sent": 0,
+        "model": "meta/muse-spark-1.3-contributor",
+        "model_calls": 0,
+        "model_ready": true,
+        "phase": "preflight"
+      },
+      "execution_status": "completed_successfully"
+    },
+    "scheduled_eval": {
+      "launcher_execution": "maraithon-todo-validation-dk94d",
+      "launcher_status": "completed_successfully",
+      "job_id": "04a64f25-c24a-42ee-a819-a94cbe07e917",
+      "scenario": "information_reply",
+      "actor": "as_assistant",
+      "phase": "queued",
+      "scheduled_at": "2026-09-16T12:00:00Z",
+      "local_scheduled_at": "2026-09-16 08:00 America/Toronto",
+      "result": "pending; observe this job rather than launching another conversation"
+    }
+  },
+  "eval_repair": {
+    "commit": "358d53605266a07258e955252ded90a516fb9176",
+    "build": "passed",
+    "focused_tests": 2,
+    "failures": 0,
+    "configuration_fixture": "passed",
+    "saved_sending_hours": {
+      "timezone": "America/Toronto",
+      "start": "08:00",
+      "end": "18:00",
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    "changes": [
+      "Copy non-secret model, budget and rollout settings from pinned serving revision",
+      "Clear stale model fallbacks",
+      "Preserve selected actor",
+      "Disable automatic launcher container retries",
+      "Queue evening evals for next working hour with deadline from scheduled start",
+      "Leave sending preferences and rollout gates unchanged"
+    ],
+    "deployment": {
+      "workflow_id": 35036148839,
+      "conclusion": "success",
+      "revision": "maraithon-00378-lqv",
+      "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:8196ebe420a0d9dd28ed10060aea84e173d6631914472d55cfab2b1e0b1ea151"
+    },
+    "serving_flags": {
+      "LLM_MODEL": "meta/muse-spark-1.3-contributor",
+      "LLM_PROJECTED_DAILY_USD": "3.00",
+      "DELEGATION_EVAL_ONLY": "true",
+      "DELEGATION_GMAIL_SENDS_ENABLED": "true",
+      "DELEGATION_SLACK_SENDS_ENABLED": "false",
+      "LLM_DEVELOPMENT_SPENDING": "true"
+    }
+  },
+  "limits": [
+    "Live learning and provider recall have not passed yet",
+    "The 180-day test uses a simulated clock and provider fixtures",
+    "No whole-app restart or schema upgrade proof",
+    "No automatic Gmail thread split verified live",
+    "Historical conversations without facts still require bounded seeding",
+    "Live Slack eval deferred by Kent"
+  ]
+}
