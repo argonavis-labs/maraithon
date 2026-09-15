@@ -35,7 +35,9 @@ Commit `6fa6f93a` carries the assistant purpose in signed Google OAuth state and
 
 The focused isolation, scope, Gmail, ingress, and OAuth run passed 46 checks. Seven identity checks passed after the final primary-address validation. The server build passed. Workflow `34998552598` deployed this change. Calendar and travel fallback reads now use the same exclusion in commit `0d865e4b`; its seven identity checks and server build passed, and deployment is pending.
 
-This completes the central isolation path, not the full assistant slice. The remaining work includes signatures, account-specific voice, native settings, and an audit of other direct provider read paths. No October account is connected in production yet.
+Commit `fa9574b6` appends the frozen signature in server code and gives the independent policy review the exact resulting email body. It respects the saved assistant disclosure, converts Gmail's HTML signature to plain text, and avoids appending the same footer twice. The source mailbox's verified email is also excluded when deriving an assistant conversation's counterparties. The focused identity, policy, and ingress run passed 50 checks, and the server build passed. Deployment and a new live calendar run are pending.
+
+This completes the central isolation and signature paths, not the full assistant slice. The remaining work includes account-specific voice, native settings, first-send Cc behaviour, and an audit of other direct provider read paths. No October account is connected in production yet.
 
 ## Conflict recovery and retention
 
