@@ -14,9 +14,9 @@ defmodule Maraithon.TelegramAssistant.Run do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @trigger_types ~w(inbound_message reply agent_push brief insight_push follow_up scheduled_digest)
+  @trigger_types ~w(inbound_message reply agent_push brief insight_push follow_up scheduled_digest delegation_event)
   @statuses ~w(queued running waiting_confirmation completed failed cancelled degraded)
-  @surfaces ~w(telegram mobile)
+  @surfaces ~w(telegram mobile delegation)
   @max_prompt_snapshot_bytes 640_000
   @max_result_summary_bytes 256_000
   @payload_bounds [
@@ -120,6 +120,7 @@ defmodule Maraithon.TelegramAssistant.Run do
     |> put_payload_encryption_version()
     |> reactivate_payload()
     |> DurablePayload.put_binding(payload_binding_spec())
+    |> Maraithon.Delegations.Binding.validate_changeset(:run)
     |> DurablePayload.require_current_mutation()
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:conversation_id)
@@ -129,8 +130,10 @@ defmodule Maraithon.TelegramAssistant.Run do
   def hydrate_payloads(run, mode \\ DurablePayload.mode!())
 
   def hydrate_payloads(%__MODULE__{} = run, mode) when mode in [:legacy, :exact] do
+    mode = Maraithon.Delegations.Binding.mode(run, mode)
     :ok = DurablePayload.verify_binding!(run, payload_binding_spec(), mode)
     {prompt_snapshot, result_summary} = read_payloads!(run, mode)
+    :ok = Maraithon.Delegations.Binding.verify!(:run, run, prompt_snapshot)
     %{run | prompt_snapshot: prompt_snapshot, result_summary: result_summary}
   end
 
@@ -167,7 +170,8 @@ defmodule Maraithon.TelegramAssistant.Run do
     end
   end
 
-  defp put_new_payload_defaults(%__MODULE__{id: nil}, attrs) when is_map(attrs) do
+  defp put_new_payload_defaults(%__MODULE__{__meta__: %{state: :built}}, attrs)
+       when is_map(attrs) do
     attrs
     |> put_attr_default(:prompt_snapshot, %{})
     |> put_attr_default(:result_summary, %{})
@@ -233,7 +237,7 @@ defmodule Maraithon.TelegramAssistant.Run do
         put_change(
           changeset,
           legacy_field,
-          if(DurablePayload.legacy_write?(), do: payload, else: %{})
+          if(Maraithon.Delegations.Binding.legacy_write?(changeset), do: payload, else: %{})
         )
 
       :error ->

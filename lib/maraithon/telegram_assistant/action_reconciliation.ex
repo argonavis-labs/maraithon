@@ -71,7 +71,8 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
 
     Execution.with_authority(job, fn ->
       with {:ok, id} <- Ecto.UUID.cast(job.payload["action_id"]),
-           %PreparedAction{} = action <- Repo.get_by(PreparedAction, id: id, user_id: job.user_id),
+           %PreparedAction{} = action <-
+             Repo.get_by(PreparedAction, id: id, user_id: job.user_id),
            action = PreparedAction.hydrate_payload(action),
            true <- action.conversation_id == job.payload["conversation_id"],
            true <-
@@ -92,11 +93,17 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   end
 
   defp reconcile_check(action, checks) do
-    case TelegramAssistant.reconcile_prepared_action(action) do
-      {:ok, _action, state} -> {:ok, %{state: to_string(state), checks: checks + 1}}
-      {:pending, reason} -> pending(checks, reason)
-      {:error, reason} -> pending(checks, reason)
-    end
+    result =
+      case TelegramAssistant.reconcile_prepared_action(action) do
+        {:ok, _action, state} -> {:ok, %{state: to_string(state), checks: checks + 1}}
+        {:pending, reason} -> pending(checks, reason)
+        {:error, reason} -> pending(checks, reason)
+      end
+
+    if action.authorization_kind == "delegation_grant",
+      do: Maraithon.Delegations.Outbox.publish_pending(action.user_id)
+
+    result
   end
 
   defp pending(checks, reason) when checks + 1 < @max_checks do
@@ -245,7 +252,8 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   defp mail_identity(_, _), do: nil
 
   defp valid_identity(action, %{"version" => 1, "action_id" => id, "kind" => kind})
-       when id == action.id and kind == action.action_type, do: :ok
+       when id == action.id and kind == action.action_type,
+       do: :ok
 
   defp valid_identity(_, _), do: {:pending, :reconciliation_identity_unavailable}
 

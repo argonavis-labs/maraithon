@@ -65,6 +65,10 @@ defmodule Maraithon.Todos.ActionHandoff do
     |> Enum.each(&apply_safely/1)
   end
 
+  # Delegations apply their own evidence-checked workflow transition through the
+  # coordinator. A send receipt alone does not complete the underlying todo.
+  def apply_safely(%PreparedAction{authorization_kind: "delegation_grant"}), do: :ok
+
   def apply_safely(%PreparedAction{} = action) do
     action = PreparedAction.hydrate_payload(action)
 

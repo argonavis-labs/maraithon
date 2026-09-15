@@ -1678,6 +1678,11 @@ defmodule Maraithon.TelegramAssistant do
           other -> other
         end
 
+      {:unentered, %PreparedAction{authorization_kind: "delegation_grant"}} ->
+        # Only its dedicated send job may admit a delegated mutation. Observing
+        # an unentered action is never permission to bypass the grant or undo window.
+        {:pending, :awaiting_delegated_send}
+
       {:unentered, snapshot} ->
         # No claim was ever acquired. The normal atomic claim is the only path
         # into the provider, including when the original requester races us.
@@ -1770,7 +1775,7 @@ defmodule Maraithon.TelegramAssistant do
           true ->
             proof =
               receipt
-              |> Map.take(~w(source message_id thread_id command_id event_id reconciled))
+              |> Map.take(["command_id" | Maraithon.Delegations.Receipts.proof_fields()])
               |> Map.put("observed_at", DateTime.to_iso8601(database_now!()))
               |> Map.put(
                 "confirmed_payload_hash",
@@ -1792,6 +1797,7 @@ defmodule Maraithon.TelegramAssistant do
                 error: nil,
                 payload: payload
               })
+              |> Maraithon.Delegations.Receipts.record!()
 
             {:ok, executed, :executed}
         end
@@ -1843,6 +1849,12 @@ defmodule Maraithon.TelegramAssistant do
       log_prepared_action_transition_failure(prepared_action, reason)
       {:error, current_prepared_action_or(prepared_action), :prepared_action_persistence_failed}
   end
+
+  defp freeze_prepared_action_decision(
+         %PreparedAction{authorization_kind: "delegation_grant"} = action,
+         _opts
+       ),
+       do: {:error, action, :delegation_job_required}
 
   defp freeze_prepared_action_decision(
          %PreparedAction{status: "awaiting_confirmation"} = prepared_action,
@@ -2014,6 +2026,9 @@ defmodule Maraithon.TelegramAssistant do
 
   defp claim_prepared_action_execution(%PreparedAction{} = prepared_action) do
     with_locked_prepared_action(prepared_action, fn
+      %PreparedAction{authorization_kind: "delegation_grant"} = action ->
+        {:error, action, :delegation_admission_required}
+
       %PreparedAction{status: "confirmed"} = action ->
         payload = action.payload || %{}
         now = database_now!()
@@ -2266,8 +2281,11 @@ defmodule Maraithon.TelegramAssistant do
                  error: nil,
                  payload: payload
                }) do
-            {:ok, executed_action} -> {:ok, executed_action, :executed}
-            {:error, reason} -> Repo.rollback({:prepared_action_status_update_failed, reason})
+            {:ok, executed_action} ->
+              {:ok, Maraithon.Delegations.Receipts.record!(executed_action), :executed}
+
+            {:error, reason} ->
+              Repo.rollback({:prepared_action_status_update_failed, reason})
           end
         else
           {:error, action, :prepared_action_execution_in_progress}
@@ -2366,7 +2384,7 @@ defmodule Maraithon.TelegramAssistant do
            payload: unknown_payload
          }) do
       {:ok, unknown_action} ->
-        {:unknown, unknown_action}
+        {:unknown, Maraithon.Delegations.Receipts.record!(unknown_action)}
 
       {:error, update_reason} ->
         Repo.rollback({:prepared_action_unknown_checkpoint_failed, update_reason})
@@ -2374,7 +2392,10 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp checkpoint_prepared_action_failure(prepared_action, token, reason, opts) do
-    durable? = Keyword.get(opts, :durable, false)
+    durable? =
+      Keyword.get(opts, :durable, false) and
+        prepared_action.authorization_kind != "delegation_grant"
+
     error_class = prepared_action_error_class(reason)
     max_attempts = prepared_action_max_attempts()
 
@@ -2415,7 +2436,7 @@ defmodule Maraithon.TelegramAssistant do
                      payload: payload
                    }) do
                 {:ok, failed_action} ->
-                  {:failed, failed_action}
+                  {:failed, Maraithon.Delegations.Receipts.record!(failed_action)}
 
                 {:error, update_reason} ->
                   Repo.rollback({:prepared_action_status_update_failed, update_reason})
@@ -2488,6 +2509,9 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp prepared_execution_attempts(_payload), do: 0
+
+  defp replay_safe_prepared_action?(%PreparedAction{authorization_kind: "delegation_grant"}),
+    do: false
 
   defp replay_safe_prepared_action?(%PreparedAction{action_type: action_type}),
     do: action_type in @replay_safe_prepared_action_types
@@ -2563,6 +2587,11 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp lock_prepared_action!(%PreparedAction{id: id}) do
+    # Read authenticated identity before choosing the lock prefix. The caller's
+    # supplied struct is only an ID and cannot disguise a delegation as a chat.
+    snapshot = Repo.get!(PreparedAction, id) |> PreparedAction.hydrate_payload()
+    Maraithon.Delegations.Authority.lock_action_scope!(snapshot)
+
     PreparedAction
     |> where([prepared_action], prepared_action.id == ^id)
     |> lock("FOR UPDATE")
@@ -2609,10 +2638,17 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp prepared_execution_checkpoint(result) do
-    case Map.get(serialize_result(result), "message") do
-      message when is_binary(message) and message != "" -> %{"message" => message}
-      _missing -> %{"message" => "The confirmed action completed."}
-    end
+    result = serialize_result(result)
+
+    message =
+      case result["message"] do
+        message when is_binary(message) and message != "" -> message
+        _ -> "The confirmed action completed."
+      end
+
+    result
+    |> Map.take(Maraithon.Delegations.Receipts.proof_fields())
+    |> Map.put("message", message)
   end
 
   defp prepared_execution_result(%PreparedAction{payload: payload}) when is_map(payload) do
@@ -2707,10 +2743,12 @@ defmodule Maraithon.TelegramAssistant do
   # A server-side failure can follow a committed write. A retryable read
   # failure is not evidence that a non-idempotent mutation was rejected.
   defp server_failure_after_entry?({kind, status, _})
-       when kind in [:api_error, :http_error, :http_status] and status in 500..599, do: true
+       when kind in [:api_error, :http_error, :http_status] and status in 500..599,
+       do: true
 
   defp server_failure_after_entry?({kind, status})
-       when kind in [:api_error, :http_error, :http_status] and status in 500..599, do: true
+       when kind in [:api_error, :http_error, :http_status] and status in 500..599,
+       do: true
 
   defp server_failure_after_entry?(reason) when is_tuple(reason),
     do: reason |> Tuple.to_list() |> Enum.any?(&server_failure_after_entry?/1)
@@ -3197,6 +3235,8 @@ defmodule Maraithon.TelegramAssistant do
   # `owed_to_me`, a nudge keeps the loop open) or close the todo out with a
   # resolution note referencing what was sent (every other direction: the
   # send itself was the requested action, e.g. an `owed_by_me` reply).
+  defp maybe_record_todo_nudge(%PreparedAction{authorization_kind: "delegation_grant"}), do: :ok
+
   defp maybe_record_todo_nudge(%PreparedAction{payload: %{"keep_todo_open" => true}}),
     do: :ok
 
@@ -3219,6 +3259,12 @@ defmodule Maraithon.TelegramAssistant do
   # SPEC 12 R9: parallel to `maybe_record_todo_nudge/1` — stamp calendar
   # block bookkeeping onto the linked todo's metadata after a successful
   # execute. `result` is the runner's normalized (string-keyed) tool result.
+  defp maybe_record_calendar_block(
+         %PreparedAction{authorization_kind: "delegation_grant"},
+         _result
+       ),
+       do: :ok
+
   defp maybe_record_calendar_block(
          %PreparedAction{
            action_type: "calendar_create_event",

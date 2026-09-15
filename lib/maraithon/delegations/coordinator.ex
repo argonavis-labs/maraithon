@@ -128,10 +128,21 @@ defmodule Maraithon.Delegations.Coordinator do
       event.kind in ~w(sync_result decision send_receipt send_unknown failure capacity_hold)
 
     cond do
-      d.schema_version != 1 -> false
-      event.kind == "user_action" -> event.data["grant_version"] == grant.version
-      worker? -> current_turn?(d, event)
-      true -> true
+      d.schema_version != 1 ->
+        false
+
+      event.kind == "user_action" ->
+        event.data["grant_version"] == grant.version
+
+      event.kind in ~w(send_receipt send_unknown) or
+          (event.kind == "failure" and is_binary(event.data["action_id"])) ->
+        Maraithon.Delegations.Receipts.valid_event?(d, event) and current_turn?(d, event)
+
+      worker? ->
+        current_turn?(d, event)
+
+      true ->
+        true
     end
   end
 
@@ -145,7 +156,9 @@ defmodule Maraithon.Delegations.Coordinator do
 
           turn ->
             event.data["grant_version"] == turn.grant_version and
-              (event.kind in ~w(send_receipt send_unknown) or
+              ((event.kind in ~w(send_receipt send_unknown failure) and
+                  is_binary(turn.prepared_action_id) and
+                  turn.prepared_action_id == event.data["action_id"]) or
                  (turn.status in ~w(deciding validated dispatched) and
                     turn.source_revision == d.source_revision and
                     turn.grant_version == Delegations.current_grant(d).version))
@@ -157,7 +170,7 @@ defmodule Maraithon.Delegations.Coordinator do
   end
 
   defp reduce!(d, grant, event, now) do
-    case StateMachine.apply(d, event) do
+    case transition(d, grant, event) do
       {:error, _} ->
         d
 
@@ -171,4 +184,16 @@ defmodule Maraithon.Delegations.Coordinator do
         d |> Delegation.changeset(changes) |> Repo.update!()
     end
   end
+
+  # A receipt still settles its original turn after a control change. It cannot
+  # apply an old workflow decision over a newer grant. A resumed conversation
+  # first refreshes its sources once the earlier send is proven.
+  defp transition(d, grant, %{kind: "send_receipt", data: %{"grant_version" => version}})
+       when version != grant.version do
+    if d.state == "reconciling" and grant.control_state == "active",
+      do: {%{d | state: "ready", next_wake_at: nil}, [:enqueue_sync]},
+      else: {d, []}
+  end
+
+  defp transition(d, _grant, event), do: StateMachine.apply(d, event)
 end

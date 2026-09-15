@@ -1,8 +1,6 @@
 defmodule Maraithon.Delegations.Commands do
   @moduledoc "Admission for reducer commands. The identity/control slice cannot dispatch external work."
-  import Ecto.Query
-  alias Maraithon.Repo
-  alias Maraithon.Delegations.{Gates, Turn}
+  alias Maraithon.Delegations.{Actions, Gates}
 
   def apply(delegation, grant, _event, commands, _now) do
     Enum.reduce(commands, delegation, fn command, current ->
@@ -11,7 +9,7 @@ defmodule Maraithon.Delegations.Commands do
   end
 
   defp execute(d, _, command) when command in [:cancel_unentered, :supersede_unentered] do
-    supersede_unprepared!(d)
+    Actions.supersede_unentered!(d)
     d
   end
 
@@ -27,19 +25,6 @@ defmodule Maraithon.Delegations.Commands do
       not Gates.sends_enabled?(d.user_id, d.provider) -> hold(d, "sends_disabled")
       true -> hold(d, "execution_not_ready")
     end
-  end
-
-  def supersede_unprepared!(d) do
-    Repo.all(
-      from t in Turn,
-        where:
-          t.user_id == ^d.user_id and t.delegation_id == ^d.id and
-            t.status in ~w(deciding validated) and is_nil(t.prepared_action_id),
-        lock: "FOR UPDATE"
-    )
-    |> Enum.each(fn row ->
-      row |> Turn.hydrate() |> Turn.changeset(%{status: "superseded"}) |> Repo.update!()
-    end)
   end
 
   defp hold(d, reason),

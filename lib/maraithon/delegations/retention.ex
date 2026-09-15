@@ -3,8 +3,32 @@ defmodule Maraithon.Delegations.Retention do
   alias Maraithon.{Repo, Effects.ProtocolCutover}
 
   @families ~w(delegation_events delegation_turns delegation_grants delegations)
+  @doc false
+  def unpinned_run_sql("run") do
+    """
+    AND NOT EXISTS (
+      SELECT 1 FROM delegation_turns t
+      WHERE t.run_id = run.id AND t.user_id = run.user_id
+    )
+    """
+  end
+
+  @doc false
+  def unpinned_action_sql("action") do
+    """
+    AND NOT EXISTS (
+      SELECT 1 FROM delegations d
+      WHERE d.id = action.delegation_id AND d.user_id = action.user_id
+    )
+    """
+  end
+
   @eligible """
   d.state IN ('completed','stopped','expired') AND d.updated_at <= $1
+  AND NOT EXISTS (
+    SELECT 1 FROM delegation_turns t WHERE t.delegation_id = d.id
+      AND t.status IN ('deciding','validated','dispatched')
+  )
   AND NOT EXISTS (
     SELECT 1 FROM delegation_turns t
     JOIN telegram_prepared_actions a ON a.id = t.prepared_action_id

@@ -252,6 +252,9 @@ defmodule Maraithon.AssistantChat.Execution do
   end
 
   @doc false
+  def write_run(%Run{surface: "delegation"} = run, fun) when is_function(fun, 1),
+    do: Maraithon.Delegations.Authority.write_run(run, fun)
+
   def write_run(%Run{} = run, fun) when is_function(fun, 1) do
     case Process.get(@context_key) do
       %BackgroundJob{user_id: user_id, payload: payload} when user_id == run.user_id ->

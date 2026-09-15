@@ -540,7 +540,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
     frozen_payload = prepared_action.payload || %{}
     payload = external_prepared_action_payload(frozen_payload)
 
-    with :ok <-
+    with :ok <- Maraithon.Delegations.Authority.before_provider(prepared_action),
+         :ok <-
            Maraithon.TelegramAssistant.ActionReconciliation.validate_execution_account(
              prepared_action
            ) do
@@ -1161,10 +1162,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp retryable_continuation_error?({kind, _})
-       when kind in [:network_error, :llm_busy, :rate_limited, :tool_task_failed], do: true
+       when kind in [:network_error, :llm_busy, :rate_limited, :tool_task_failed],
+       do: true
 
   defp retryable_continuation_error?({:api_error, status, _})
-       when status in [408, 425, 429, 500, 502, 503, 504], do: true
+       when status in [408, 425, 429, 500, 502, 503, 504],
+       do: true
 
   defp retryable_continuation_error?(_), do: false
 

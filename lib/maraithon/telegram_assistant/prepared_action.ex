@@ -15,7 +15,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   @foreign_key_type :binary_id
 
   @statuses ~w(awaiting_confirmation confirmed executed execution_unknown rejected expired failed)
-  @surfaces ~w(telegram mobile)
+  @surfaces ~w(telegram mobile delegation)
   @max_payload_bytes 512_000
   @max_preview_bytes 4_000
   @payload_bounds [
@@ -29,6 +29,10 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   schema "telegram_prepared_actions" do
     field :chat_id, :string
     field :surface, :string, default: "telegram"
+    field :authorization_kind, :string, default: "human_confirmed"
+    field :delegation_id, :binary_id
+    field :delegation_turn_id, :binary_id
+    field :grant_version, :integer
     field :action_type, :string
     field :target_type, :string
     field :target_id, :string
@@ -108,19 +112,24 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
     |> put_payload_encryption_version()
     |> reactivate_payload()
     |> DurablePayload.put_binding(payload_binding_spec())
+    |> Maraithon.Delegations.Binding.validate_changeset(:action)
     |> DurablePayload.require_current_mutation()
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:run_id)
     |> unique_constraint(:user_id, name: :telegram_prepared_actions_awaiting_todo_index)
+    |> unique_constraint(:delegation_turn_id, name: :prepared_action_delegation_turn_unique)
+    |> check_constraint(:authorization_kind, name: :prepared_action_delegation_shape)
   end
 
   @doc false
   def hydrate_payload(action, mode \\ DurablePayload.mode!())
 
   def hydrate_payload(%__MODULE__{} = action, mode) do
+    mode = Maraithon.Delegations.Binding.mode(action, mode)
     :ok = DurablePayload.verify_binding!(action, payload_binding_spec(), mode)
     {payload, preview} = read_payload!(action, mode)
+    :ok = Maraithon.Delegations.Binding.verify!(:action, action, payload)
     %{action | payload: payload, preview_text: preview}
   end
 
@@ -208,7 +217,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
         put_change(
           changeset,
           :legacy_payload,
-          if(DurablePayload.legacy_write?(), do: payload, else: %{})
+          if(Maraithon.Delegations.Binding.legacy_write?(changeset), do: payload, else: %{})
         )
 
       :error ->
@@ -222,7 +231,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
         put_change(
           changeset,
           :legacy_preview_text,
-          if(DurablePayload.legacy_write?(), do: preview, else: nil)
+          if(Maraithon.Delegations.Binding.legacy_write?(changeset), do: preview, else: nil)
         )
 
       :error ->

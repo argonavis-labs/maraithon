@@ -729,6 +729,21 @@ defmodule Maraithon.DurablePayloadVerification do
     end
   end
 
+  defp validate_registered_authority(%{table: table}, %{authority: [columns]}, fields)
+       when table in ~w(telegram_prepared_actions telegram_assistant_runs) do
+    {kind, key} =
+      if table == "telegram_prepared_actions",
+        do: {:action, "payload"},
+        else: {:run, "prompt_snapshot"}
+
+    with {:ok, payload} <- field(fields, key),
+         true <- Maraithon.Delegations.Binding.matches?(kind, columns, payload) do
+      :ok
+    else
+      _ -> {:error, :binding_mismatch}
+    end
+  end
+
   defp validate_registered_authority(_source, %{authority: []}, _fields), do: :ok
 
   defp validate_registered_authority(_source, _parsed, _fields),
@@ -1041,6 +1056,11 @@ defmodule Maraithon.DurablePayloadVerification do
             "source.result_content_digest_version",
             "source.result_content_digest"
           ]
+
+        table in ~w(telegram_prepared_actions telegram_assistant_runs) ->
+          kind = if table == "telegram_prepared_actions", do: :action, else: :run
+          fields = Maraithon.Delegations.Binding.columns(kind)
+          ["jsonb_build_object(" <> Enum.map_join(fields, ",", &"'#{&1}',source.#{&1}") <> ")"]
 
         true ->
           []

@@ -892,6 +892,7 @@ defmodule Maraithon.PrivacyRetention do
            WHERE action.run_id = run.id
              AND action.status NOT IN ('executed', 'rejected', 'expired', 'failed')
          )
+         #{Maraithon.Delegations.Retention.unpinned_run_sql("run")}
        """,
        "telegram_assistant_runs",
        "run",
@@ -923,6 +924,7 @@ defmodule Maraithon.PrivacyRetention do
          AND step.finished_at IS NOT NULL AND step.finished_at <= $1
          AND run.status IN ('completed', 'failed', 'cancelled', 'degraded')
          AND run.finished_at IS NOT NULL AND run.finished_at <= $1
+         #{Maraithon.Delegations.Retention.unpinned_run_sql("run")}
        """,
        "telegram_assistant_steps",
        "step",
@@ -951,6 +953,7 @@ defmodule Maraithon.PrivacyRetention do
        WHERE action.payload_purged_at IS NULL
          AND action.status IN ('executed', 'rejected', 'expired', 'failed')
          AND action.updated_at <= $1
+         #{Maraithon.Delegations.Retention.unpinned_action_sql("action")}
        """,
        "telegram_prepared_actions",
        "action",

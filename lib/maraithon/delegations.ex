@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations do
   @moduledoc "User-authorised conversations attached to existing todos."
   import Ecto.Query
   alias Maraithon.{Repo, DurablePayload}
-  alias Maraithon.Delegations.{Delegation, Grant, Gates, Scope, Lifecycle, Outbox, Commands}
+  alias Maraithon.Delegations.{Delegation, Grant, Gates, Scope, Lifecycle, Outbox}
   alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Todos.{Todo, Workflow}
@@ -248,7 +248,16 @@ defmodule Maraithon.Delegations do
               })
               |> Repo.update!()
 
-            Commands.supersede_unprepared!(d)
+            entered? = Maraithon.Delegations.Actions.supersede_unentered!(d)
+
+            changed =
+              if not entered? and changed.data["hold_reason"] == "send_may_be_in_flight" do
+                changed
+                |> Delegation.changeset(%{data: Map.delete(changed.data, "hold_reason")})
+                |> Repo.update!()
+              else
+                changed
+              end
 
             Outbox.append!(
               changed,

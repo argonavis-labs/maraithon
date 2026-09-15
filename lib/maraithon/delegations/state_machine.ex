@@ -119,13 +119,11 @@ defmodule Maraithon.Delegations.StateMachine do
         {%{
            d
            | state: "ready",
-             lifetime_sends: d.lifetime_sends + 1,
              data: Map.delete(d.data, "reply_pending")
          }, [:enqueue_sync]}
 
       true ->
-        {%{d | state: "waiting_reply", lifetime_sends: d.lifetime_sends + 1},
-         [{:schedule_follow_up, receipt}, :transition_todo]}
+        {%{d | state: "waiting_reply"}, [{:schedule_follow_up, receipt}, :transition_todo]}
     end
   end
 
