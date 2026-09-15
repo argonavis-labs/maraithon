@@ -105,7 +105,7 @@ Voice refreshes now retain the selected account. Profiles are keyed by account a
 
 Each delegated turn freezes a bounded voice snapshot in its existing authenticated Run payload before model entry. Retries reuse it; the prepared action includes its version in the frozen payload. As-user turns use the bound account's profile or explicit style guidance. Assistant turns use the house style. Composition and review receive voice as style data, with no authority to add facts, recipients, or commitments. This adds no provider reads, training, or model calls to a turn. Existing queued turns without a snapshot retain their original continuation.
 
-The server build and 26 focused checks passed: 20 profile, draft, and policy checks, plus six leased-turn and prepared-action checks. The draft checks also caught and corrected a missing optional account being parsed as the string `nil`. This is local verification of account isolation and durable voice selection; no live October exchange or Slack voice proof is claimed.
+The server build and 26 focused checks passed: 20 profile, draft, and policy checks, plus six leased-turn and prepared-action checks. The draft checks also caught and corrected a missing optional account being parsed as the string `nil`. Commit `3033a205` deployed successfully in workflow `35013622962`; revision `maraithon-00358-zmw` became ready at 19:29 UTC and serves all traffic. This is local verification of account isolation and durable voice selection; no live October exchange or Slack voice proof is claimed. The refreshed production account page still shows October's missing Gmail sending permission.
 
 ## Remaining work
 
