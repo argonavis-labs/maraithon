@@ -158,6 +158,50 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     assert snapshot["disclose_ai"] == false
   end
 
+  test "assistant messages use the mailbox signature unless explicitly overridden", %{user: user} do
+    assistant = account(user, "signature-assistant@example.invalid", true)
+    bypass = Bypass.open()
+    original = Application.get_env(:maraithon, :gmail, [])
+    Application.put_env(:maraithon, :gmail, api_base_url: "http://localhost:#{bypass.port}")
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, original) end)
+
+    Bypass.expect(bypass, "GET", "/users/me/settings/sendAs", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "sendAs" => [
+            %{
+              "sendAsEmail" => "signature-assistant@example.invalid",
+              "isPrimary" => true,
+              "signature" => "<div>October</div><div>Office assistant</div>"
+            }
+          ]
+        })
+      )
+    end)
+
+    for {override, expected} <- [
+          {nil, "Office assistant"},
+          {"", "Office assistant"},
+          {"Custom signature", "Custom signature"}
+        ] do
+      assert {:ok, _} =
+               AssistantIdentities.put(user, %{
+                 "display_name" => "October",
+                 "gmail_mode" => "account",
+                 "gmail_connected_account_id" => assistant.id,
+                 "gmail_send_as_email" => "signature-assistant@example.invalid",
+                 "disclose_ai" => false,
+                 "signature_text" => override
+               })
+
+      assert {:ok, snapshot} = AssistantIdentities.gmail_snapshot(user, "as_assistant", nil)
+      assert snapshot["signature"] =~ expected
+    end
+  end
+
   test "pending assistant setup is excluded from user sources, identity, voice reads and CRM", %{
     user: user
   } do

@@ -4,7 +4,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   alias Maraithon.{Delegations, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
   alias Maraithon.Connectors.{Gmail, GoogleAccount, GoogleCalendar}
-  alias Maraithon.Delegations.{Evaluation, Gates, Ingress, Turn}
+  alias Maraithon.Delegations.{Evaluation, Gates, Ingress, Policy, Turn}
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.TelegramAssistant.{ActionReconciliation, PreparedAction, Run}
   alias Maraithon.Todos.{Todo, Workflow}
@@ -19,13 +19,18 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
          %{} = scenario <-
            Enum.find(Evaluation.scenarios()["scenarios"], &(&1["id"] == scenario_id)),
-         %{"accounts_ready" => true, "model_ready" => true} = report <- Evaluation.preflight() do
+         %{"accounts_ready" => true, "model_ready" => true} = report <- Evaluation.preflight(),
+         %{"account_id" => sender_id} <-
+           Enum.find(report["accounts"], &(&1["email"] == @counterparty)),
+         {:ok, %{"email" => @counterparty} = sender_identity} <-
+           Maraithon.AssistantIdentities.gmail_snapshot(@user, "as_user", sender_id) do
       accounts = Map.new(report["accounts"], &{&1["email"], &1["account_id"]})
       id = Ecto.UUID.generate()
 
       payload = %{
         "scenario" => scenario,
         "sender_account_id" => accounts[@counterparty],
+        "sender_identity" => sender_identity,
         "owner_account_id" => accounts[@user],
         "deadline" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 60, :minute)),
         "subject" => "[Maraithon eval] #{scenario_id} #{id}"
@@ -300,6 +305,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
           "user_id" => @user,
           "account_id" => job.payload["sender_account_id"],
           "from" => @counterparty,
+          "body" =>
+            Policy.email_body(%{"identity" => job.payload["sender_identity"]}, content["body"]),
           "to" => @user,
           "cc" => "",
           "subject" => job.payload["subject"]

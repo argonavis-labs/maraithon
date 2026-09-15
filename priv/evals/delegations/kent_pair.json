@@ -13,8 +13,8 @@
       "mode": "live",
       "kind": "information",
       "outcome": "Learn the test project colour and record the answer with its source.",
-      "initial_email": "I have the colour for our Maraithon test project. Let me know what you need.\n\n-Kent",
-      "counterparty_replies": ["The test project colour is indigo.\n\n-Kent"],
+      "initial_email": "I have the colour for our Maraithon test project. Let me know what you need.",
+      "counterparty_replies": ["The test project colour is indigo."],
       "expect": {"state": "completed", "answer_contains": "indigo", "completion_cites_inbound": true, "max_agent_messages": 2}
     },
     {
@@ -22,8 +22,8 @@
       "mode": "live",
       "kind": "scheduling",
       "outcome": "Arrange a 30-minute Maraithon eval meeting within the next seven working days and invite kent.fenwick@gmail.com.",
-      "initial_email": "Let's find 30 minutes for a Maraithon test call next week. Please send a few times that work.\n\n-Kent",
-      "counterparty_replies": ["The second time you offered works for me. Please send the invite.\n\n-Kent"],
+      "initial_email": "Let's find 30 minutes for a Maraithon test call next week. Please send a few times that work.",
+      "counterparty_replies": ["The second time you offered works for me. Please send the invite."],
       "expect": {"state": "completed", "offered_slots": 3, "requested_week_offset": 1, "event_count": 1, "accepted_slot": 2, "attendees": ["kent.fenwick@gmail.com"], "recipient_calendar_copy": true, "todo_state": "waiting", "max_agent_messages": 2}
     },
     {
@@ -31,9 +31,9 @@
       "mode": "live",
       "kind": "scheduling",
       "outcome": "Arrange a 30-minute Maraithon eval meeting without booking over an existing event.",
-      "initial_email": "Can you offer a few times for a 30-minute Maraithon test call?\n\n-Kent",
+      "initial_email": "Can you offer a few times for a 30-minute Maraithon test call?",
       "inject": "Create a labelled eval busy event in the first offered slot before accepting it.",
-      "counterparty_replies": ["The first time works for me. Please book it.\n\n-Kent", "The first of those new times works. Please send the invite.\n\n-Kent"],
+      "counterparty_replies": ["The first time works for me. Please book it.", "The first of those new times works. Please send the invite."],
       "expect": {"state": "completed", "reoffer_after_conflict": true, "bookings_in_busy_slot": 0, "event_count": 1, "max_agent_messages": 3}
     },
     {

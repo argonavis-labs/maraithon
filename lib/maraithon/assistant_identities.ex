@@ -218,14 +218,7 @@ defmodule Maraithon.AssistantIdentities do
          "email" => sender["sendAsEmail"],
          "display_name" =>
            if(identity, do: identity.data["display_name"], else: sender["displayName"]),
-         "signature" =>
-           if(identity,
-             do: signature(identity),
-             else:
-               Maraithon.Connectors.Gmail.BodyText.from_message(%{
-                 "html_body" => sender["signature"] || ""
-               }) || ""
-           ),
+         "signature" => signature(identity, sender),
          "disclose_ai" => not is_nil(identity) and identity.data["disclose_ai"] == true,
          "cc_user_on_first_send" =>
            not is_nil(identity) and identity.data["cc_user_on_first_send"] == true,
@@ -242,9 +235,11 @@ defmodule Maraithon.AssistantIdentities do
   defp sender_alias(aliases, identity),
     do: Enum.find(aliases, &(&1["sendAsEmail"] == identity.data["gmail_send_as_email"]))
 
-  defp signature(identity) do
+  defp signature(nil, sender), do: mailbox_signature(sender)
+
+  defp signature(identity, sender) do
     [
-      identity.data["signature_text"] || identity.data["display_name"],
+      nonempty(identity.data["signature_text"]) || mailbox_signature(sender),
       if(identity.data["disclose_ai"],
         do:
           identity.data["disclosure_line"] ||
@@ -254,6 +249,14 @@ defmodule Maraithon.AssistantIdentities do
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
+
+  defp mailbox_signature(sender),
+    do:
+      Maraithon.Connectors.Gmail.BodyText.from_message(%{"html_body" => sender["signature"] || ""}) ||
+        ""
+
+  defp nonempty(value) when is_binary(value), do: if(String.trim(value) != "", do: value)
+  defp nonempty(_), do: nil
 
   defp validate(data) do
     cond do
