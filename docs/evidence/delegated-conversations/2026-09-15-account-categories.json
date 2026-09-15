@@ -1,0 +1,30 @@
+{
+  "server_revision": "maraithon-00350-qk8",
+  "server_workflow": 35003898249,
+  "migration_execution": "maraithon-migrate-tt86z",
+  "migration_result": "success",
+  "domain_signature_policy_settings_checks": 27,
+  "category_api_checks": 2,
+  "mailbox_sender_name_checks": 9,
+  "readable_label_regression_checks": 3,
+  "builds": {
+    "server": "passed",
+    "mac_signed": "passed",
+    "ios_simulator": "passed",
+    "xcodegen": "passed"
+  },
+  "manual": {
+    "web_account_settings": "loads for non-admin Kent",
+    "web_category_save": "confirmed",
+    "mac_filter": "All / Personal / Work visible",
+    "mac_account_settings": "loaded from production",
+    "cross_device_change": "Temporary Personal setting on Gmail saved from Mac; web Personal filter showed 7 existing tasks.",
+    "restored": "Gmail category returned to Unassigned after verification",
+    "ios_visual_check": "not performed"
+  },
+  "defaults": "Unassigned accounts and tasks without source accounts remain under All.",
+  "ios_migration": "Optional accountCategory field; additive lightweight SwiftData migration; populated by sync.",
+  "followup_server_workflow": 35004585260,
+  "ios_release_workflow": 35004585337,
+  "followup_status": "in progress"
+}
