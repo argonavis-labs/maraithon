@@ -72,6 +72,18 @@ Do not infer permission to use them from risk, habit, a historical spec, or the
 fact that they exist. Kent must explicitly request testing, full verification,
 or a hardened rollout.
 
+## Spending During Active Development
+
+Kent's September 15 decision sets the normal spending pause at US$7. While we
+are actively building and testing, `LLM_DEVELOPMENT_SPENDING=true` permits the
+spending needed to finish the work. It bypasses dollar admission limits while
+preserving cost recording, reservations, model-call bounds, and send authority.
+The US$3/day projection, US$6 email warning, and six-hour checks remain separate.
+
+Enable this setting for the serving service and any eval job during the active
+development session. Fast deploys preserve its current value. Restore it to
+`false` when active development ends so normal spending limits apply again.
+
 ## Handoff Expectations
 
 Report the narrow build/compile check that ran. State that tests were not run

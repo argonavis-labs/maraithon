@@ -63,6 +63,7 @@ defmodule Maraithon.Delegations.Evaluation do
           (actor == "as_user" or (actor == "as_assistant" and assistant["status"] == "ready")),
       "model_ready" => model == spec["model"],
       "budget_ready" => Maraithon.Delegations.Budget.account_budget_ok?(DateTime.utc_now()),
+      "development_spending" => Maraithon.LLM.CostMonitor.development_spending?(),
       "execution_ready" => Maraithon.Delegations.Commands.execution_ready?(),
       "live_eval_passed" => false
     }

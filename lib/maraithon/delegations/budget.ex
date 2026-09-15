@@ -2,6 +2,7 @@ defmodule Maraithon.Delegations.Budget do
   @moduledoc "Conservative model reservations survive retries, grant changes, and lost responses."
   import Ecto.Query
   alias Maraithon.{HTTP, LLM, Repo}
+  alias Maraithon.LLM.CostMonitor
   alias Maraithon.Delegations.{Authority, Binding, Delegation, Preferences, Turn}
   alias Maraithon.Runtime.{BackgroundJob, DatabaseClock, JobAuthority, RecurringJobs}
 
@@ -83,6 +84,7 @@ defmodule Maraithon.Delegations.Budget do
     limits = Map.merge(Preferences.defaults(), context.grant.data["scope"]["limits"] || %{})
     amount = quote["reserved_micro_usd"]
     now = DatabaseClock.now!()
+    development? = CostMonitor.development_spending?()
 
     cond do
       not is_integer(amount) or amount < 0 ->
@@ -109,17 +111,23 @@ defmodule Maraithon.Delegations.Budget do
       not account_budget_ok?(now) ->
         {:error, :account_cost_hold}
 
-      window_cost(turn.user_id, turn.delegation_id, DateTime.add(now, -30, :day)) + amount >
-          limits["micro_usd_per_30d"] ->
+      not development? and
+          window_cost(turn.user_id, turn.delegation_id, DateTime.add(now, -30, :day)) + amount >
+            limits["micro_usd_per_30d"] ->
         {:error, :delegation_cost_limit}
 
-      window_cost(turn.user_id, nil, DateTime.add(now, -1, :day)) + amount >
-          limits["user_micro_usd_per_day"] ->
+      not development? and
+          window_cost(turn.user_id, nil, DateTime.add(now, -1, :day)) + amount >
+            limits["user_micro_usd_per_day"] ->
         {:error, :user_cost_limit}
 
       true ->
         entry =
-          Map.merge(quote, %{"state" => "entered", "entered_at" => DateTime.to_iso8601(now)})
+          Map.merge(quote, %{
+            "state" => "entered",
+            "entered_at" => DateTime.to_iso8601(now),
+            "development_spending" => development?
+          })
 
         turn
         |> Turn.changeset(%{
@@ -204,7 +212,10 @@ defmodule Maraithon.Delegations.Budget do
   end
 
   @doc "Read-only admission check; model entry rechecks this under its existing authority."
-  def account_budget_ok?(now) do
+  def account_budget_ok?(now),
+    do: CostMonitor.development_spending?() or checked_account_budget_ok?(now)
+
+  defp checked_account_budget_ok?(now) do
     type = RecurringJobs.job_type("llm_cost_monitor")
 
     job =
@@ -223,12 +234,11 @@ defmodule Maraithon.Delegations.Budget do
          age when age >= 0 and age <= 25_200 <- DateTime.diff(now, checked),
          daily when is_number(daily) <- state["daily_cost_usd"],
          rolling when is_number(rolling) <- state["rolling_cost_usd"],
-         threshold when is_number(threshold) <- state["threshold_usd"],
-         true <- state["status"] in ~w(within_budget observed),
+         true <- state["status"] in ~w(within_budget observed alert_sent alert_cooldown),
          true <-
            state["key_fingerprint"] ==
              :crypto.hash(:sha256, LLM.openrouter_api_key() || "") |> Base.encode16(case: :lower) do
-      max(daily, rolling) <= threshold
+      max(daily, rolling) <= CostMonitor.spending_guard_usd()
     else
       _ -> false
     end

@@ -7,6 +7,7 @@ defmodule Maraithon.Delegations.EvalBudgetTest do
   setup do
     values =
       [
+        llm_development_spending: false,
         delegations_enabled: true,
         delegation_eval_only: true,
         delegation_user_allowlist: ["kent@runner.now"],
@@ -36,8 +37,8 @@ defmodule Maraithon.Delegations.EvalBudgetTest do
     refute Repo.exists?(Maraithon.TelegramAssistant.PreparedAction)
   end
 
-  test "an alert blocks spending even when today's usage is below the threshold" do
-    monitor("alert_sent", 6.024170666)
+  test "normal spending above seven dollars blocks the eval even with lower daily usage" do
+    monitor("alert_sent", 7.024170666)
     refute Budget.account_budget_ok?(DateTime.utc_now())
 
     assert {:error, :account_cost_hold} =
@@ -59,6 +60,19 @@ defmodule Maraithon.Delegations.EvalBudgetTest do
   test "a fresh verified observation below the threshold permits the budget preflight" do
     monitor("within_budget", 5.0)
     assert Budget.account_budget_ok?(DateTime.utc_now())
+  end
+
+  test "the six-dollar email warning does not pause work below the seven-dollar guard" do
+    monitor("alert_sent", 6.024170666)
+    assert Budget.account_budget_ok?(DateTime.utc_now())
+  end
+
+  test "development spending permits work above the normal guard and can be switched off" do
+    monitor("alert_sent", 70.0)
+    Application.put_env(:maraithon, :llm_development_spending, true)
+    assert Budget.account_budget_ok?(DateTime.utc_now())
+    Application.put_env(:maraithon, :llm_development_spending, false)
+    refute Budget.account_budget_ok?(DateTime.utc_now())
   end
 
   defp monitor(status, rolling) do

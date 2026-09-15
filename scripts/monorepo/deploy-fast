@@ -139,7 +139,7 @@ common_env+=",LLM_PROJECTED_DAILY_USD=${llm_projected_daily_usd:-3.00}"
 
 # Keep an enabled controlled pilot restricted to the same accounts and labelled
 # threads after deployment. Defaults remain off for a service without a pilot.
-for name in DELEGATIONS_ENABLED DELEGATION_EVAL_ONLY DELEGATION_USER_ALLOWLIST DELEGATION_GMAIL_SENDS_ENABLED DELEGATION_SLACK_SENDS_ENABLED; do
+for name in DELEGATIONS_ENABLED DELEGATION_EVAL_ONLY DELEGATION_USER_ALLOWLIST DELEGATION_GMAIL_SENDS_ENABLED DELEGATION_SLACK_SENDS_ENABLED LLM_DEVELOPMENT_SPENDING; do
   value="$(env_value "${service_json}" "${name}")"
   if [[ -n "${value}" ]]; then
     # The gcloud comma-delimited flag needs list values encoded separately.

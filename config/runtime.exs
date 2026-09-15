@@ -41,6 +41,7 @@ config :maraithon, process_role: process_role
 
 # Identity/control and each provider's execution are separate rollout gates.
 config :maraithon,
+  llm_development_spending: System.get_env("LLM_DEVELOPMENT_SPENDING", "false") == "true",
   delegations_enabled: System.get_env("DELEGATIONS_ENABLED", "false") == "true",
   delegation_eval_only: System.get_env("DELEGATION_EVAL_ONLY", "false") == "true",
   delegation_user_allowlist:

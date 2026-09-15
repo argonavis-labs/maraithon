@@ -133,9 +133,15 @@ The 18:45 UTC cost monitor recorded US$4.423600 billed that UTC day and a US$6.0
 
 Commit `2aef1f3c` checks the same account budget before a live eval reads providers or creates a fixture. Preflight reports budget readiness, and all clients receive a clear LLM spending hold label. Future warning emails explain that delegated conversations pause new model work while the cost hold is active. The threshold and six-hour schedule are unchanged. The server build and three focused budget checks passed. Workflow `35017699826` deployed revision `maraithon-00362-4hv` successfully; it serves all traffic.
 
+## Development spending
+
+Kent clarified that normal spending should pause above US$7, while active development can spend what is needed to make the product work. The explicit `LLM_DEVELOPMENT_SPENDING` setting implements that choice. Development mode skips dollar admission limits but still records charges and reservations and preserves call limits and send authority. Normal mode accepts a valid US$6 alert without pausing until usage exceeds US$7. The original US$3 projection, US$6 email warning, and six-hour schedule remain separate.
+
+The server build and five focused budget checks passed. Development spending is being enabled for the serving service and eval jobs, followed by another October information eval. It will be turned off when active development ends.
+
 ## Remaining work
 
-1. Run October's information and scheduling conversations once the account cost check permits model work. Sending consent is complete. The Kent-pair information, regular scheduling, and busy-slot evals have passed as the user.
+1. Run October's information and scheduling conversations with development spending enabled. Sending consent is complete. The Kent-pair information, regular scheduling, and busy-slot evals have passed as the user.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals. Brief reporting is deployed and verified against production records.

@@ -21,6 +21,10 @@ defmodule Maraithon.LLM.CostMonitor do
 
   def enabled?, do: config()[:enabled] == true
   def interval_ms, do: @interval_ms
+  def spending_guard_usd, do: 7.0
+
+  def development_spending?,
+    do: Application.get_env(:maraithon, :llm_development_spending, false) == true
 
   def run_once(%BackgroundJob{result: previous}) do
     state = previous || %{}
@@ -184,6 +188,13 @@ defmodule Maraithon.LLM.CostMonitor do
     cost = max(state["daily_cost_usd"], state["rolling_cost_usd"])
     since = state["rolling_since"] |> DateTime.from_unix!() |> DateTime.to_iso8601()
 
+    spending_note =
+      if development_spending?(),
+        do:
+          "Development spending is enabled. Work can continue above the spending guard while we build and test.",
+        else:
+          "The normal spending guard is US$#{money(spending_guard_usd())}. New model work for delegated conversations pauses above that amount until a later check is below it."
+
     text = """
     Maraithon's OpenRouter spend has passed twice the daily projection.
 
@@ -201,8 +212,8 @@ defmodule Maraithon.LLM.CostMonitor do
     history. The exact interval starts at the time above. All models using this key count.
 
     Review model and request activity at https://openrouter.ai/activity.
-    Maraithon continues syncing. Delegated conversations pause new model work
-    until a later cost check is within budget. Your saved tasks and conversations remain available.
+    #{spending_note}
+    Your saved tasks and conversations remain available.
     If spend stays above the threshold, another warning can follow in 24 hours.
     """
 
