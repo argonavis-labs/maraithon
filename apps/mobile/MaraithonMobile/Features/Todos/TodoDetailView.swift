@@ -215,7 +215,7 @@ struct TodoDetailView: View {
                 let remote = try await MobileAPIClient().getTodo(sessionToken: token, id: todo.id)
                 ProductionDataSync.apply(remote, to: todo)
                 try modelContext.save()
-                if remote.brief?.suggestedActions != nil { return }
+                if remote.delegation != nil || remote.brief?.suggestedActions != nil { return }
             } catch { return }
         }
     }
@@ -234,6 +234,7 @@ struct TodoDetailView: View {
     }
 
     private var summaryText: String {
+        if todo.delegation != nil { return todo.workflow?.outcome ?? todo.title }
         if !todo.isActive, let note = cleanedText(todo.resolutionNote) { return note }
         return cleanedText(todo.todoBrief?.summary)
             ?? cleanedText(todo.decisionContextSummary)

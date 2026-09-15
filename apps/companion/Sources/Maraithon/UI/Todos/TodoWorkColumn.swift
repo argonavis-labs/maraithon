@@ -7,7 +7,7 @@ struct TodoWorkColumn: View {
     let store: TodoConversationStore
 
     private var todo: CompanionTodo { store.todo }
-    private var brief: CompanionTodoBrief? { store.todo.brief }
+    private var brief: CompanionTodoBrief? { todo.delegation == nil ? store.todo.brief : nil }
     private var plan: TodoActionPlan {
         TodoActionPlan.make(todo: store.todo, messages: store.thread?.messages ?? [],
                             preferredReviewID: store.preferredReviewID)
@@ -20,7 +20,7 @@ struct TodoWorkColumn: View {
                 canDelegate: todo.canDelegate == true, request: store.delegationRequest,
                 refreshTodo: { await store.refreshTodo() })
                 .id(todo.id)
-            if todo.canMarkDone { nextAction }
+            if todo.canMarkDone && todo.delegation == nil { nextAction }
             people
         }
         .padding(.horizontal, Tokens.Spacing.page)

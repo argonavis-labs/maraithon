@@ -20,13 +20,13 @@ struct TodoWorkspaceHeader: View {
             titleBlock
             summarySection
 
-            if todo.isActive {
+            if todo.isActive && todo.delegation == nil {
                 activeActions
             } else if todo.isCompleted {
                 completedActions
             }
 
-            if todo.isActive {
+            if todo.isActive && todo.delegation == nil {
                 if let outcome = todo.todoBrief?.doneWhen {
                     TodoLabeledLine(label: "Done when:", text: outcome)
                         .textSelection(.enabled)
@@ -35,7 +35,7 @@ struct TodoWorkspaceHeader: View {
                 suggestedActionsSection
             }
 
-            if let action = todo.sourceAction {
+            if todo.delegation == nil, let action = todo.sourceAction {
                 DisclosureGroup {
                     SourceActionCardView(action: action, showsContext: false, onSend: sourceSend)
                         .padding(.top, Runner.Spacing.small)
