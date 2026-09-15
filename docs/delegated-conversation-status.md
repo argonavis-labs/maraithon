@@ -115,12 +115,20 @@ The server build and eight focused checks passed. The checks cover the seven-day
 
 Commits `0f40b402` and `929ff6fc` deployed successfully through workflow `35015027021`. Revision `maraithon-00360-w2m` became ready at 19:44 UTC and serves all traffic. [Retirement evidence](evidence/delegated-conversations/2026-09-15-idle-coordinator.json).
 
+## Delegation reporting in the morning brief
+
+The morning brief now includes a bounded report of conversations that changed recently or still need a decision. It preserves the task owner and renders progress and costs directly from saved state. Model output cannot replace this section, and the source fallback includes it too. Quiet work being handled by the agent is excluded from ordinary open commitments. Paused work returns to the user's action list.
+
+The report shows recorded lifetime cost and average cost per turn for each listed conversation, plus the user's recorded 30-day delegation spend. Unresolved reservations stay separate and remain visible beyond the window. The window follows the existing conservative budget rule: a turn's recorded spend is counted from its latest update, rather than claiming provider billing timestamps that are not stored. All totals are scoped to the user and include conversations beyond the eight displayed rows. The report adds three bounded-result database queries and no provider or model calls. It uses the existing shared brief body for web, Mac, iPhone, and delivery.
+
+The server build and seven focused checks passed, covering ownership, old decisions, quiet waiting, the 30-day boundary, unresolved charges, user isolation, bounded rows with complete totals, source-label escaping, model-claim replacement, fallback rendering, and paused work. Production deployment is pending. Proposals remain separate unfinished work.
+
 ## Remaining work
 
 1. Finish Google's sending consent for October and run the assistant conversation. The extension is deployed; the Kent-pair information, regular scheduling, and busy-slot evals have passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
-4. Add delegation proposals and brief reporting.
+4. Add delegation proposals. Brief reporting is implemented; production deployment is pending.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 6. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 

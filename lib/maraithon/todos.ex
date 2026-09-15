@@ -1250,16 +1250,18 @@ defmodule Maraithon.Todos do
     timezone_label = Keyword.get(opts, :timezone_label, brief_timezone_offset_label(offset_hours))
     limit = Keyword.get(opts, :limit, 50)
 
+    list_opts = [limit: limit, exclude_delegated: Keyword.get(opts, :exclude_delegated, false)]
+
     {source, todos} =
       case Keyword.get(opts, :direction, "owed_by_me") do
         all when all in [:all, "all"] ->
-          {"todos_open_all", list_open_for_user(user_id, limit: limit)}
+          {"todos_open_all", list_open_for_user(user_id, list_opts)}
 
         "owed_to_me" ->
-          {"todos_owed_to_me", list_owed_to_me(user_id, limit: limit)}
+          {"todos_owed_to_me", list_owed_to_me(user_id, list_opts)}
 
         _owed_by_me ->
-          {"todos_owed_by_me", list_owed_by_me(user_id, limit: limit)}
+          {"todos_owed_by_me", list_owed_by_me(user_id, list_opts)}
       end
 
     items =
@@ -2632,6 +2634,7 @@ defmodule Maraithon.Todos do
     |> maybe_filter_attention_mode(attention_mode)
     |> maybe_filter_owner_user_id(owner_user_id)
     |> maybe_filter_tracking(Keyword.get(opts, :tracking_only?, false))
+    |> maybe_exclude_delegated(user_id, Keyword.get(opts, :exclude_delegated, false))
     |> maybe_filter_project_id(project_id)
     |> maybe_filter_agent_actionability(agent_actionability)
     |> maybe_filter_direction(direction)
@@ -2641,6 +2644,17 @@ defmodule Maraithon.Todos do
     |> maybe_filter_due_nil(due_nil?)
     |> maybe_filter_query(query_text)
   end
+
+  defp maybe_exclude_delegated(query, user_id, true) do
+    delegated =
+      from d in Maraithon.Delegations.Delegation,
+        where: d.user_id == ^user_id and d.state not in ~w(completed stopped expired paused),
+        select: d.todo_id
+
+    where(query, [todo], todo.id not in subquery(delegated))
+  end
+
+  defp maybe_exclude_delegated(query, _user_id, _), do: query
 
   # Mirror Workflow.current/1 before pagination so counts and navigation agree.
   # A stored owner takes precedence over the legacy counterparty handoff.

@@ -14,6 +14,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm
+  alias Maraithon.Delegations.Reports, as: DelegationReports
   alias Maraithon.EmailDelivery
   alias Maraithon.Insights
   alias Maraithon.LocalBrowserHistory
@@ -879,8 +880,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           now: now,
           timezone_offset_hours: offset_hours,
           timezone_label: timezone_label(state, now),
+          exclude_delegated: true,
           limit: 50
         ),
+      "delegations" => DelegationReports.brief(user_id, now, lookback_start),
       "open_work" => %{
         "insights" =>
           user_id
@@ -888,7 +891,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.map(&insight_for_prompt/1),
         "todos" =>
           user_id
-          |> Todos.list_open_for_user(limit: 100)
+          |> Todos.list_open_for_user(limit: 100, exclude_delegated: true)
           |> Enum.map(&todo_for_prompt/1),
         "held_interruptions" => held_interruptions_for_prompt(user_id),
         "system_notices" => self_heal_notices_for_prompt(user_id)
@@ -2453,6 +2456,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_scrub_assistant_first_person_copy(findings)
     |> maybe_prepend_weather(brief_input, findings)
     |> maybe_prepend_temperature_read(brief_input, findings)
+    |> append_delegation_report(brief_input)
+  end
+
+  defp append_delegation_report(brief, input) do
+    # This section is rendered from saved state, including on model failure.
+    # Replace any generated version so costs and completion are not model claims.
+    brief =
+      Map.update(brief, "body", "", fn body ->
+        String.replace(body, ~r/^## Delegated conversations[^\n]*\n.*?(?=^## |\z)/msi, "")
+      end)
+
+    case DelegationReports.section(input["delegations"]) do
+      nil -> brief
+      section -> append_body_section_before_today_move(brief, section)
+    end
   end
 
   defp maybe_prepend_weather(brief, brief_input, findings) do
@@ -5874,6 +5892,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {"meeting_prep", 5_500},
         {"commercial_coverage", 5_500},
         {"open_work", 4_000},
+        {"delegations", 4_000},
         {"calendar", 3_500},
         {"commitments", 2_500},
         {"gmail", 8_000},
@@ -5973,6 +5992,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {"user_identity", "", &compact_prompt_value/1},
       {"commitments", %{}, &compact_prompt_value/1},
       {"open_work", %{}, &compact_prompt_value/1},
+      {"delegations", %{}, &compact_prompt_value/1},
       {"relationships", [], &compact_relationships_for_prompt/1},
       {"deep_memory", %{}, &compact_prompt_value/1},
       {"imessage", %{}, &compact_prompt_value/1},
@@ -6305,6 +6325,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       "date" => read_string(input, "date", nil),
       "generated_at" => read_string(input, "generated_at", nil),
+      "delegations" => read_map(input, "delegations"),
       "counts" => %{
         "gmail_commercial_threads" =>
           length(get_in(input, ["gmail", "commercial_threads"]) || []),
