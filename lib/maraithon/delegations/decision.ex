@@ -26,6 +26,9 @@ defmodule Maraithon.Delegations.Decision do
   defp resume(_job, %{turn: %{status: "validated"}, run: %{status: "completed"} = run}),
     do: {:ok, %{state: "decided", run_id: run.id}}
 
+  defp resume(_job, %{run: %{result_summary: %{"state" => "waiting_capacity"}} = run}),
+    do: {:ok, %{state: "waiting_capacity", run_id: run.id}}
+
   defp resume(job, context) do
     with {:ok, %{run: _} = context} <- prepare(job, context),
          {:ok, checkpoint, _profile, state} <- Continuation.load(context.run, attrs(context)) do
@@ -147,6 +150,11 @@ defmodule Maraithon.Delegations.Decision do
       case result do
         {:entered, next_checkpoint, next_state, {:ok, response}} ->
           save_response(job, context, next_checkpoint, next_state, stage, decision, response)
+
+        {:entered, _, _, {:error, {:rate_limited, delay}}} ->
+          # The provider returned a definite rejection. Retry from fresh sources
+          # after its cooldown; retain the reservation without a billing receipt.
+          capacity(job, :rate_limited, delay)
 
         {:entered, _, _, {:error, reason}} ->
           hold(job, reason)
@@ -305,6 +313,15 @@ defmodule Maraithon.Delegations.Decision do
 
   defp capacity(job, reason, delay \\ nil) do
     Jobs.transaction(job, fn context ->
+      context.run
+      |> Run.changeset(%{
+        status: "degraded",
+        error: Atom.to_string(reason),
+        finished_at: DatabaseClock.now!(),
+        result_summary: %{"state" => "waiting_capacity"}
+      })
+      |> Repo.update!()
+
       Jobs.result!(context, "capacity_hold", %{
         "reason" => Atom.to_string(reason),
         "retry_after_ms" => delay

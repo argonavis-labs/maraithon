@@ -630,7 +630,7 @@ defmodule Maraithon.Delegations.IngressTest do
     end
   end
 
-  for admission <- [:ready, :cooldown, :repair, :repair_fails] do
+  for admission <- [:ready, :cooldown, :provider_cooldown, :repair, :repair_fails] do
     @tag admission: admission
     test "a leased model turn with #{admission} admission charges only provider entries", c do
       alias Maraithon.Delegations.{Decision, Jobs, Turn}
@@ -691,41 +691,51 @@ defmodule Maraithon.Delegations.IngressTest do
         expected_calls = if c.admission == :repair, do: 3, else: 2
         assert n <= expected_calls
 
-        decision = %{
-          "kind" => "send",
-          "body" => "Got it. Indigo.",
-          "reason" => "Confirm the answer",
-          "evidence" => [c.message.message_id]
-        }
-
-        content =
-          cond do
-            c.admission == :repair_fails or (c.admission == :repair and n == 1) ->
-              Map.delete(decision, "body")
-
-            n == 1 or (c.admission == :repair and n == 2) ->
-              decision
-
-            true ->
-              %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
-          end
-
-        json(conn, %{
-          "id" => "gen-#{n}",
-          "model" => model,
-          "choices" => [
-            %{
-              "finish_reason" => "stop",
-              "message" => %{"role" => "assistant", "content" => Jason.encode!(content)}
-            }
-          ],
-          "usage" => %{
-            "prompt_tokens" => 500,
-            "completion_tokens" => 100,
-            "total_tokens" => 600,
-            "cost" => 0.0001
+        if c.admission == :provider_cooldown do
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "60")
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            429,
+            Jason.encode!(%{"error" => %{"code" => 429, "message" => "Rate limited"}})
+          )
+        else
+          decision = %{
+            "kind" => "send",
+            "body" => "Got it. Indigo.",
+            "reason" => "Confirm the answer",
+            "evidence" => [c.message.message_id]
           }
-        })
+
+          content =
+            cond do
+              c.admission == :repair_fails or (c.admission == :repair and n == 1) ->
+                Map.delete(decision, "body")
+
+              n == 1 or (c.admission == :repair and n == 2) ->
+                decision
+
+              true ->
+                %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
+            end
+
+          json(conn, %{
+            "id" => "gen-#{n}",
+            "model" => model,
+            "choices" => [
+              %{
+                "finish_reason" => "stop",
+                "message" => %{"role" => "assistant", "content" => Jason.encode!(content)}
+              }
+            ],
+            "usage" => %{
+              "prompt_tokens" => 500,
+              "completion_tokens" => 100,
+              "total_tokens" => 600,
+              "cost" => 0.0001
+            }
+          })
+        end
       end)
 
       assert {:ok, _} =
@@ -751,6 +761,7 @@ defmodule Maraithon.Delegations.IngressTest do
         expected =
           case c.admission do
             :cooldown -> "waiting_capacity"
+            :provider_cooldown -> "waiting_capacity"
             :repair_fails -> "needs_user"
             _ -> "decided"
           end
@@ -760,13 +771,20 @@ defmodule Maraithon.Delegations.IngressTest do
         result
       end)
 
-      if c.admission == :cooldown do
-        assert Agent.get(calls, & &1) == 0
+      if c.admission in [:cooldown, :provider_cooldown] do
+        expected_calls = if c.admission == :provider_cooldown, do: 1, else: 0
+        assert Agent.get(calls, & &1) == expected_calls
         turn = Repo.one!(Turn) |> Turn.hydrate()
-        assert turn.model_calls == 0
-        assert turn.reserved_micro_usd == 0
+        assert turn.model_calls == expected_calls
         assert turn.cost_micro_usd == 0
-        assert turn.data["model_entries"] == nil
+
+        if c.admission == :provider_cooldown do
+          assert turn.reserved_micro_usd > 0
+          assert turn.data["model_entries"]["compose"]["state"] == "entered"
+        else
+          assert turn.reserved_micro_usd == 0
+          assert turn.data["model_entries"] == nil
+        end
 
         assert {:ok, _} =
                  Repo.transaction(fn ->
@@ -790,6 +808,7 @@ defmodule Maraithon.Delegations.IngressTest do
                    assert next.state == "waiting_capacity"
                    assert DateTime.diff(next.next_wake_at, DateTime.utc_now()) in 59..61
                    assert Repo.get!(Turn, turn.id).status == "superseded"
+                   assert Repo.get!(Turn, turn.id).reserved_micro_usd == turn.reserved_micro_usd
 
                    assert {%{state: "ready"}, [:enqueue_sync]} =
                             StateMachine.apply(next, %{
