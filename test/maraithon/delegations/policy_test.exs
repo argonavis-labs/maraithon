@@ -107,6 +107,20 @@ defmodule Maraithon.Delegations.PolicyTest do
 
     assert {:ok, _} =
              Policy.validate(context, %{decision | "body" => "Does this work?\n" <> label})
+
+    decision = %{decision | "body" => label}
+    previous = Map.put(slot, "start_at", "2026-09-16T15:15:00Z")
+    context = put_in(context, [:delegation, :data, "offered_slots"], [previous])
+    assert Policy.reoffer?(context, decision)
+    assert {:ok, _} = Policy.validate(context, decision)
+
+    context = put_in(context, [:delegation, :data, "slot_reoffers"], 1)
+    assert {:error, :reoffer_limit} = Policy.validate(context, decision)
+
+    # A failed booking already counted its conflict and cleared the old offer.
+    context = put_in(context, [:delegation, :data, "offered_slots"], [])
+    refute Policy.reoffer?(context, decision)
+    assert {:ok, _} = Policy.validate(context, decision)
   end
 
   test "slot identity binds dates and timezone; booking cannot pick a new time", c do

@@ -1,0 +1,38 @@
+{
+  "recorded_at": "2026-09-15T16:39:37Z",
+  "reader_execution": "maraithon-todo-validation-5jbb9",
+  "scenario": "accepted_slot_becomes_busy",
+  "job_id": "4d0f5344-31d9-4390-a2ca-536703cf088b",
+  "delegation_id": "2b427d33-2ab5-4dbf-bf56-ad6c7cc0f05b",
+  "live_eval_passed": false,
+  "model": "meta/muse-spark-1.3-contributor",
+  "model_calls": 3,
+  "cost_micro_usd": 2116,
+  "findings": [
+    "The first email offered three computed slots with correct Toronto labels.",
+    "The fixture placed a busy event over the first slot and accepted that slot.",
+    "The next model decision noticed the conflict and selected three alternatives, but omitted the required email body.",
+    "Validation held with invalid_message before preparing a second send or booking a meeting.",
+    "The fixture stopped the delegation and completed cleanup."
+  ],
+  "turns": [
+    {
+      "id": "79f48a6c-cee4-4a53-b003-fb6073f2cab4",
+      "status": "settled",
+      "model_calls": 2,
+      "cost_micro_usd": 1327,
+      "run_error": null
+    },
+    {
+      "id": "544df71f-e664-4abd-a21c-dd2bbd4a8606",
+      "status": "superseded",
+      "model_calls": 1,
+      "cost_micro_usd": 789,
+      "run_error": "invalid_message"
+    }
+  ],
+  "correction": [
+    "Allow one separately reserved and checkpointed formatting repair before independent policy review. A second malformed response still holds.",
+    "Count a changed offer toward the one-reoffer limit even when a fresh read detects the conflict before calendar dispatch."
+  ]
+}

@@ -76,7 +76,7 @@ defmodule Maraithon.Delegations.Budget do
 
   # Called in the same transaction as the continuation's model_entered phase.
   # The user privacy lock serializes decisions across all their delegations.
-  def reserve!(context, key, quote) when key in ~w(compose policy) do
+  def reserve!(context, key, quote) when key in ~w(compose repair policy) do
     unless Repo.in_transaction?(), do: raise(ArgumentError, "model reservation needs authority")
     turn = context.turn
     entries = turn.data["model_entries"] || %{}

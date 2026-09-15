@@ -47,7 +47,7 @@ defmodule Maraithon.Delegations.Policy do
         a different date or duration. Book only an explicitly accepted offered slot.
         Return one JSON object with kind (send, propose_times, book, complete,
         needs_user, wait), reason, and evidence (message IDs). Include body for sends,
-        question for needs_user, slot_ids for offers, accepted_slot_id for booking.
+        question for needs_user, body AND slot_ids for propose_times, accepted_slot_id for booking.
         A complete decision requires evidence that the granted outcome already happened.
         Record the concrete answer or delivered result in its reason, with the source IDs.
         """
@@ -127,6 +127,9 @@ defmodule Maraithon.Delegations.Policy do
       kind == "propose_times" and not labelled_slots?(context, decision) ->
         {:error, :unverified_slot_wording}
 
+      reoffer?(context, decision) and (context.delegation.data["slot_reoffers"] || 0) >= 1 ->
+        {:error, :reoffer_limit}
+
       kind == "book" and not accepted_slot?(context, decision["accepted_slot_id"]) ->
         {:error, :unoffered_slot}
 
@@ -136,6 +139,27 @@ defmodule Maraithon.Delegations.Policy do
   end
 
   def validate(_, _), do: {:error, :invalid_decision}
+
+  @doc "One formatting repair, still subject to ordinary validation and independent review."
+  def repair_messages(context, decision) do
+    messages(context, nil) ++
+      [
+        %{"role" => "assistant", "content" => Jason.encode!(decision)},
+        %{
+          "role" => "user",
+          "content" =>
+            "Return a complete corrected JSON decision. send and propose_times require a nonempty body; propose_times must include each selected slot's exact display_label in that body. needs_user requires a nonempty question. Use the same grant and evidence. Do not add facts or authority."
+        }
+      ]
+  end
+
+  @doc "A changed offer counts even when a fresh read finds the conflict before booking."
+  def reoffer?(context, %{"kind" => "propose_times", "slot_ids" => ids}) when is_list(ids) do
+    previous = Enum.map(context.delegation.data["offered_slots"] || [], &slot_id/1)
+    previous != [] and MapSet.new(previous) != MapSet.new(ids)
+  end
+
+  def reoffer?(_, _), do: false
 
   def approved?(decision, verdict) do
     is_map(verdict) and verdict["allowed"] == true and

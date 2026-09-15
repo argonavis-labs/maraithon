@@ -85,7 +85,7 @@ defmodule Maraithon.Delegations.Decision do
 
     with {:ok, decision} <- Policy.validate(context, decision) do
       case response["stage"] do
-        "compose" ->
+        stage when stage in ~w(compose repair) ->
           call(job, context, checkpoint, state, "policy", decision)
 
         "policy" ->
@@ -97,7 +97,16 @@ defmodule Maraithon.Delegations.Decision do
           hold(job, :invalid_execution_checkpoint)
       end
     else
-      {:error, reason} -> hold(job, reason)
+      {:error, reason}
+      when reason in [:invalid_message, :unverified_slot_wording, :invalid_question] ->
+        if response["stage"] == "compose" do
+          call(job, context, checkpoint, state, "repair", decision)
+        else
+          hold(job, reason)
+        end
+
+      {:error, reason} ->
+        hold(job, reason)
     end
   end
 
@@ -105,7 +114,11 @@ defmodule Maraithon.Delegations.Decision do
     with true <- LLM.provider_name() == "openrouter",
          true <- Gates.scope_enabled?(context.delegation, context.grant),
          remaining when remaining > 1_000 <- Continuation.remaining_ms(checkpoint),
-         messages = Policy.messages(context, decision),
+         messages =
+           if(stage == "repair",
+             do: Policy.repair_messages(context, decision),
+             else: Policy.messages(context, decision)
+           ),
          true <- byte_size(Jason.encode!(messages)) <= 32_000,
          {:ok, quote} <- Budget.quote(context.turn.model) do
       params = %{
@@ -216,7 +229,7 @@ defmodule Maraithon.Delegations.Decision do
                 "status" => "final",
                 "stage" => stage,
                 "tool_calls" => [],
-                "decision" => if(stage == "compose", do: value, else: decision),
+                "decision" => if(stage in ~w(compose repair), do: value, else: decision),
                 "verdict" => if(stage == "policy", do: value)
               }
 

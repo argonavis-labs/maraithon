@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information path has passed a controlled live eval. The regular calendar eval has also passed; the conflict eval is in progress. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information path has passed a controlled live eval. The regular calendar eval has also passed; the conflict eval found a formatting failure and is being corrected. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -27,7 +27,7 @@ The server, signed Mac, and iPhone simulator builds passed. The focused ingress 
 
 ## Remaining work
 
-1. Finish the busy-slot conflict eval and record its provider evidence. The regular scheduling eval has passed.
+1. Rerun the busy-slot conflict eval after the formatting repair. The first conflict run noticed the busy slot but omitted the replacement email body, so validation held before another send. Three calls cost US$0.002116; cleanup completed. [Failure evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-first-attempt.json). The regular scheduling eval has passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. The production account check found no assistant identity and no connected `october@ewakened.com` account. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.

@@ -61,7 +61,13 @@ defmodule Maraithon.Delegations.Receipts do
 
           Map.merge(data, %{
             "offered_slots" => slots,
-            "offered_calendar_account_ids" => scheduling["coverage"]["account_ids"]
+            "offered_calendar_account_ids" => scheduling["coverage"]["account_ids"],
+            "slot_reoffers" =>
+              (data["slot_reoffers"] || 0) +
+                if(Maraithon.Delegations.Policy.reoffer?(%{delegation: d}, turn.data["decision"]),
+                  do: 1,
+                  else: 0
+                )
           })
         else
           data

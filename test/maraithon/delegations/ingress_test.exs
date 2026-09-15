@@ -603,7 +603,7 @@ defmodule Maraithon.Delegations.IngressTest do
     end
   end
 
-  for admission <- [:ready, :cooldown] do
+  for admission <- [:ready, :cooldown, :repair, :repair_fails] do
     @tag admission: admission
     test "a leased model turn with #{admission} admission charges only provider entries", c do
       alias Maraithon.Delegations.{Decision, Jobs, Turn}
@@ -660,18 +660,28 @@ defmodule Maraithon.Delegations.IngressTest do
                )
 
         n = Agent.get_and_update(calls, &{&1 + 1, &1 + 1})
-        assert c.admission == :ready
-        assert n in [1, 2]
+        assert c.admission != :cooldown
+        expected_calls = if c.admission == :repair, do: 3, else: 2
+        assert n <= expected_calls
+
+        decision = %{
+          "kind" => "send",
+          "body" => "Got it. Indigo.",
+          "reason" => "Confirm the answer",
+          "evidence" => [c.message.message_id]
+        }
 
         content =
-          if n == 1,
-            do: %{
-              "kind" => "send",
-              "body" => "Got it. Indigo.",
-              "reason" => "Confirm the answer",
-              "evidence" => [c.message.message_id]
-            },
-            else: %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
+          cond do
+            c.admission == :repair_fails or (c.admission == :repair and n == 1) ->
+              Map.delete(decision, "body")
+
+            n == 1 or (c.admission == :repair and n == 2) ->
+              decision
+
+            true ->
+              %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
+          end
 
         json(conn, %{
           "id" => "gen-#{n}",
@@ -711,7 +721,13 @@ defmodule Maraithon.Delegations.IngressTest do
       if c.admission == :cooldown, do: limiter.record_rate_limit(60_000, :reasoning)
 
       run_leased_job(node, partitions, "delegation_decide", fn job ->
-        expected = if c.admission == :ready, do: "decided", else: "waiting_capacity"
+        expected =
+          case c.admission do
+            :cooldown -> "waiting_capacity"
+            :repair_fails -> "needs_user"
+            _ -> "decided"
+          end
+
         assert {:ok, %{state: ^expected}} = Decision.execute(job)
         assert {:ok, %{state: ^expected}} = result = Decision.execute(job)
         result
@@ -755,14 +771,22 @@ defmodule Maraithon.Delegations.IngressTest do
                             })
                  end)
       else
-        assert Agent.get(calls, & &1) == 2
+        expected_calls = if c.admission == :repair, do: 3, else: 2
+        assert Agent.get(calls, & &1) == expected_calls
         turn = Repo.one!(Turn) |> Turn.hydrate()
-        assert turn.status == "validated"
-        assert turn.model_calls == 2
+        assert turn.status == if(c.admission == :repair_fails, do: "deciding", else: "validated")
+        assert turn.model_calls == expected_calls
         assert turn.reserved_micro_usd == 0
-        assert turn.cost_micro_usd == 200
-        assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == 200
-        assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) == 1
+        assert turn.cost_micro_usd == expected_calls * 100
+        assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == expected_calls * 100
+        expected_decisions = if c.admission == :repair_fails, do: 0, else: 1
+
+        assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) ==
+                 expected_decisions
+
+        if c.admission in [:repair, :repair_fails],
+          do: assert(turn.data["model_entries"]["repair"]["state"] == "settled")
+
         assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
       end
     end
