@@ -69,6 +69,7 @@ defmodule Maraithon.Memory.Recall do
     |> maybe_filter_values(:scope, filters.scopes)
     |> maybe_filter_tag(filters.tag)
     |> maybe_filter_source_ref(filters.source_ref_type, filters.source_ref_id)
+    |> exclude_source_ref_types(filters.exclude_source_ref_types)
     |> order_by([item], desc: item.importance, desc: item.updated_at, desc: item.inserted_at)
   end
 
@@ -76,6 +77,11 @@ defmodule Maraithon.Memory.Recall do
     do: where(query, [item], item.status in ["active", "superseded"])
 
   defp maybe_status_filter(query, false), do: where(query, [item], item.status == "active")
+
+  defp exclude_source_ref_types(query, []), do: query
+
+  defp exclude_source_ref_types(query, types),
+    do: where(query, [item], is_nil(item.source_ref_type) or item.source_ref_type not in ^types)
 
   defp maybe_filter_values(query, _field, []), do: query
 
@@ -301,6 +307,7 @@ defmodule Maraithon.Memory.Recall do
       project_id: opts |> Keyword.get(:project_id) |> normalize_text(),
       person_id: opts |> Keyword.get(:person_id) |> normalize_text(),
       source_ref_type: opts |> Keyword.get(:source_ref_type) |> normalize_text(),
+      exclude_source_ref_types: opts |> Keyword.get(:exclude_source_ref_types) |> string_list(),
       source_ref_id: opts |> Keyword.get(:source_ref_id) |> normalize_text()
     }
   end

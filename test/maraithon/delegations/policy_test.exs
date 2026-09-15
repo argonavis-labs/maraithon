@@ -46,6 +46,19 @@ defmodule Maraithon.Delegations.PolicyTest do
     assert {:ok, _} = Policy.validate(c.context, c.decision)
   end
 
+  test "composition and review receive frozen voice as style data, not authority", c do
+    voice = %{"content" => "Use short paragraphs", "version" => "frozen-style"}
+    context = put_in(c.context, [:run, :prompt_snapshot, "voice"], voice)
+
+    for messages <- [Policy.messages(context, nil), Policy.messages(context, c.decision)] do
+      [system, input] = messages
+      refute system["content"] =~ voice["content"]
+      data = Jason.decode!(input["content"])
+      assert (data["context"] || data)["voice"] == voice
+      assert system["content"] =~ "style"
+    end
+  end
+
   test "policy reviews the exact saved signature and honours the disclosure setting", c do
     for {disclose?, signature} <- [
           {true, "October\nI'm Kent's AI assistant."},

@@ -43,7 +43,7 @@ Commit `bb66b0dd` excludes assistant accounts from personal chat context, user-m
 
 Commit `d453c00e` implements the saved first-message copy setting. The grant preview shows the source user's address; the first prepared email freezes that Cc, and later sends omit it unless the user explicitly added a permanent Cc. A manual reply from the source user pauses an assistant conversation and cannot prove the counterparty's outcome. The controlled eval gate also validates the extra recipient. The focused policy, gate, and ingress run passed 47 checks, the preview and isolation run passed nine checks, and the server build passed. Server deployment `35001963170` passed, serving revision `maraithon-00349-xpk`. The shared native preview in `2aa70f8e` passed signed Mac and iPhone builds. The signed Mac app is installed; iPhone release `35002441909` passed.
 
-This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes account-specific voice and an audit of other direct provider read paths. October connected on September 15; live actor verification still needs Google's sending permission.
+This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes the direct provider read audit and live actor verification. October connected on September 15; live actor verification still needs Google's sending permission.
 
 ## Conflict recovery and retention
 
@@ -98,6 +98,14 @@ Web, Mac, and iPhone use the same saved categories. The native apps share the ac
 The post-rollout sample at 18:13 to 18:14 UTC found all 64 partitions ready with live leases, no termination requests, and advancing recurring work. Renewal and storage verification did not dominate query time. Recovery logs are present, but the sample contained no recent effect or checkpoint events, so it does not prove every runtime health criterion. [Recovery evidence](evidence/delegated-conversations/2026-09-15-category-runtime-recovery.json).
 
 The 18:47 to 18:48 UTC sample again found all 64 partitions ready with live leases, no termination requests, and advancing recurring work. Both active agents had created checkpoints with no snapshot persistence failures. Renewal took about 25 ms of query time, and no storage verification query ran during the sample. The cost monitor ran at 18:45 UTC and scheduled its next check six hours later. Recent effect-completion evidence was absent, so this sample still does not establish full runtime health. [Evidence](evidence/delegated-conversations/2026-09-15-signature-runtime.json).
+
+## Account-specific voice
+
+Voice refreshes now retain the selected account. Profiles are keyed by account and channel; an explicit account cannot fall back to another mailbox or the legacy channel profile. Assistant, foreign, disconnected, and ambiguous accounts cannot supply a user profile. Gmail training excludes drafts, incoming mail, and Maraithon's own sends, including messages whose original Message-ID Google has preserved after rewriting it. General draft memory excludes voice profiles so it cannot reintroduce another mailbox's style.
+
+Each delegated turn freezes a bounded voice snapshot in its existing authenticated Run payload before model entry. Retries reuse it; the prepared action includes its version in the frozen payload. As-user turns use the bound account's profile or explicit style guidance. Assistant turns use the house style. Composition and review receive voice as style data, with no authority to add facts, recipients, or commitments. This adds no provider reads, training, or model calls to a turn. Existing queued turns without a snapshot retain their original continuation.
+
+The server build and 26 focused checks passed: 20 profile, draft, and policy checks, plus six leased-turn and prepared-action checks. The draft checks also caught and corrected a missing optional account being parsed as the string `nil`. This is local verification of account isolation and durable voice selection; no live October exchange or Slack voice proof is claimed.
 
 ## Remaining work
 

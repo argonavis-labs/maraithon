@@ -61,7 +61,14 @@ defmodule Maraithon.Delegations.Execution do
         delegation_turn_id: context.turn.id,
         grant_version: grant.version,
         action_type: type,
-        payload: payload |> Map.put("user_id", d.user_id) |> Map.put(Binding.key(), binding)
+        payload:
+          payload
+          |> Map.put("user_id", d.user_id)
+          |> Map.put(
+            "_maraithon_voice_version",
+            get_in(context.run.prompt_snapshot, ["voice", "version"])
+          )
+          |> Map.put(Binding.key(), binding)
       }
 
       with {:ok, frozen} <- TelegramAssistant.freeze_granted_payload(action) do

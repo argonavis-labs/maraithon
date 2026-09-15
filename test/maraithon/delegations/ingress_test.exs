@@ -464,6 +464,18 @@ defmodule Maraithon.Delegations.IngressTest do
              Repo.transaction(fn ->
                {d, grant, event} = decision_turn(c)
                now = Maraithon.Runtime.DatabaseClock.now!()
+
+               run =
+                 Repo.one!(Maraithon.TelegramAssistant.Run)
+                 |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
+
+               snapshot =
+                 Maraithon.Delegations.Voice.freeze(run.prompt_snapshot, c.user_id, c.scope)
+
+               run
+               |> Maraithon.TelegramAssistant.Run.changeset(%{prompt_snapshot: snapshot})
+               |> Repo.update!()
+
                next = Execution.prepare!(d, grant, event, now)
                assert next.state == "sending"
                [action] = Repo.all(PreparedAction) |> Enum.map(&PreparedAction.hydrate_payload/1)
@@ -475,6 +487,7 @@ defmodule Maraithon.Delegations.IngressTest do
                assert action.payload["body"] == "Got it. Indigo.\n\n-Kent"
                assert action.payload["thread_id"] == "aabbcc"
                assert action.payload["reply_to_message_id"] == c.message.message_id
+               assert action.payload["_maraithon_voice_version"] == snapshot["voice"]["version"]
                assert is_binary(action.payload["_maraithon_confirmed_payload_sha256"])
                assert action.payload[Binding.key()]["delegation_id"] == d.id
                turn = Repo.get!(Turn, action.delegation_turn_id)
@@ -807,7 +820,19 @@ defmodule Maraithon.Delegations.IngressTest do
           end
 
         assert {:ok, %{state: ^expected}} = Decision.execute(job)
+
+        run =
+          Repo.get!(Maraithon.TelegramAssistant.Run, job.payload["run_id"])
+          |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
+
+        assert is_binary(run.prompt_snapshot["voice"]["version"])
         assert {:ok, %{state: ^expected}} = result = Decision.execute(job)
+
+        retried =
+          Repo.get!(Maraithon.TelegramAssistant.Run, run.id)
+          |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
+
+        assert retried.prompt_snapshot["voice"] == run.prompt_snapshot["voice"]
         result
       end)
 

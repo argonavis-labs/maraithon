@@ -2,7 +2,19 @@ defmodule Maraithon.Delegations.Decision do
   @moduledoc "A bounded read-only model continuation with a separate scope review."
   alias Maraithon.{LLM, Repo}
   alias Maraithon.AssistantChat.Execution
-  alias Maraithon.Delegations.{Authority, Binding, Budget, Gates, Jobs, Policy, Scheduling, Turn}
+
+  alias Maraithon.Delegations.{
+    Authority,
+    Binding,
+    Budget,
+    Gates,
+    Jobs,
+    Policy,
+    Scheduling,
+    Turn,
+    Voice
+  }
+
   alias Maraithon.Runtime.{BackgroundJob, DatabaseClock}
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
@@ -50,7 +62,11 @@ defmodule Maraithon.Delegations.Decision do
       with {:ok, scheduling} <- scheduling(context) do
         Jobs.transaction(job, fn current ->
           unless is_map(current.run.prompt_snapshot["sources"]), do: Repo.rollback(:source_gap)
-          snapshot = Map.put(current.run.prompt_snapshot, "scheduling", scheduling)
+
+          snapshot =
+            current.run.prompt_snapshot
+            |> Map.put("scheduling", scheduling)
+            |> Voice.freeze(job.user_id, current.grant.data["scope"])
 
           run =
             current.run

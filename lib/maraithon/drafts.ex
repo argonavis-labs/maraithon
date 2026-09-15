@@ -28,7 +28,8 @@ defmodule Maraithon.Drafts do
     with {:ok, channel} <- UserVoice.normalize_channel(read_string(attrs, "channel")),
          {:ok, purpose} <- required_string(attrs, "purpose"),
          {:ok, voice_result} <- maybe_refresh_voice(user_id, channel, attrs, opts),
-         voice_context <- UserVoice.prompt_context(user_id, channel),
+         voice_context <-
+           UserVoice.prompt_context(user_id, channel, provider: voice_provider(attrs)),
          prompt <- draft_prompt(user_id, channel, purpose, attrs, voice_context),
          {:ok, draft, llm_warning} <- generate_draft(channel, attrs, prompt, opts),
          draft <- sanitize_draft(draft),
@@ -78,7 +79,7 @@ defmodule Maraithon.Drafts do
         |> Keyword.put(:slack_user_id, read_string(attrs, "slack_user_id"))
         |> Keyword.put(
           :provider,
-          read_string(attrs, "provider") || read_string(attrs, "google_provider")
+          voice_provider(attrs)
         )
         |> Keyword.put(:max_samples, read_integer(attrs, "max_samples", 40))
         |> Keyword.put(:lookback_days, read_integer(attrs, "lookback_days", 180))
@@ -92,6 +93,9 @@ defmodule Maraithon.Drafts do
     end
   end
 
+  defp voice_provider(attrs),
+    do: read_string(attrs, "provider") || read_string(attrs, "google_provider")
+
   defp draft_prompt(user_id, channel, purpose, attrs, voice_context) do
     memory = %{
       preference_memory: PreferenceMemory.prompt_context(user_id),
@@ -102,7 +106,11 @@ defmodule Maraithon.Drafts do
       # the recall query reflects who/what the draft is actually about, not
       # just the free-text purpose.
       deep_memory:
-        Memory.prompt_context(user_id, query: draft_memory_query(purpose, attrs), limit: 8)
+        Memory.prompt_context(user_id,
+          query: draft_memory_query(purpose, attrs),
+          limit: 8,
+          exclude_source_ref_types: ["user_voice_profile"]
+        )
     }
 
     response_shape =
@@ -333,7 +341,7 @@ defmodule Maraithon.Drafts do
         value = String.trim(value)
         if value == "", do: nil, else: value
 
-      value when is_atom(value) ->
+      value when is_atom(value) and not is_nil(value) ->
         value |> Atom.to_string() |> read_non_empty()
 
       _ ->
