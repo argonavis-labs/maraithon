@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information path has passed a controlled live eval. The regular calendar eval has also passed; the conflict eval found a formatting failure and is being corrected. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting fix has shipped and its live rerun is underway. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -23,7 +23,19 @@ This change deployed successfully in workflow `34993948938`, revision `maraithon
 
 Delegated todos now suppress ordinary automatic briefs, primer drafts, and suggested actions across web, Mac, and iPhone. The conversation ledger remains the source of progress. Opening a delegated todo does not enqueue another brief or prepare a separate send. Existing brief content remains stored as history.
 
-The server, signed Mac, and iPhone simulator builds passed. The focused ingress and brief run passed 39 checks. Older brief fixtures now supply the required summary and involvement fields; the lease check confirms that force cannot replace a live generation, and the draft check confirms that stale wording is preserved in storage but hidden from the current projection. The server deployed in workflow `34996287013`. The signed Mac update is installed; visual verification and the iPhone release are in progress.
+The server, signed Mac, and iPhone simulator builds passed. The focused ingress and brief run passed 39 checks. Older brief fixtures now supply the required summary and involvement fields; the lease check confirms that force cannot replace a live generation, and the draft check confirms that stale wording is preserved in storage but hidden from the current projection. The server deployed in workflow `34996287013`. The signed Mac update is installed and visually verified. The iPhone release passed in workflow `34996808880`.
+
+Production web verification found a conditional LiveComponent root that crashed the workspace. Commit `553b59a0` fixes the root and adds the missing last-action line. Its focused workspace check and server build passed. Workflow `34997627342` deployed revision `maraithon-00345-lnn`. The authenticated page now shows Completed, As you, and Booked the agreed meeting, with no competing brief or draft action.
+
+## Assistant account isolation
+
+Commit `ce5a1233` binds OAuth initiation and callbacks to the authenticated user. Assistant setup no longer fails because its link omitted a user ID, and a signed callback cannot attach credentials to a different user.
+
+Commit `6fa6f93a` carries the assistant purpose in signed Google OAuth state and marks the connected account before checking its sending address or creating an identity. Pending setup, reconnects, and previous assistant accounts remain excluded from personal discovery, Gmail and voice reads, user identity, and CRM ingestion. Existing personal accounts cannot be silently converted through the assistant connection link. Cached user identities consult the current exclusion before returning handles. Ordinary Gmail ingestion still routes delegated replies.
+
+The focused isolation, scope, Gmail, ingress, and OAuth run passed 46 checks. Seven identity checks passed after the final primary-address validation. The server build passed. Workflow `34998552598` is deploying this change. Calendar and travel fallback reads now use the same exclusion in commit `0d865e4b`; its seven identity checks and server build passed, and deployment is pending.
+
+This completes the central isolation path, not the full assistant slice. The remaining work includes signatures, account-specific voice, native settings, and an audit of other direct provider read paths. No October account is connected in production yet.
 
 ## Conflict recovery and retention
 
@@ -33,7 +45,7 @@ Retention also keeps stopped conversations with unresolved model reservations. I
 
 ## Remaining work
 
-1. Rerun the busy-slot conflict eval after the formatting repair. The first conflict run noticed the busy slot but omitted the replacement email body, so validation held before another send. Three calls cost US$0.002116; cleanup completed. [Failure evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-first-attempt.json). The regular scheduling eval has passed.
+1. Finish the busy-slot conflict rerun, job `f4dac5ff-fefc-4296-9742-6955a3a33a7d`, started on revision `maraithon-00345-lnn`. The first conflict run noticed the busy slot but omitted the replacement email body, so validation held before another send. Three calls cost US$0.002116; cleanup completed. [Failure evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-first-attempt.json). The regular scheduling eval has passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. The production account check found no assistant identity and no connected `october@ewakened.com` account. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.
