@@ -84,7 +84,24 @@ defmodule Maraithon.Delegations.SlackIdentity do
         ]
       }
 
-      {:ok, source, identity}
+      with {:ok, snapshot} <-
+             Maraithon.Delegations.SlackSource.fetch(
+               todo.user_id,
+               identity,
+               location.channel,
+               root
+             ),
+           participants =
+             if(channel["is_im"] == true,
+               do: [counterparty],
+               else: Maraithon.Delegations.SlackSource.participants(snapshot, identity)
+             ),
+           true <- participants != [] and Enum.all?(participants, &valid_id?/1) do
+        {:ok, Map.put(source, "counterparty_user_ids", participants), identity}
+      else
+        {:error, _} = error -> error
+        _ -> {:error, :slack_counterparty_unavailable}
+      end
     else
       {:error, _} = error -> error
       _ -> {:error, :slack_identity_or_channel_unavailable}
@@ -111,6 +128,26 @@ defmodule Maraithon.Delegations.SlackIdentity do
       {:error, _} = error -> error
       _ -> {:error, :slack_identity_changed}
     end
+  end
+
+  @doc "Read the frozen conversation with its actor in a DM or its source member in a channel."
+  def read_token(user_id, identity, channel) do
+    reader =
+      if String.starts_with?(channel, "D") do
+        identity
+      else
+        member = identity["operator_user_id"]
+
+        Map.merge(identity, %{
+          "actor" => "as_user",
+          "user_id" => member,
+          "bot_id" => nil,
+          "token_preference" => "user",
+          "provider" => "slack:#{identity["team_id"]}:user:#{member}"
+        })
+      end
+
+    access_token(user_id, reader, [])
   end
 
   defp source_member(provider) do

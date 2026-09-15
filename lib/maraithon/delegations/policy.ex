@@ -22,7 +22,7 @@ defmodule Maraithon.Delegations.Policy do
       "grant" =>
         Map.take(
           scope,
-          ~w(actor kind outcome instruction user_answers to cc first_send_cc source_user_email facts allowed reserved identity)
+          ~w(provider channel counterparty_user_ids actor kind outcome instruction user_answers to cc first_send_cc source_user_email facts allowed reserved identity)
         ),
       "last_messages" => Enum.take(snapshot["messages"], -6),
       "voice" => Voice.context(context.run.prompt_snapshot, scope),

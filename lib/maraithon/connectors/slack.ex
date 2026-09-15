@@ -435,7 +435,7 @@ defmodule Maraithon.Connectors.Slack do
             }
           })
 
-        case observe_with_account_lock(account, user_id, changeset) do
+        case observe_with_account_lock(account, user_id, changeset, team_id, event) do
           {:ok, :buffered, _observation_id} ->
             :ok
 
@@ -457,21 +457,36 @@ defmodule Maraithon.Connectors.Slack do
     end
   end
 
-  defp observe_with_account_lock(account, user_id, changeset) do
-    Repo.transaction(fn ->
-      _locked_account_id =
-        ConnectedAccount
-        |> where([candidate], candidate.id == ^account.id)
-        |> lock("FOR UPDATE")
-        |> select([candidate], candidate.id)
-        |> Repo.one!()
+  defp observe_with_account_lock(account, user_id, changeset, team_id, event) do
+    result =
+      Repo.transaction(fn ->
+        Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(user_id)
 
-      Maraithon.Crm.Ingest.observe(user_id, changeset)
-    end)
-    |> case do
-      {:ok, result} -> result
-      {:error, reason} -> {:error, reason}
-    end
+        _locked_account_id =
+          ConnectedAccount
+          |> where([candidate], candidate.id == ^account.id)
+          |> lock("FOR UPDATE")
+          |> select([candidate], candidate.id)
+          |> Repo.one!()
+
+        case Maraithon.Crm.Ingest.observe(user_id, changeset) do
+          {:error, reason} ->
+            Repo.rollback(reason)
+
+          result ->
+            :ok = Maraithon.Delegations.SlackIngress.accept!(user_id, team_id, event)
+            result
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+
+    if match?({:ok, _}, result) or match?({:ok, _, _}, result) or match?({:ok, _, _, _}, result),
+      do: Maraithon.Delegations.Outbox.publish_pending(user_id)
+
+    result
   end
 
   defp slack_observation_source_item_id(team_id, event) do
@@ -786,6 +801,8 @@ defmodule Maraithon.Connectors.Slack do
       "user" =>
         message["user"] || event["user"] || message["bot_id"] ||
           get_in(event, ["edited", "user"]) || "slack-system",
+      "bot_id" => message["bot_id"],
+      "client_msg_id" => message["client_msg_id"],
       "text" => message["text"] || "Slack message edited",
       "ts" => event["event_ts"],
       "event_ts" => event["event_ts"],
@@ -807,6 +824,8 @@ defmodule Maraithon.Connectors.Slack do
     %{
       "channel" => event["channel"] || previous["channel"],
       "user" => previous["user"] || event["user"] || previous["bot_id"] || "slack-system",
+      "bot_id" => previous["bot_id"],
+      "client_msg_id" => previous["client_msg_id"],
       "text" => "Slack message deleted",
       "ts" => event["event_ts"],
       "event_ts" => event["event_ts"],

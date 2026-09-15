@@ -2,30 +2,28 @@ defmodule Maraithon.Delegations.Sources do
   @moduledoc "A bounded, account-scoped source refresh outside the coordinator and DB transaction."
   alias Maraithon.{DurablePayload, Repo}
   alias Maraithon.Connectors.{Gmail, GoogleAccount}
-  alias Maraithon.Delegations.{Ingress, Jobs}
+  alias Maraithon.Delegations.{Ingress, Jobs, SlackSource, SlackIngress}
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.TelegramAssistant.Run
 
   @max_messages 100
   @max_bytes 240_000
 
-  def verify_before_send(_job, %{delegation: %{provider_thread_id: nil}}), do: :ok
+  def verify_before_send(_job, %{delegation: %{provider: "gmail", provider_thread_id: nil}}),
+    do: :ok
 
   def verify_before_send(job, context) do
     d = context.delegation
 
-    with {:ok, token} <- GoogleAccount.access_token(d.user_id, d.connected_account_id),
-         {:ok, messages} <-
-           Gmail.fetch_thread_content(token, d.provider_thread_id, access_token: true),
-         {:ok, fresh} <- snapshot(messages, d.connected_account_id, d.provider_thread_id) do
+    with {:ok, messages, fresh} <- fetch(d, context.grant.data["scope"]) do
       previous = context.run.prompt_snapshot["sources"]
-      ids = fn source -> MapSet.new(source["messages"], & &1["message_id"]) end
+      ids = fn source -> MapSet.new(source["messages"], &{&1["message_id"], &1["revision"]}) end
 
       if ids.(fresh) == ids.(previous) do
         :ok
       else
         case Jobs.transaction(job, fn _ ->
-               Enum.each(messages, &Ingress.gmail!(job.user_id, d.connected_account_id, &1))
+               route!(context, messages, fresh)
              end) do
           {:ok, _} -> {:error, :source_changed}
           error -> error
@@ -57,19 +55,10 @@ defmodule Maraithon.Delegations.Sources do
       d = context.delegation
       scope = context.grant.data["scope"]
 
-      account_id =
-        if d.provider_thread_id, do: d.connected_account_id, else: scope["source_account_id"]
-
-      thread_id = d.provider_thread_id || scope["source_thread_id"]
-
-      with "gmail" <- d.provider,
-           {:ok, token} <- GoogleAccount.access_token(d.user_id, account_id),
-           {:ok, messages} <- Gmail.fetch_thread_content(token, thread_id, access_token: true),
-           {:ok, sources} <- snapshot(messages, account_id, thread_id) do
+      with {:ok, messages, sources} <- fetch(d, scope) do
         persist(job, context, messages, sources)
       else
         {:error, reason} -> source_error(job, reason)
-        _ -> source_error(job, :unsupported_delegation_source)
       end
     end
   end
@@ -79,7 +68,7 @@ defmodule Maraithon.Delegations.Sources do
     # missed reply advances the revision here before any decision can be made.
     Jobs.transaction(job, fn current ->
       if context.delegation.provider_thread_id do
-        Enum.each(messages, &Ingress.gmail!(job.user_id, sources["account_id"], &1))
+        route!(context, messages, sources)
       end
 
       d = Repo.get!(Maraithon.Delegations.Delegation, current.delegation.id)
@@ -94,6 +83,36 @@ defmodule Maraithon.Delegations.Sources do
       end
     end)
   end
+
+  defp fetch(%{provider: "gmail"} = d, scope) do
+    account =
+      if d.provider_thread_id, do: d.connected_account_id, else: scope["source_account_id"]
+
+    thread = d.provider_thread_id || scope["source_thread_id"]
+
+    with {:ok, token} <- GoogleAccount.access_token(d.user_id, account),
+         {:ok, messages} <- Gmail.fetch_thread_content(token, thread, access_token: true),
+         {:ok, sources} <- snapshot(messages, account, thread),
+         do: {:ok, messages, sources}
+  end
+
+  defp fetch(%{provider: "slack"} = d, scope) do
+    with {:ok, sources} <-
+           SlackSource.fetch(d.user_id, scope["identity"], d.slack_channel, d.provider_thread_id,
+             include_unthreaded?:
+               String.starts_with?(d.slack_channel, "D") and
+                 SlackIngress.only_live_id(d.user_id, d.slack_channel) == d.id
+           ),
+         do: {:ok, sources["messages"], sources}
+  end
+
+  defp fetch(_, _), do: {:error, :unsupported_delegation_source}
+
+  defp route!(%{delegation: %{provider: "slack"} = d, grant: grant}, messages, _sources),
+    do: Enum.each(messages, &SlackIngress.accept!(d.user_id, grant.data["scope"]["team_id"], &1))
+
+  defp route!(%{delegation: d}, messages, sources),
+    do: Enum.each(messages, &Ingress.gmail!(d.user_id, sources["account_id"], &1))
 
   defp source_error(job, reason) do
     # A rate limit is a queue cooldown, not a new model call or a tight retry.

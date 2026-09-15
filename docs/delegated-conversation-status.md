@@ -10,6 +10,16 @@ Delivery recovery uses the existing prepared-action record. A partial response r
 
 The server build passed. Local transport, policy, manifest, and prepared-action recovery checks passed, including persistence of an uncertain timestamp and rejection of a second execution. Commit `13d7a791` deployed successfully through workflow `35023672528`; revision `maraithon-00368-sgf` is ready. No live Slack messages or model calls were made. Production retains the Gmail eval restriction, disabled Slack autonomous sends, and active development spending. Source refresh, durable reply ingress, and the controlled live conversation evals are still outstanding; this adapter alone does not complete the Slack slice.
 
+## Slack reply routing
+
+Slack messages now enter the delegation event log in the same transaction as source ingestion, before webhook acknowledgement. The existing outbox wakes the coordinator after commit. Provider event IDs and message revisions deduplicate webhook retries and repair reads. An edit invalidates an unsent decision; the coordinator rejects the stale action and returns the task to ready. Deletes and new participants require review. A manual message from the operator pauses the task, while an exact Maraithon echo does not become a reply.
+
+Grant preview reads the thread and freezes its known counterparties. Source refresh verifies the bound reader and preserves authors, message IDs, and content revisions. A DM includes unthreaded replies only when it has one live delegation; unrelated threads stay out of the snapshot. The coordinator's command dispatch now admits Slack through the same source, decision, and send path as Gmail.
+
+The server build and focused checks passed. Coverage includes real leased source and sender jobs for the member and assistant bot, a lost response with no repeated write, an edit before send, webhook persistence before acknowledgement, duplicate events, ambiguous DMs, and Gmail sender regression checks. The test runtime helpers are shared with the Gmail evals. These checks use local provider fixtures and make no paid model calls or live Slack sends.
+
+Slack autonomous sends remain disabled. The controlled live workspace and second test account are still needed. Assistant DMs that need a separate bot conversation, Slack-to-calendar scheduling, source pagination beyond the bounded snapshot, and the live round trip remain unfinished.
+
 ## Previously verified
 
 - A real information conversation between `kent@runner.now` and `kent.fenwick@gmail.com` reached Done with the counterparty reply as evidence. Two turns used four Muse calls and cost US$0.001421. [Live evidence](evidence/delegated-conversations/2026-09-15-live-information.json).

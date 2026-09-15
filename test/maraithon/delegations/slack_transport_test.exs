@@ -98,6 +98,13 @@ defmodule Maraithon.Delegations.SlackTransportTest do
     auth(c)
     channel(c)
 
+    Bypass.expect_once(c.bypass, "GET", "/api/conversations.replies", fn conn ->
+      json(conn, %{
+        "ok" => true,
+        "messages" => [%{"ts" => @root, "user" => "UOTHER", "text" => "A question"}]
+      })
+    end)
+
     todo = %Maraithon.Todos.Todo{
       user_id: c.user_id,
       source: "slack",
@@ -117,6 +124,48 @@ defmodule Maraithon.Delegations.SlackTransportTest do
     end)
 
     assert {:error, :slack_identity_changed} = SlackPostMessage.execute(action.payload)
+  end
+
+  test "a single live DM refresh includes unthreaded replies and excludes other threads", c do
+    auth(c)
+    root = %{"ts" => @root, "user" => "U123", "text" => "What colour?"}
+
+    Bypass.expect_once(
+      c.bypass,
+      "GET",
+      "/api/conversations.replies",
+      &json(&1, %{"ok" => true, "messages" => [root]})
+    )
+
+    Bypass.expect_once(c.bypass, "GET", "/api/conversations.history", fn conn ->
+      query = URI.decode_query(conn.query_string)
+      assert query["oldest"] == @root
+      assert query["channel"] == "D123"
+
+      json(conn, %{
+        "ok" => true,
+        "messages" => [
+          root,
+          %{"ts" => @sent, "thread_ts" => nil, "user" => "UOTHER", "text" => "Indigo"},
+          %{
+            "ts" => "1789500020.000001",
+            "thread_ts" => "1789500020.000000",
+            "user" => "UOTHER",
+            "text" => "Other thread"
+          }
+        ]
+      })
+    end)
+
+    author = action(c).payload["_maraithon_slack_author"]
+
+    assert {:ok, snapshot} =
+             Maraithon.Delegations.SlackSource.fetch(c.user_id, author, "D123", @root,
+               include_unthreaded?: true
+             )
+
+    assert Enum.map(snapshot["messages"], & &1["message_id"]) == [@root, @sent]
+    assert List.last(snapshot["messages"])["text_body"] == "Indigo"
   end
 
   test "missing assistant customization scope cannot switch to the member", c do

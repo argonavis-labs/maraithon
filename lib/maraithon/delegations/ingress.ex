@@ -1,5 +1,5 @@
 defmodule Maraithon.Delegations.Ingress do
-  @moduledoc "Route fetched Gmail messages under the same transaction as source persistence."
+  @moduledoc "Route provider messages under the same transaction as source persistence."
   import Ecto.Query
   alias Maraithon.{Delegations, Repo}
   alias Maraithon.Connectors.Gmail
@@ -72,7 +72,12 @@ defmodule Maraithon.Delegations.Ingress do
   end
 
   @doc "Classify by bound account and exact participants, never by a display name."
-  def classify(message, scope, own_action? \\ false) do
+  def classify(message, scope, own_action? \\ false)
+
+  def classify(message, %{"provider" => "slack"} = scope, own_action?),
+    do: Maraithon.Delegations.SlackSource.classify(message, scope, own_action?)
+
+  def classify(message, scope, own_action?) do
     participants = Gmail.message_participants(message)
     senders = for p <- participants, p["role"] == "from", do: p["identifier"]["email"]
     own = String.downcase(scope["identity"]["email"])

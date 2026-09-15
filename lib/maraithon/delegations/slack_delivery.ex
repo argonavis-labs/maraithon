@@ -135,7 +135,7 @@ defmodule Maraithon.Delegations.SlackDelivery do
 
     with true <- observation["channel"] == identity["channel"] and timestamp?(ts),
          {:ok, token} <-
-           SlackIdentity.access_token(action.user_id, reader(author, identity["channel"]), []),
+           SlackIdentity.read_token(action.user_id, author, identity["channel"]),
          {:ok, response} <-
            Slack.get_thread_replies(token, identity["channel"], identity["thread_ts"],
              oldest: ts,
@@ -169,22 +169,6 @@ defmodule Maraithon.Delegations.SlackDelivery do
   end
 
   def message_matches?(_, _, _), do: false
-
-  # Channel thread reads require the bound member's token. DMs can be read by
-  # their actual sending actor. This never changes the send identity.
-  defp reader(author, "D" <> _), do: author
-
-  defp reader(author, _) do
-    member = author["operator_user_id"]
-
-    Map.merge(author, %{
-      "actor" => "as_user",
-      "user_id" => member,
-      "bot_id" => nil,
-      "token_preference" => "user",
-      "provider" => "slack:#{author["team_id"]}:user:#{member}"
-    })
-  end
 
   defp receipt(identity, ts, reconciled),
     do: %{

@@ -7,7 +7,7 @@ defmodule Maraithon.Delegations.Commands do
   def apply(delegation, grant, event, commands, now) do
     Enum.reduce(commands, delegation, fn command, current ->
       cond do
-        match?({:prepare_action, _}, command) and current.provider == "gmail" ->
+        match?({:prepare_action, _}, command) and current.provider in ~w(gmail slack) ->
           Maraithon.Delegations.Execution.prepare!(current, grant, event, now)
 
         command == :transition_todo ->
@@ -22,7 +22,7 @@ defmodule Maraithon.Delegations.Commands do
         match?({:schedule_follow_up, _}, command) ->
           Outcomes.follow_up(current, grant, now)
 
-        command in [:enqueue_sync, :enqueue_decide] and current.provider == "gmail" and
+        command in [:enqueue_sync, :enqueue_decide] and current.provider in ~w(gmail slack) and
           grant.control_state == "active" and Gates.scope_enabled?(current, grant) ->
           if command == :enqueue_sync,
             do: Jobs.start_sync!(current, grant, event, now),

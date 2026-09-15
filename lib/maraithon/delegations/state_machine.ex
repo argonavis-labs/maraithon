@@ -60,14 +60,14 @@ defmodule Maraithon.Delegations.StateMachine do
       "source_gap" ->
         hold(d, "I couldn't verify who sent the latest message.")
 
-      "reply" when d.state in @busy ->
+      classification when classification in ~w(reply source_changed) and d.state in @busy ->
         {%{
            d
            | source_revision: accepted_source_revision(d, event),
              data: Map.put(d.data, "reply_pending", true)
          }, [:supersede_unentered]}
 
-      "reply" ->
+      classification when classification in ~w(reply source_changed) ->
         {%{
            d
            | state: "ready",
