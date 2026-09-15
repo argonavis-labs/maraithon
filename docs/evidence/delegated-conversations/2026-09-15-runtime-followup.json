@@ -1,0 +1,254 @@
+{
+  "recorded_at": "2026-09-15T16:10:47.232443Z",
+  "reader_execution": "maraithon-todo-validation-ltcw2",
+  "serving_revision": "maraithon-00341-l4k",
+  "result": {
+    "to": "2026-09-15T16:10:47.232443Z",
+    "from": "2026-09-15T16:09:44.964251Z",
+    "checkpoints": [
+      [
+        "manifest_agent",
+        "checkpoint_created",
+        1,
+        "2026-09-15T15:51:46.611250"
+      ]
+    ],
+    "partitions": [
+      [
+        "ready",
+        64,
+        64
+      ]
+    ],
+    "termination_requested": [],
+    "recurring": [
+      {
+        "type": "runtime_recurring:privacy_retention",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:10:51.571123Z",
+        "updated_at": "2026-09-15T16:09:51.571123Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:briefing_cron",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:10:55.368592Z",
+        "updated_at": "2026-09-15T16:09:55.368592Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:assistant_run_recovery",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:10:56.598862Z",
+        "updated_at": "2026-09-15T16:09:56.598862Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:telegram_run_reaper",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:10:58.128673Z",
+        "updated_at": "2026-09-15T16:09:58.128673Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:brief_notifier",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:11:08.241579Z",
+        "updated_at": "2026-09-15T16:10:08.241579Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:insight_notifier",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:11:09.507412Z",
+        "updated_at": "2026-09-15T16:10:09.507412Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:privacy_erasure_discovery",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:11:12.973945Z",
+        "updated_at": "2026-09-15T16:10:12.973945Z",
+        "advanced": true
+      },
+      {
+        "type": "runtime_recurring:todo_completion_sweep",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:13:05.871598Z",
+        "updated_at": "2026-09-15T15:58:05.871598Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:source_account_discovery",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:13:07.944507Z",
+        "updated_at": "2026-09-15T15:58:07.944507Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:todo_outcome_learning_recovery",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:13:44.877784Z",
+        "updated_at": "2026-09-15T16:08:44.877784Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:token_refresher",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:13:46.103486Z",
+        "updated_at": "2026-09-15T16:08:46.103486Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:critical_todo_push",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:14:09.661656Z",
+        "updated_at": "2026-09-15T16:09:09.661656Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:delegation_due_sweep",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:14:14.387746Z",
+        "updated_at": "2026-09-15T16:09:14.387746Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:people_network_discovery",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:17:57.762303Z",
+        "updated_at": "2026-09-15T16:07:57.762303Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:proactive_check_in",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:18:02.244724Z",
+        "updated_at": "2026-09-15T16:08:02.244724Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:freshness_sweep",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:28:02.461586Z",
+        "updated_at": "2026-09-15T15:28:02.461586Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:nudge_sweep",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:28:11.111946Z",
+        "updated_at": "2026-09-15T15:58:11.111946Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:watch_renewer",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T16:29:02.641558Z",
+        "updated_at": "2026-09-15T15:59:02.641558Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:llm_cost_monitor",
+        "state": "pending",
+        "scheduled_at": "2026-09-15T18:45:16.455674Z",
+        "updated_at": "2026-09-15T12:45:16.455674Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:dogfood_digest",
+        "state": "pending",
+        "scheduled_at": "2026-09-16T11:30:00.000000Z",
+        "updated_at": "2026-09-15T11:30:00.810586Z",
+        "advanced": false
+      },
+      {
+        "type": "runtime_recurring:staleness_triage_sweep",
+        "state": "pending",
+        "scheduled_at": "2026-09-16T15:28:00.979564Z",
+        "updated_at": "2026-09-15T15:28:00.979564Z",
+        "advanced": false
+      }
+    ],
+    "query_deltas": {
+      "not_visible_to_job_role": {
+        "calls": 168,
+        "ms": 317.40623600035906
+      },
+      "other": {
+        "calls": 9754,
+        "ms": 4953.444400086999
+      },
+      "renewal": {
+        "calls": 105,
+        "ms": 14.219259000004968
+      },
+      "storage_verification": {
+        "calls": 1,
+        "ms": 516.3819199949503
+      }
+    },
+    "effect_proofs": [
+      {
+        "evidence": [
+          [
+            "completed",
+            "2026-09-15T16:02:12.178011"
+          ]
+        ],
+        "event_id": 23074,
+        "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+        "effect_id": "50015c03-b5db-4fd1-8cfa-7d541236c6bc"
+      },
+      {
+        "evidence": [
+          [
+            "completed",
+            "2026-09-15T15:53:43.017795"
+          ]
+        ],
+        "event_id": 23023,
+        "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+        "effect_id": "fa47a10c-8035-4c2f-9966-e7b335b7ace9"
+      },
+      {
+        "evidence": [
+          [
+            "completed",
+            "2026-09-15T15:53:31.084922"
+          ]
+        ],
+        "event_id": 23021,
+        "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+        "effect_id": "ca314580-b82c-4bff-94d3-fb804e2422cc"
+      },
+      {
+        "evidence": [
+          [
+            "completed",
+            "2026-09-15T15:53:10.909284"
+          ]
+        ],
+        "event_id": 23017,
+        "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+        "effect_id": "0bf22a30-b564-4893-a34f-7ef19c30c8b0"
+      },
+      {
+        "evidence": [
+          [
+            "completed",
+            "2026-09-15T15:52:52.085895"
+          ]
+        ],
+        "event_id": 23015,
+        "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+        "effect_id": "1c880e40-0b1b-4caf-b0f9-d044768d4bf3"
+      }
+    ]
+  },
+  "limitations": [
+    "The PostgreSQL query sample covers 62 seconds. Statements hidden from the job role are grouped separately.",
+    "Schedules longer than the sample remained in the future; the one-minute schedules advanced.",
+    "The deployment-time public 503 recovered, but its root cause was not established."
+  ]
+}

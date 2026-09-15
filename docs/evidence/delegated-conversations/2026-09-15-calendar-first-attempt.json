@@ -1,0 +1,25 @@
+{
+  "recorded_at": "2026-09-15T16:11:00Z",
+  "reader_execution": "maraithon-todo-validation-xzp6f",
+  "scenario": "schedule_and_book",
+  "job_id": "4a8ea4da-c7d5-49bd-a02c-222011767c28",
+  "delegation_id": "37268d98-e589-452f-8182-507434c9db52",
+  "live_eval_passed": false,
+  "phase": "failed",
+  "confirmed_model_cost_micro_usd": 831,
+  "outstanding_reservation_micro_usd": 105268,
+  "booked_events": 0,
+  "observations": [
+    "One offer was sent and the counterparty accepted its second time.",
+    "The second turn stopped with rate_limited before any observed provider attempt log; the old path reserved spend before local model admission.",
+    "The offer used assistant wording for the as_user actor and labelled UTC timestamps with America/Toronto.",
+    "The offer was for tomorrow despite the source asking for next week.",
+    "The eval stopped the conversation and completed cleanup."
+  ],
+  "changes_for_next_run": [
+    "Reserve model spend only after local admission. A local cooldown schedules a fresh source read and automatic retry.",
+    "Keep provider-entered failures conservative. An unknown billed response retains its reservation.",
+    "Give the model availability across the date window and require exact local-time labels and actor wording.",
+    "Check the actual recipient offer for local-time labels, actor wording, duration, and next-week dates before sending acceptance."
+  ]
+}
