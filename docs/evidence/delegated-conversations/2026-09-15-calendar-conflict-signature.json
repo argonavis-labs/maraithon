@@ -1,0 +1,15 @@
+{
+  "checked_at": "2026-09-15T17:43:58.142175Z",
+  "revision": "maraithon-00348-8dc",
+  "eval_job_id": "88ad8513-f3de-422c-a6ca-f8fbb5e12a59",
+  "delegation_id": "abc6bc7b-f3e0-4d56-aa75-e91e41357769",
+  "scenario": "accepted_slot_becomes_busy",
+  "result": "held_before_first_send",
+  "agent_emails_sent": 0,
+  "model_calls": 2,
+  "cost_usd": 0.001305,
+  "calendar_cleanup": "completed",
+  "reason": "Policy review incorrectly applied the composition-only instruction to omit the signature to the final body, which already contained the authorized frozen mailbox signature. The offered slots matched computed availability.",
+  "fix_commit": "01172cde",
+  "rerun_required": true
+}

@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending; its diagnosis is in progress. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending; the signature review correction is deploying. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -41,7 +41,7 @@ Commit `6411d152` closes the lower-level Gmail API fallback: ordinary tools excl
 
 Commit `bb66b0dd` excludes assistant accounts from personal chat context, user-memory source inventory, connector prerequisites, and source-health reads. It also fixes an invalid dynamic expression in the shared exclusion query. Ten focused identity and connector checks passed. The connector fixtures now use current tool names instead of removed dotted aliases. The ordinary test database hit a pre-existing catalog mismatch before tests ran; validation used the existing `_delegation_ready_eval` test partition without changing its integrity checks.
 
-Commit `d453c00e` implements the saved first-message copy setting. The grant preview shows the source user's address; the first prepared email freezes that Cc, and later sends omit it unless the user explicitly added a permanent Cc. A manual reply from the source user pauses an assistant conversation and cannot prove the counterparty's outcome. The controlled eval gate also validates the extra recipient. The focused policy, gate, and ingress run passed 47 checks, the preview and isolation run passed nine checks, and the server build passed. Server deployment `35001963170` is in progress. The shared native preview in `2aa70f8e` passed signed Mac and iPhone builds and will ship after the server.
+Commit `d453c00e` implements the saved first-message copy setting. The grant preview shows the source user's address; the first prepared email freezes that Cc, and later sends omit it unless the user explicitly added a permanent Cc. A manual reply from the source user pauses an assistant conversation and cannot prove the counterparty's outcome. The controlled eval gate also validates the extra recipient. The focused policy, gate, and ingress run passed 47 checks, the preview and isolation run passed nine checks, and the server build passed. Server deployment `35001963170` passed, serving revision `maraithon-00349-xpk`. The shared native preview in `2aa70f8e` passed signed Mac and iPhone builds. The signed Mac app is installed; iPhone release `35002441909` passed.
 
 This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes account-specific voice, native settings, and an audit of other direct provider read paths. No October account is connected in production yet.
 
@@ -51,9 +51,15 @@ A malformed message body gets one durable repair attempt, followed by the same i
 
 The next conflict run stopped on an OpenRouter rate limit during its second turn. Four provider entries reported US$0.002103, plus a retained reservation for the rejected request. Calendar cleanup completed. Commit `2c40b9ae` records a capacity outcome and retries from fresh sources after the provider cooldown. Replaying the worker cannot enter another call, and unresolved spend stays reserved. Its 33 focused ingress checks and server build passed. [Rate-limit evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-rate-limit.json).
 
-The following run, job `88ad8513-f3de-422c-a6ca-f8fbb5e12a59`, used revision `maraithon-00348-8dc`. Its first turn reached `policy_review_required` after two Muse calls costing US$0.001305. It sent no agent email, and the fixture stopped the conversation and completed calendar cleanup. The recorded verdict is being inspected before another run.
+The following run, job `88ad8513-f3de-422c-a6ca-f8fbb5e12a59`, used revision `maraithon-00348-8dc`. Its first turn reached `policy_review_required` after two Muse calls costing US$0.001305. It sent no agent email, and the fixture stopped the conversation and completed calendar cleanup. The verdict incorrectly rejected the authorized mailbox signature because it applied the composition instruction to the final signed body. Commit `01172cde` clarifies that review receives the final body, and that the frozen signature is expected. It also removes fixture sign-offs and uses the actual sending mailbox signature for eval and assistant emails, unless the assistant has an explicit override. [Evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-signature.json).
 
 Retention also keeps stopped conversations with unresolved model reservations. Its focused check verifies that cleanup preserves the turn and its reservation, and that settled spend restores eligibility. This is separate from user-requested privacy erasure.
+
+## Personal and work accounts
+
+Commit `ced148f9` adds account categories and an All / Personal / Work filter. The filter uses the task's source account, so changing an account updates existing tasks without model calls or rewriting todos. Unassigned accounts and tasks without a source account appear under All. Provider token refreshes cannot overwrite the category. Account and assistant settings are available to signed-in users without admin access.
+
+Web, Mac, and iPhone use the same saved categories. The native apps share the account settings form and category enum; the iPhone stores the optional category through an additive SwiftData field and refreshes it on sync. The server migration registers the reviewed column and constraint in the durable and privacy catalogs and checks that all other proofs remain valid. The focused domain, signature, policy, eval, settings and API checks passed 29 tests. Server, signed Mac, and iPhone simulator builds passed. Server workflow `35003898249` is deploying; native shipping follows it.
 
 ## Remaining work
 
