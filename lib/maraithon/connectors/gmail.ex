@@ -1088,6 +1088,9 @@ defmodule Maraithon.Connectors.Gmail do
       internet_message_id: get_header(headers, "Message-ID"),
       in_reply_to: get_header(headers, "In-Reply-To"),
       references: get_header(headers, "References"),
+      auto_submitted: get_header(headers, "Auto-Submitted"),
+      return_path: get_header(headers, "Return-Path"),
+      content_type: get_header(headers, "Content-Type"),
       date: get_header(headers, "Date"),
       internal_date: parse_internal_date(message["internalDate"])
     }
@@ -1282,7 +1285,7 @@ defmodule Maraithon.Connectors.Gmail do
   defp present?(value), do: not is_nil(value)
 
   defp get_header(headers, name) do
-    case Enum.find(headers, fn h -> h["name"] == name end) do
+    case Enum.find(headers, fn h -> String.downcase(h["name"] || "") == String.downcase(name) end) do
       %{"value" => value} -> value
       _ -> nil
     end
@@ -1368,11 +1371,16 @@ defmodule Maraithon.Connectors.Gmail do
       when is_binary(user_id) and is_list(messages) and is_list(opts) do
     identity = ingestion_identity(user_id, opts)
 
+    route? =
+      is_integer(identity.connected_account_id) and Maraithon.Delegations.Ingress.active?(user_id)
+
     failure_count =
       Enum.reduce(messages, 0, fn message, failures ->
         case to_observation(message, user_id, identity) do
           {:ok, changeset} ->
-            case Ingest.observe(user_id, changeset) do
+            case with_delegation_ingress(user_id, identity, message, route?, fn ->
+                   Ingest.observe(user_id, changeset)
+                 end) do
               {:ok, _} ->
                 failures
 
@@ -1405,7 +1413,12 @@ defmodule Maraithon.Connectors.Gmail do
             # Some Gmail metadata records legitimately omit address headers.
             # They are still acquired source items for Chief-of-Staff work;
             # they simply cannot produce a relationship observation.
-            failures
+            case with_delegation_ingress(user_id, identity, message, route?, fn ->
+                   {:ok, :skipped}
+                 end) do
+              {:ok, _} -> failures
+              _ -> failures + 1
+            end
         end
       end)
 
@@ -1424,12 +1437,36 @@ defmodule Maraithon.Connectors.Gmail do
             {:error, {:gmail_ingest_flush_failed, reason}}
 
           _result ->
+            if route?, do: Maraithon.Delegations.Outbox.publish_pending(user_id)
             :ok
         end
     end
   end
 
   def ingest_messages(_user_id, _messages, _opts), do: :ok
+
+  defp with_delegation_ingress(_user_id, _identity, _message, false, fun), do: fun.()
+
+  defp with_delegation_ingress(user_id, identity, message, true, fun) do
+    Maraithon.Repo.transaction(fn ->
+      Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(user_id)
+
+      case fun.() do
+        {:error, reason} ->
+          Maraithon.Repo.rollback(reason)
+
+        result ->
+          :ok =
+            Maraithon.Delegations.Ingress.gmail!(user_id, identity.connected_account_id, message)
+
+          result
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      error -> error
+    end
+  end
 
   defp to_observation(message, user_id, identity) when is_map(message) and is_map(identity) do
     case Map.get(message, :message_id) || Map.get(message, "message_id") do

@@ -9,8 +9,16 @@ defmodule Maraithon.Delegations.Commands do
   end
 
   defp execute(d, _, command) when command in [:cancel_unentered, :supersede_unentered] do
-    Actions.supersede_unentered!(d)
-    d
+    entered? = Actions.supersede_unentered!(d)
+
+    if command == :supersede_unentered and not entered? and d.data["reply_pending"] == true,
+      do: %{
+        d
+        | state: "ready",
+          next_wake_at: Maraithon.Runtime.DatabaseClock.now!(),
+          data: Map.delete(d.data, "reply_pending")
+      },
+      else: d
   end
 
   defp execute(d, grant, {:cancel_unentered, _}), do: execute(d, grant, :cancel_unentered)

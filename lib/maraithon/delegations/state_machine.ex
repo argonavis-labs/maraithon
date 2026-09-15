@@ -33,6 +33,9 @@ defmodule Maraithon.Delegations.StateMachine do
     {%{d | state: "ready", data: Map.drop(d.data, ~w(question hold_reason))}, [:enqueue_sync]}
   end
 
+  def apply(d, %{kind: "inbound_message", data: %{"classification" => "stop"}}),
+    do: {%{d | state: "stopped", next_wake_at: nil}, [:cancel_unentered, :notify_user]}
+
   def apply(%{state: "paused"} = d, _event), do: {%{d | next_wake_at: nil}, []}
 
   def apply(d, %{kind: "inbound_message", data: %{"classification" => classification}} = event) do
@@ -45,16 +48,19 @@ defmodule Maraithon.Delegations.StateMachine do
              data: Map.put(d.data, "hold_reason", "human_takeover")
          }, [:cancel_unentered, :notify_user]}
 
-      "stop" ->
-        {%{d | state: "stopped", next_wake_at: nil}, [:cancel_unentered, :notify_user]}
-
       "bounce" ->
         hold(d, "The message could not be delivered.")
+
+      "scope_change" ->
+        hold(d, "Someone new joined the conversation. Please review who I can contact.")
+
+      "source_gap" ->
+        hold(d, "I couldn't verify who sent the latest message.")
 
       "reply" when d.state in @busy ->
         {%{
            d
-           | source_revision: d.source_revision + 1,
+           | source_revision: accepted_source_revision(d, event),
              data: Map.put(d.data, "reply_pending", true)
          }, [:supersede_unentered]}
 
@@ -62,7 +68,7 @@ defmodule Maraithon.Delegations.StateMachine do
         {%{
            d
            | state: "ready",
-             source_revision: d.source_revision + 1,
+             source_revision: accepted_source_revision(d, event),
              reminder_count_cycle: 0,
              next_wake_at: event.occurred_at
          }, [:enqueue_sync]}
@@ -140,6 +146,12 @@ defmodule Maraithon.Delegations.StateMachine do
     do: hold(d, data["question"] || "This conversation needs your attention.")
 
   def apply(d, _event), do: {d, []}
+
+  defp accepted_source_revision(d, %{data: %{"source_revision" => revision}})
+       when is_integer(revision),
+       do: max(d.source_revision, revision)
+
+  defp accepted_source_revision(d, _), do: d.source_revision + 1
 
   defp hold(d, question) do
     {%{d | state: "needs_user", next_wake_at: nil, data: Map.put(d.data, "question", question)},
