@@ -8,7 +8,7 @@ defmodule Maraithon.Delegations.Receipts do
   @result "_maraithon_execution_result"
   @hash "_maraithon_confirmed_payload_sha256"
   @receipt "_maraithon_reconciliation_receipt"
-  @fields ~w(source message_id thread_id event_id channel ts reconciled)
+  @fields ~w(source message_id thread_id event_id team_id channel ts user bot_id text_sha256 reconciled)
 
   def proof_fields, do: @fields
 
@@ -127,7 +127,7 @@ defmodule Maraithon.Delegations.Receipts do
             ),
           else: payload
 
-      Outbox.append!(d, kind, key, payload, %{source_ref: receipt["message_id"]})
+      Outbox.append!(d, kind, key, payload, %{source_ref: receipt["message_id"] || receipt["ts"]})
     end
 
     action
@@ -204,9 +204,22 @@ defmodule Maraithon.Delegations.Receipts do
         _ -> []
       end
 
-    required != [] and is_binary(action.payload[@hash]) and byte_size(action.payload[@hash]) == 64 and
+    slack_matches?(action, receipt) and required != [] and is_binary(action.payload[@hash]) and
+      byte_size(action.payload[@hash]) == 64 and
       Enum.all?(required, fn key ->
         is_binary(receipt[key]) and byte_size(receipt[key]) in 1..500
       end)
   end
+
+  defp slack_matches?(%{action_type: "slack_post"} = action, receipt) do
+    identity = action.payload["_maraithon_reconciliation_identity"]
+
+    is_map(identity) and receipt["team_id"] == identity["team_id"] and
+      receipt["channel"] == identity["channel"] and receipt["thread_id"] == identity["thread_ts"] and
+      receipt["user"] == identity["author"]["user_id"] and
+      receipt["bot_id"] == identity["author"]["bot_id"] and
+      receipt["text_sha256"] == identity["text_sha256"]
+  end
+
+  defp slack_matches?(_, _), do: true
 end

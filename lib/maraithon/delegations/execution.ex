@@ -79,7 +79,7 @@ defmodule Maraithon.Delegations.Execution do
             status: "confirmed",
             confirmed_at: now,
             expires_at: DateTime.add(available_at, 1, :hour),
-            target_type: if(type == "gmail_send", do: "email", else: "calendar"),
+            target_type: target_type(type),
             preview_text: decision["body"] || "Book the agreed meeting."
           })
           |> Repo.insert!()
@@ -217,6 +217,21 @@ defmodule Maraithon.Delegations.Execution do
     end
   end
 
+  defp payload(%{delegation: %{provider: "slack"} = d} = context, %{"kind" => kind} = decision)
+       when kind in ~w(send propose_times) do
+    scope = context.grant.data["scope"]
+
+    {:ok, "slack_post",
+     %{
+       "team_id" => scope["team_id"],
+       "channel" => scope["channel"],
+       "thread_ts" => d.provider_thread_id,
+       "text" => Maraithon.Delegations.SlackDelivery.text(decision["body"]),
+       "todo_id" => d.todo_id,
+       "_maraithon_slack_author" => scope["identity"]
+     }}
+  end
+
   defp payload(context, %{"kind" => kind} = decision) when kind in ~w(send propose_times) do
     d = context.delegation
     scope = context.grant.data["scope"]
@@ -263,6 +278,10 @@ defmodule Maraithon.Delegations.Execution do
   end
 
   defp payload(_, _), do: {:error, :unsupported_delegated_action}
+
+  defp target_type("gmail_send"), do: "email"
+  defp target_type("slack_post"), do: "slack_channel"
+  defp target_type(_), do: "calendar"
 
   defp send_capacity(context, now, excluded_id \\ nil) do
     d = context.delegation

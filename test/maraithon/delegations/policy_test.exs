@@ -12,7 +12,7 @@ defmodule Maraithon.Delegations.PolicyTest do
     }
 
     context = %{
-      delegation: %{kind: "information", data: %{}},
+      delegation: %{kind: "information", provider: "gmail", data: %{}},
       turn: %{source_revision: 0, wake_reason: "reply"},
       grant: %{
         data: %{
@@ -57,6 +57,14 @@ defmodule Maraithon.Delegations.PolicyTest do
       assert (data["context"] || data)["voice"] == voice
       assert system["content"] =~ "style"
     end
+  end
+
+  test "Slack review uses the outgoing message without an email signature", c do
+    context = put_in(c.context, [:delegation, :provider], "slack")
+    context = put_in(context, [:grant, :data, "scope", "identity", "signature"], "Email footer")
+    [_, input] = Policy.messages(context, c.decision)
+    candidate = Jason.decode!(input["content"])["candidate"]
+    assert candidate["body"] == c.decision["body"]
   end
 
   test "policy reviews the exact saved signature and honours the disclosure setting", c do

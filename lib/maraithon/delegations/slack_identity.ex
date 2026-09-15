@@ -1,6 +1,6 @@
 defmodule Maraithon.Delegations.SlackIdentity do
   @moduledoc "Exact Slack author and destination preflight, shared by both delegation actors."
-  alias Maraithon.{OAuth, AssistantIdentities}
+  alias Maraithon.{OAuth, AssistantIdentities, ConnectedAccounts}
   alias Maraithon.OAuth.Slack, as: SlackAPI
   alias Maraithon.Connectors.Slack
   alias Maraithon.Tools.SlackHelpers
@@ -10,7 +10,10 @@ defmodule Maraithon.Delegations.SlackIdentity do
     location = SourceActions.slack_location(todo)
     team = team_id(account.provider)
     installation = OAuth.get_token(todo.user_id, "slack:#{team}")
-    member = installation && installation.metadata["authed_user_id"]
+
+    member =
+      source_member(account.provider) || (installation && installation.metadata["authed_user_id"])
+
     assistant = if actor == "as_assistant", do: AssistantIdentities.get(todo.user_id)
     preference = if actor == "as_assistant", do: "bot", else: "user"
 
@@ -29,6 +32,7 @@ defmodule Maraithon.Delegations.SlackIdentity do
          {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token.access_token),
          true <- auth["team_id"] == team and is_binary(auth["user_id"]),
          true <- valid_author?(auth, actor, member),
+         sender when not is_nil(sender) <- ConnectedAccounts.get(todo.user_id, token.provider),
          {:ok, %{"channel" => channel}} <-
            Slack.get_channel_info(token.access_token, location.channel),
          true <- channel["is_member"] == true or channel["is_im"] == true,
@@ -45,7 +49,11 @@ defmodule Maraithon.Delegations.SlackIdentity do
       identity = %{
         "account_id" => account.id,
         "external_account_id" => account.external_account_id,
+        "source_provider" => account.provider,
         "provider" => token.provider,
+        "sender_account_id" => sender.id,
+        "sender_external_account_id" => sender.external_account_id,
+        "operator_user_id" => member,
         "actor" => actor,
         "team_id" => team,
         "user_id" => auth["user_id"],
@@ -80,6 +88,35 @@ defmodule Maraithon.Delegations.SlackIdentity do
     else
       {:error, _} = error -> error
       _ -> {:error, :slack_identity_or_channel_unavailable}
+    end
+  end
+
+  @doc "Resolve only the frozen author, then verify the credential's live Slack identity."
+  def access_token(user_id, identity, scopes) do
+    with {:ok, token} <-
+           SlackHelpers.resolve_access_token(user_id, identity["team_id"],
+             token_preference: identity["token_preference"],
+             slack_user_id: identity["user_id"],
+             required_scopes: scopes,
+             strict_identity?: true
+           ),
+         true <- token.provider == identity["provider"],
+         {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token.access_token),
+         true <-
+           auth["team_id"] == identity["team_id"] and auth["user_id"] == identity["user_id"],
+         true <- auth["bot_id"] == identity["bot_id"],
+         true <- valid_author?(auth, identity["actor"], identity["user_id"]) do
+      {:ok, token.access_token}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :slack_identity_changed}
+    end
+  end
+
+  defp source_member(provider) do
+    case String.split(provider, ":") do
+      ["slack", _, "user", member] -> member
+      _ -> nil
     end
   end
 

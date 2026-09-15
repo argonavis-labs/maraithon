@@ -851,17 +851,14 @@ defmodule Maraithon.Connectors.Slack do
   Posts a message to a Slack channel.
   """
   def post_message(access_token, channel, text, opts \\ []) do
-    body = %{
-      channel: channel,
-      text: text
-    }
-
     body =
-      if thread_ts = opts[:thread_ts] do
-        Map.put(body, :thread_ts, thread_ts)
-      else
-        body
-      end
+      opts
+      |> Keyword.take(
+        ~w(thread_ts client_msg_id username icon_url reply_broadcast link_names parse mrkdwn unfurl_links unfurl_media)a
+      )
+      |> Enum.reject(fn {_, value} -> is_nil(value) end)
+      |> Map.new()
+      |> Map.merge(%{channel: channel, text: text})
 
     SlackOAuth.api_request(:post, "chat.postMessage", access_token, body)
   end

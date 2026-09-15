@@ -34,6 +34,7 @@ defmodule Maraithon.OAuth.Slack do
     "mpim:read",
     "mpim:write",
     "chat:write",
+    "chat:write.customize",
     "users:read",
     "reactions:read"
   ]

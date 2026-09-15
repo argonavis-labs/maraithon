@@ -63,6 +63,43 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliationTest do
     %{user_id: user_id, account: account, conversation: conversation, run: run}
   end
 
+  @tag :slack_delivery
+  test "an uncertain Slack response keeps its server timestamp without permitting a second entry",
+       ctx do
+    pid = self()
+
+    executor(fn action ->
+      send(pid, {:provider_entered, action.id})
+
+      {:error,
+       %{
+         class: :ambiguous,
+         code: :slack_delivery_not_proven,
+         observation: %{"channel" => "C123", "ts" => "1789500010.000001", "text" => "discard"}
+       }}
+    end)
+
+    action =
+      unknown(ctx, "slack_post", %{
+        "user_id" => ctx.user_id,
+        "team_id" => "T123",
+        "channel" => "C123",
+        "thread_ts" => "1789500000.000001",
+        "text" => "A question"
+      })
+
+    assert_received {:provider_entered, _}
+    assert action.status == "execution_unknown"
+
+    assert reload(action).payload["_maraithon_execution_result"]["slack_observation"] ==
+             %{"channel" => "C123", "ts" => "1789500010.000001"}
+
+    assert {:error, _, _, :manual_reconciliation} =
+             TelegramAssistant.confirm_and_execute(action, durable: true)
+
+    refute_received {:provider_entered, _}
+  end
+
   test "lost Gmail response settles from exact Sent evidence without a second send", ctx do
     action = unknown(ctx)
     assert_received {:provider_entered, _}

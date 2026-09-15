@@ -2622,6 +2622,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
         execute_tool_action("gmail_drafts", payload, "Sent the Gmail draft.", prepared_action)
 
       "slack_post" ->
+        payload =
+          Map.merge(
+            payload,
+            Map.take(
+              frozen_payload,
+              ~w(_maraithon_slack_author _maraithon_reconciliation_identity)
+            )
+          )
+
         execute_tool_action(
           "slack_post_message",
           payload,

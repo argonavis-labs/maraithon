@@ -2,7 +2,15 @@
 
 Updated September 15, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
-## Verified
+## Slack delivery adapter
+
+The delegated Slack sender now freezes the exact member or bot, workspace, channel, thread, and message hash. It verifies the live credential before posting, preserves October's configured name and icon, and sends mentions as literal text. The source member takes precedence over the person who installed the Slack app. Both the OAuth request and committed app manifest include `chat:write.customize`; existing installations still need to grant that scope before October can send.
+
+Delivery recovery uses the existing prepared-action record. A partial response retains only Slack's channel and server timestamp, then a bounded thread read must match the author, thread, and content. A lost response stays uncertain and cannot trigger another send. This follows Slack's warning that `internal_error` and `fatal_error` can follow a partially successful operation. [Slack posting reference](https://docs.slack.dev/reference/methods/chat.postMessage/).
+
+The server build passed. Local transport, policy, manifest, and prepared-action recovery checks passed, including persistence of an uncertain timestamp and rejection of a second execution. No live Slack messages or model calls were made. Slack autonomous sends remain disabled. Source refresh, durable reply ingress, and the controlled live conversation evals are still outstanding; this adapter alone does not complete the Slack slice.
+
+## Previously verified
 
 - A real information conversation between `kent@runner.now` and `kent.fenwick@gmail.com` reached Done with the counterparty reply as evidence. Two turns used four Muse calls and cost US$0.001421. [Live evidence](evidence/delegated-conversations/2026-09-15-live-information.json).
 - Lost Gmail send responses are reconciled through an exact provider receipt or the original Message-ID inside the frozen thread. Ambiguous delivery holds; it does not resend.

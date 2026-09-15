@@ -2428,7 +2428,10 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp checkpoint_prepared_action_unknown_locked(action, payload, reason) do
-    error_checkpoint = prepared_execution_error_checkpoint(reason, "execution_unknown")
+    error_checkpoint =
+      reason
+      |> prepared_execution_error_checkpoint("execution_unknown")
+      |> Map.merge(ActionReconciliation.observation_hint(action, reason))
 
     unknown_payload =
       payload

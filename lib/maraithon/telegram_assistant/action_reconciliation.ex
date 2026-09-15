@@ -13,13 +13,21 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   alias Maraithon.TodoBrowser.Command
   alias Maraithon.Tools.GmailApiHelpers
   alias Maraithon.Connectors.GoogleCalendar
+  alias Maraithon.Delegations.SlackDelivery
 
   @identity_key "_maraithon_reconciliation_identity"
   @job_type "assistant_action_reconcile"
   @types ~w(gmail_send gmail_draft_send calendar_create_event calendar_update_event calendar_cancel_event browser_interact)
   @max_checks 12
 
+  def supported?(%{action_type: "slack_post", authorization_kind: "delegation_grant"}), do: true
   def supported?(action), do: action.action_type in @types
+
+  def freeze_identity(
+        %{action_type: "slack_post", authorization_kind: "delegation_grant"} = action,
+        payload
+      ),
+      do: SlackDelivery.freeze(action, payload)
 
   def freeze_identity(action, payload) do
     if supported?(action) do
@@ -160,6 +168,9 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
         "browser_interact" ->
           observe_browser(action)
 
+        "slack_post" ->
+          SlackDelivery.observe(action, identity)
+
         type
         when type in ["calendar_create_event", "calendar_update_event", "calendar_cancel_event"] ->
           observe_calendar(action)
@@ -188,6 +199,11 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   end
 
   def identified?(action), do: valid_identity(action, action.payload[@identity_key]) == :ok
+
+  def observation_hint(%{action_type: "slack_post"} = action, reason),
+    do: SlackDelivery.observation_hint(action, reason)
+
+  def observation_hint(_, _), do: %{}
 
   defp provider(%{action_type: "gmail_send"}, payload) do
     # The direct sender uses `account`, whereas GmailDrafts accepts `provider`.
@@ -274,6 +290,12 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
 
   defp mail_identity(_, _), do: nil
 
+  defp valid_identity(%{action_type: "slack_post"} = action, identity) do
+    if SlackDelivery.valid?(action, identity),
+      do: :ok,
+      else: {:pending, :reconciliation_identity_unavailable}
+  end
+
   defp valid_identity(action, %{"version" => 1, "action_id" => id, "kind" => kind})
        when id == action.id and kind == action.action_type,
        do: :ok
@@ -281,6 +303,9 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   defp valid_identity(_, _), do: {:pending, :reconciliation_identity_unavailable}
 
   defp same_account?(%{action_type: "browser_interact"}, _), do: :ok
+
+  defp same_account?(%{action_type: "slack_post", user_id: user_id}, identity),
+    do: SlackDelivery.same_account?(user_id, identity)
 
   defp same_account?(action, identity) do
     account_id = identity["account_id"]

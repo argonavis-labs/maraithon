@@ -7,6 +7,9 @@ defmodule Maraithon.Tools.SlackPostMessage do
   alias Maraithon.Tools.ActionHelpers
   alias Maraithon.Tools.SlackHelpers
 
+  def execute(%{"_maraithon_reconciliation_identity" => identity} = args) when is_map(identity),
+    do: Maraithon.Delegations.SlackDelivery.send(args, identity)
+
   def execute(args) when is_map(args) do
     with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id"),
          {:ok, team_id} <- ActionHelpers.required_string(args, "team_id"),
