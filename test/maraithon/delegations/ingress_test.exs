@@ -183,6 +183,62 @@ defmodule Maraithon.Delegations.IngressTest do
     assert next.state == "stopped"
   end
 
+  test "turn, bound run and sync job are admitted once in the same transaction", c do
+    alias Maraithon.Delegations.{Binding, Jobs, Turn}
+    alias Maraithon.Runtime.{BackgroundJob, PeriodicJobs}
+    alias Maraithon.TelegramAssistant.Run
+    grant = Maraithon.Delegations.current_grant(c.delegation)
+    event = %{id: Ecto.UUID.generate(), kind: "user_action"}
+
+    assert {:ok, job} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+               now = Maraithon.Runtime.DatabaseClock.now!()
+               next = Jobs.start_sync!(c.delegation, grant, event, now)
+               assert next.state == "syncing"
+               assert Jobs.start_sync!(next, grant, event, now).state == "syncing"
+               [turn] = Repo.all(Turn) |> Enum.map(&Turn.hydrate/1)
+               [run] = Repo.all(Run) |> Enum.map(&Run.hydrate_payloads/1)
+               [job] = Repo.all(BackgroundJob) |> Enum.map(&BackgroundJob.hydrate_payloads/1)
+               assert turn.run_id == run.id
+               assert job.payload == run.prompt_snapshot[Binding.key()]
+               assert job.queue == "runtime_provider_account"
+
+               assert job.partition_key ==
+                        PeriodicJobs.provider_partition(c.user_id, c.account.provider)
+
+               assert job.rate_limit_key == "google"
+               assert run.surface == "delegation"
+               assert run.conversation_id == nil
+               assert turn.model_calls == 0
+
+               job
+             end)
+
+    assert {:error, :task_authority_required} =
+             Jobs.transaction(job, fn _ -> flunk("unleased worker entered") end)
+  end
+
+  test "a failed admission leaves no turn, run, or job behind", c do
+    grant = Maraithon.Delegations.current_grant(c.delegation)
+
+    assert {:error, :interrupted} =
+             Repo.transaction(fn ->
+               Maraithon.Delegations.Jobs.start_sync!(
+                 c.delegation,
+                 grant,
+                 %{id: Ecto.UUID.generate(), kind: "timer_due"},
+                 DateTime.utc_now()
+               )
+
+               Repo.rollback(:interrupted)
+             end)
+
+    assert Repo.aggregate(Maraithon.Delegations.Turn, :count) == 0
+    assert Repo.aggregate(Maraithon.TelegramAssistant.Run, :count) == 0
+    assert Repo.aggregate(Maraithon.Runtime.BackgroundJob, :count) == 0
+  end
+
   defp route(c, message) do
     assert {:ok, :ok} =
              Repo.transaction(fn ->

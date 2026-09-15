@@ -1,12 +1,17 @@
 defmodule Maraithon.Delegations.Commands do
   @moduledoc "Admission for reducer commands. The identity/control slice cannot dispatch external work."
-  alias Maraithon.Delegations.{Actions, Gates}
+  alias Maraithon.Delegations.{Actions, Gates, Jobs}
 
   def execution_ready?, do: false
 
-  def apply(delegation, grant, _event, commands, _now) do
+  def apply(delegation, grant, event, commands, now) do
     Enum.reduce(commands, delegation, fn command, current ->
-      execute(current, grant, command)
+      if command == :enqueue_sync and current.provider == "gmail" and
+           grant.control_state == "active" and Gates.sends_enabled?(current.user_id, "gmail") do
+        Jobs.start_sync!(current, grant, event, now)
+      else
+        execute(current, grant, command)
+      end
     end)
   end
 

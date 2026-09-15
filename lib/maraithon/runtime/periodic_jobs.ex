@@ -2609,7 +2609,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp schedule_summary({:error, _reason} = error, _schedule, _discovered), do: error
 
-  defp provider_partition(user_id, provider),
+  @doc false
+  def provider_partition(user_id, provider),
     do: hashed_key("provider-account", "#{user_id}:#{provider}")
 
   defp source_account_partition(%ConnectedAccount{} = account),

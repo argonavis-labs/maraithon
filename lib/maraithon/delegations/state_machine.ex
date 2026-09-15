@@ -155,6 +155,6 @@ defmodule Maraithon.Delegations.StateMachine do
 
   defp hold(d, question) do
     {%{d | state: "needs_user", next_wake_at: nil, data: Map.put(d.data, "question", question)},
-     [:transition_todo, :notify_user]}
+     [:cancel_unentered, :transition_todo, :notify_user]}
   end
 end
