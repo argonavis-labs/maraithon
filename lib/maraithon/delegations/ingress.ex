@@ -47,7 +47,8 @@ defmodule Maraithon.Delegations.Ingress do
       # Arrival invalidates unsent decisions before a cursor can advance. The
       # coordinator may be asleep or on another node; its mailbox isn't authority.
       d =
-        if classification in ~w(reply human_send stop bounce scope_change source_gap) do
+        if Delegation.live?(d) and
+             classification in ~w(reply human_send stop bounce scope_change source_gap) do
           d |> Delegation.changeset(%{source_revision: d.source_revision + 1}) |> Repo.update!()
         else
           d

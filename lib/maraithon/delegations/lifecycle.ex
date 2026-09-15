@@ -17,8 +17,7 @@ defmodule Maraithon.Delegations.Lifecycle do
       on: g.agent_id == a.id,
       where:
         a.behavior == "delegation_coordinator" and a.install_status == "enabled" and
-          a.status in ~w(running degraded) and a.inserted_at <= ^cutoff and
-          (is_nil(a.started_at) or a.started_at <= ^cutoff),
+          a.status in ~w(running degraded) and a.inserted_at <= ^cutoff,
       where: is_nil(g.agent_id) or (not g.tripped and not g.needs_recovery),
       where:
         not exists(

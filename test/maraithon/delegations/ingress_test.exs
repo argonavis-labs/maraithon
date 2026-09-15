@@ -172,6 +172,9 @@ defmodule Maraithon.Delegations.IngressTest do
     assert idle_coordinator?(agent.id, now)
     refute idle_coordinator?(agent.id, DateTime.add(now, -2, :day))
 
+    agent |> Ecto.Changeset.change(started_at: now) |> Repo.update!()
+    assert idle_coordinator?(agent.id, now)
+
     for state <- ~w(waiting_reply paused needs_user waiting_capacity) do
       d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
       d |> Delegation.changeset(%{state: state}) |> Repo.update!()
@@ -512,9 +515,12 @@ defmodule Maraithon.Delegations.IngressTest do
   end
 
   test "a late reply is retained without reopening a stopped conversation", c do
-    c.delegation |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
+    stopped = c.delegation |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
     route(c, c.message)
-    assert Repo.get!(Delegation, c.delegation.id).state == "stopped"
+    current = Repo.get!(Delegation, c.delegation.id)
+    assert current.state == "stopped"
+    assert current.source_revision == stopped.source_revision
+    assert current.updated_at == stopped.updated_at
     [event] = Repo.all(Event)
     assert event.wake_state == "consumed"
   end
