@@ -1,0 +1,32 @@
+{
+  "recorded_at": "2026-09-15T17:05:35Z",
+  "reader_execution": "maraithon-todo-validation-749vd",
+  "serving_revision_at_start": "maraithon-00345-lnn",
+  "scenario": "accepted_slot_becomes_busy",
+  "job_id": "f4dac5ff-fefc-4296-9742-6955a3a33a7d",
+  "delegation_id": "93a0e2bb-dcc5-416d-91ed-8fd1c5ed478a",
+  "todo_id": "54e5e6b5-2cf4-4e75-89fa-b8557f4984c6",
+  "live_eval_passed": false,
+  "provider_attempts": 4,
+  "reported_cost_micro_usd": 2103,
+  "unsettled_rate_limited_attempts": 1,
+  "agent_messages": 1,
+  "calendar_cleanup": "completed",
+  "findings": [
+    "The first turn settled two model calls and sent three time options.",
+    "The second turn recorded two provider entries and 771 micro-USD before an OpenRouter rate-limit response held the conversation.",
+    "The provider returned a 60-second cooldown. The fixture stopped the held conversation and completed calendar cleanup.",
+    "The reported cost excludes the unresolved reservation for the rate-limited attempt."
+  ],
+  "correction": [
+    "Persist a capacity outcome on a definite rate-limit response and schedule a fresh-source retry after the cooldown.",
+    "Replaying the completed worker returns its capacity outcome without another provider call.",
+    "Keep the original model entry and its reservation without a billing receipt."
+  ],
+  "validation": {
+    "focused_ingress_checks": 33,
+    "failures": 0,
+    "server_build": "passed",
+    "live_rerun": "pending"
+  }
+}

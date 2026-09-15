@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting fix has shipped and its live rerun is underway. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting fix shipped; its rerun exposed a provider cooldown that incorrectly required user review. That recovery is fixed and awaiting deployment. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -33,7 +33,7 @@ Commit `ce5a1233` binds OAuth initiation and callbacks to the authenticated user
 
 Commit `6fa6f93a` carries the assistant purpose in signed Google OAuth state and marks the connected account before checking its sending address or creating an identity. Pending setup, reconnects, and previous assistant accounts remain excluded from personal discovery, Gmail and voice reads, user identity, and CRM ingestion. Existing personal accounts cannot be silently converted through the assistant connection link. Cached user identities consult the current exclusion before returning handles. Ordinary Gmail ingestion still routes delegated replies.
 
-The focused isolation, scope, Gmail, ingress, and OAuth run passed 46 checks. Seven identity checks passed after the final primary-address validation. The server build passed. Workflow `34998552598` is deploying this change. Calendar and travel fallback reads now use the same exclusion in commit `0d865e4b`; its seven identity checks and server build passed, and deployment is pending.
+The focused isolation, scope, Gmail, ingress, and OAuth run passed 46 checks. Seven identity checks passed after the final primary-address validation. The server build passed. Workflow `34998552598` deployed this change. Calendar and travel fallback reads now use the same exclusion in commit `0d865e4b`; its seven identity checks and server build passed, and deployment is pending.
 
 This completes the central isolation path, not the full assistant slice. The remaining work includes signatures, account-specific voice, native settings, and an audit of other direct provider read paths. No October account is connected in production yet.
 
@@ -41,11 +41,13 @@ This completes the central isolation path, not the full assistant slice. The rem
 
 A malformed message body gets one durable repair attempt, followed by the same independent policy review. A second malformed response holds. Early conflict detection now counts a changed offer toward the single-reoffer limit. The focused admission, policy, and calendar run passed 50 checks.
 
+The next conflict run stopped on an OpenRouter rate limit during its second turn. Four provider entries reported US$0.002103, plus a retained reservation for the rejected request. Calendar cleanup completed. Commit `2c40b9ae` records a capacity outcome and retries from fresh sources after the provider cooldown. Replaying the worker cannot enter another call, and unresolved spend stays reserved. Its 33 focused ingress checks and server build passed. [Rate-limit evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-rate-limit.json).
+
 Retention also keeps stopped conversations with unresolved model reservations. Its focused check verifies that cleanup preserves the turn and its reservation, and that settled spend restores eligibility. This is separate from user-requested privacy erasure.
 
 ## Remaining work
 
-1. Finish the busy-slot conflict rerun, job `f4dac5ff-fefc-4296-9742-6955a3a33a7d`, started on revision `maraithon-00345-lnn`. The first conflict run noticed the busy slot but omitted the replacement email body, so validation held before another send. Three calls cost US$0.002116; cleanup completed. [Failure evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-first-attempt.json). The regular scheduling eval has passed.
+1. Rerun the busy-slot conflict scenario after the provider cooldown fix deploys. Both failed fixtures completed cleanup. The regular scheduling eval has passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. The production account check found no assistant identity and no connected `october@ewakened.com` account. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.
