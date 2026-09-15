@@ -9,6 +9,15 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   @gmail_api_base "https://gmail.googleapis.com/gmail/v1"
   @people_api_base "https://people.googleapis.com/v1"
 
+  @doc "Read a verified account for identity setup or frozen-action reconciliation. No fallback."
+  def get_for_account(user_id, account_id, path) do
+    with {:ok, account} <- Maraithon.Connectors.GoogleAccount.resolve(user_id, account_id),
+         {:ok, access_token} <-
+           OAuth.get_valid_access_token(user_id, account.provider, exact?: true) do
+      Google.api_request(:get, "#{gmail_api_base_url()}#{path}", access_token)
+    end
+  end
+
   def request(args, method, path, body \\ nil, extra_headers \\ [])
       when is_map(args) and method in [:get, :post, :put, :patch, :delete] and is_binary(path) do
     with {:ok, _user_id, _provider, access_token} <- resolve_access(args) do
@@ -36,16 +45,26 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   end
 
   def resolve_access(args) when is_map(args) do
-    with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id") do
-      provider = provider_from_args(args)
-
-      case OAuth.get_valid_access_token(user_id, provider, exact?: args["exact_account"] == true) do
-        {:ok, access_token} ->
-          {:ok, user_id, provider, access_token}
-
-        other ->
-          other
-      end
+    with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id"),
+         requested = provider_from_args(args),
+         candidates =
+           Maraithon.AssistantIdentities.user_google_providers(
+             [requested],
+             user_id
+           ),
+         [provider | _] <-
+           if(args["exact_account"] == true,
+             do: Enum.filter(candidates, &(&1 == requested)),
+             else: candidates
+           ),
+         {:ok, access_token} <-
+           OAuth.get_valid_access_token(user_id, provider,
+             exact?: args["exact_account"] == true or provider != "google"
+           ) do
+      {:ok, user_id, provider, access_token}
+    else
+      [] -> {:error, :assistant_account_excluded}
+      error -> error
     end
   end
 

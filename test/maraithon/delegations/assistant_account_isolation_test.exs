@@ -7,6 +7,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
   alias Maraithon.OAuth.Google
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Tools.GmailHelpers
+  alias Maraithon.Tools.GmailApiHelpers
   alias Maraithon.Tools.GoogleCalendarHelpers
 
   setup do
@@ -142,6 +143,25 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     assert {:error, :no_token} =
              GoogleCalendarHelpers.list_events(user, provider: assistant.provider)
 
+    assert {:error, :assistant_account_excluded} =
+             GmailApiHelpers.resolve_access(%{
+               "user_id" => user,
+               "provider" => assistant.provider,
+               "exact_account" => true
+             })
+
+    assert {:ok, ^user, provider, "isolation-test-token"} =
+             GmailApiHelpers.resolve_access(%{"user_id" => user})
+
+    assert provider == own.provider
+
+    assert {:error, _} =
+             GmailApiHelpers.resolve_access(%{
+               "user_id" => user,
+               "provider" => "google",
+               "exact_account" => true
+             })
+
     assert {:error, :assistant_account_excluded} = SourceAccountDiscovery.acquire(assistant, nil)
 
     assert {:error, :assistant_account_excluded} =
@@ -200,6 +220,9 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     assert {:error, :no_token} = GmailHelpers.list_messages(user, query: "from:me")
     assert {:error, :no_token} = GmailHelpers.list_messages(user, provider: "google")
     assert {:error, :no_token} = GoogleCalendarHelpers.list_events(user)
+
+    assert {:error, :assistant_account_excluded} =
+             GmailApiHelpers.resolve_access(%{"user_id" => user})
   end
 
   test "an identity cannot bind another user's account and an alias keeps the user's mailbox", %{
@@ -208,6 +231,9 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     other = "other-#{Ecto.UUID.generate()}@example.invalid"
     {:ok, _} = Accounts.get_or_create_user_by_email(other)
     foreign = account(other, other)
+
+    assert {:error, :invalid_google_account} =
+             GmailApiHelpers.get_for_account(user, foreign.id, "/users/me/messages")
 
     assert {:error, :google_account_not_connected} =
              AssistantIdentities.put(user, %{

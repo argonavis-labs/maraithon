@@ -188,7 +188,7 @@ defmodule Maraithon.AssistantIdentities do
            Repo.get_by(ConnectedAccount, id: account_id, user_id: user_id),
          true <- account.provider == "google" or String.starts_with?(account.provider, "google:"),
          {:ok, %{"sendAs" => aliases}} <-
-           GmailApiHelpers.request(api_args(account), :get, "/users/me/settings/sendAs") do
+           GmailApiHelpers.get_for_account(user_id, account.id, "/users/me/settings/sendAs") do
       {:ok,
        Enum.filter(aliases, &(&1["isPrimary"] == true or &1["verificationStatus"] == "accepted"))}
     else
@@ -233,9 +233,6 @@ defmodule Maraithon.AssistantIdentities do
       _ -> {:error, :sending_identity_unavailable}
     end
   end
-
-  def api_args(%ConnectedAccount{} = account),
-    do: %{"user_id" => account.user_id, "provider" => account.provider, "exact_account" => true}
 
   defp sender_alias(aliases, nil), do: Enum.find(aliases, &(&1["isPrimary"] == true))
 

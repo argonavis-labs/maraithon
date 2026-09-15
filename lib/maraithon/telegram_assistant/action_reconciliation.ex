@@ -299,6 +299,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
       args = %{
         "user_id" => action.user_id,
         "provider" => identity["provider"],
+        "account_id" => identity["account_id"],
         "exact_account" => true
       }
 
@@ -557,7 +558,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   defp gmail_request(args, path) do
     case config()[:gmail_request] do
       fun when is_function(fun, 2) -> fun.(args, path)
-      _ -> GmailApiHelpers.request(args, :get, path)
+      _ -> GmailApiHelpers.get_for_account(args["user_id"], args["account_id"], path)
     end
   end
 
