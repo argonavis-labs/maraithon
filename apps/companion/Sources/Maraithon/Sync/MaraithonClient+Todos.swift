@@ -4,6 +4,15 @@ import Foundation
 import AssistantProgressKit
 
 extension MaraithonClient {
+    func delegationRequest(path: String, input: TodoDelegation.Request?) async throws -> TodoDelegation.Response {
+        let request = try await makeRequest(method: input == nil ? "GET" : "POST",
+            path: "/api/v1/companion/\(path)", body: try input.map { try JSONEncoder().encode($0) },
+            extraHeaders: ["Content-Type": "application/json"])
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(TodoDelegation.Response.self, from: data)
+    }
+
     func transitionTodo(id: String, change: TodoWorkflowChange) async throws -> CompanionTodoDetailsResponse {
         let request = try await makeRequest(method: "POST", path: "/api/v1/companion/todos/\(id)/workflow",
             body: try JSONEncoder().encode(change), extraHeaders: ["Content-Type": "application/json"])

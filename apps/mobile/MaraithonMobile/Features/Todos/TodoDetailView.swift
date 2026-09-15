@@ -154,14 +154,34 @@ struct TodoDetailView: View {
     }
 
     private func workspaceHeader(send: @escaping (String) -> Void, disabled: Bool) -> some View {
-        TodoWorkspaceHeader(
-            todo: todo, summary: summaryText,
-            actionsDisabled: disabled, isUpdating: isPerformingAction,
-            send: send, complete: { Task { await performAction("done") } },
-            reopen: { Task { await reopenTodo() } },
-            showPeople: { showsContext = true },
-            showWorkflow: { showsWorkflow = true }, sourceSend: sendReply
-        )
+        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+            TodoWorkspaceHeader(
+                todo: todo, summary: summaryText,
+                actionsDisabled: disabled, isUpdating: isPerformingAction,
+                send: send, complete: { Task { await performAction("done") } },
+                reopen: { Task { await reopenTodo() } },
+                showPeople: { showsContext = true },
+                showWorkflow: { showsWorkflow = true }, sourceSend: sendReply
+            )
+            TodoDelegationPanel(todoID: todo.id.uuidString, summary: todo.delegation,
+                canDelegate: todo.canDelegate == true, request: delegationRequest,
+                refreshTodo: refreshDelegatedTodo)
+                .id(todo.id)
+        }
+    }
+
+    private func delegationRequest(path: String, input: TodoDelegation.Request?) async throws -> TodoDelegation.Response {
+        guard let token = sessionStore.user?.sessionToken else { throw MobileAPIError.unauthorized }
+        return try await MobileAPIClient().delegationRequest(sessionToken: token, path: path, input: input)
+    }
+
+    @MainActor private func refreshDelegatedTodo() async {
+        guard let token = sessionStore.user?.sessionToken else { return }
+        do {
+            let remote = try await MobileAPIClient().getTodo(sessionToken: token, id: todo.id)
+            ProductionDataSync.apply(remote, to: todo)
+            try modelContext.save()
+        } catch { actionErrorMessage = MobileErrorCopy.message(for: error) }
     }
 
     private var contextPanel: some View {

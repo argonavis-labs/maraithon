@@ -1,6 +1,7 @@
 /// The work column: Maraithon's read, the next action (at most two cards, one
 /// open), and the people involved as chips that ask about them in the chat.
 import SwiftUI
+import AssistantProgressKit
 
 struct TodoWorkColumn: View {
     let store: TodoConversationStore
@@ -15,6 +16,10 @@ struct TodoWorkColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
             read
+            TodoDelegationPanel(todoID: todo.id, summary: todo.delegation,
+                canDelegate: todo.canDelegate == true, request: store.delegationRequest,
+                refreshTodo: { await store.refreshTodo() })
+                .id(todo.id)
             if todo.canMarkDone { nextAction }
             people
         }

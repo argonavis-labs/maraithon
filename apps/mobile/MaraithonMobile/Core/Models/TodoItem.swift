@@ -39,6 +39,8 @@ final class TodoItem {
     var sourceOccurredAt: Date?
     var todoBriefData: Data?
     var workflowData: Data?
+    var delegationData: Data?
+    var canDelegate: Bool?
     var sourceSystem: String?
     var sourceProvider: String?
     var sourceProviderLabel: String?
@@ -55,6 +57,11 @@ final class TodoItem {
     var workflow: TodoWorkflow? {
         guard let workflowData else { return nil }
         return try? JSONDecoder().decode(TodoWorkflow.self, from: workflowData)
+    }
+
+    var delegation: TodoDelegation? {
+        guard let delegationData else { return nil }
+        return try? JSONDecoder().decode(TodoDelegation.self, from: delegationData)
     }
 
     var priority: TodoPriority {
@@ -120,6 +127,8 @@ final class TodoItem {
         sourceOccurredAt: Date? = nil,
         todoBriefData: Data? = nil,
         workflowData: Data? = nil,
+        delegationData: Data? = nil,
+        canDelegate: Bool? = nil,
         sourceSystem: String? = nil,
         sourceProvider: String? = nil,
         sourceProviderLabel: String? = nil,
@@ -163,6 +172,8 @@ final class TodoItem {
         self.sourceOccurredAt = sourceOccurredAt
         self.todoBriefData = todoBriefData
         self.workflowData = workflowData
+        self.delegationData = delegationData
+        self.canDelegate = canDelegate
         self.sourceSystem = sourceSystem
         self.sourceProvider = sourceProvider
         self.sourceProviderLabel = sourceProviderLabel

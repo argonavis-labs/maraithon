@@ -193,6 +193,8 @@ enum ProductionDataSync {
         let sourceOccurredAt: Date?
         let todoBriefData: Data?
         let workflowData: Data?
+        let delegationData: Data?
+        let canDelegate: Bool?
         let hasActionCardField: Bool
         let relatedPersonIDs: [UUID]
         let sourceSystem: String?
@@ -259,6 +261,8 @@ enum ProductionDataSync {
             sourceOccurredAt: remoteTodo.sourceOccurredAt,
             todoBriefData: encodedBrief(remoteTodo.brief),
             workflowData: remoteTodo.workflow.flatMap { try? JSONEncoder().encode($0) },
+            delegationData: remoteTodo.delegation.flatMap { try? JSONEncoder().encode($0) },
+            canDelegate: remoteTodo.canDelegate,
             hasActionCardField: remoteTodo.hasActionCardField,
             relatedPersonIDs: remoteTodo.relatedPeople.compactMap { UUID(uuidString: $0.id) },
             sourceSystem: cleanedText(remoteTodo.source),
@@ -335,6 +339,8 @@ enum ProductionDataSync {
         todo.sourceOccurredAt = prepared.sourceOccurredAt
         todo.todoBriefData = prepared.todoBriefData
         todo.workflowData = prepared.workflowData
+        todo.delegationData = prepared.delegationData
+        todo.canDelegate = prepared.canDelegate
         if let contactsByID {
             todo.contact = relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: contactsByID)
         }
@@ -514,6 +520,8 @@ enum ProductionDataSync {
             sourceOccurredAt: prepared.sourceOccurredAt,
             todoBriefData: prepared.todoBriefData,
             workflowData: prepared.workflowData,
+            delegationData: prepared.delegationData,
+            canDelegate: prepared.canDelegate,
             sourceSystem: prepared.sourceSystem,
             sourceProvider: prepared.card.sourceProvider,
             sourceProviderLabel: prepared.card.sourceProviderLabel,
