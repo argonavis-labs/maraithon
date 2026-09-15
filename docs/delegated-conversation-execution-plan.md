@@ -2,7 +2,7 @@
 
 Implementation plan. Revised September 15, 2026. Supersedes the September 14 spike (`8bbb0c48`).
 
-Source baseline: `8bbb0c48` on `main`. Status: proposed, ready to implement. This revision inspected code and provider documentation. It did not send messages, change production, or measure cost.
+Source baseline: `8bbb0c48` on `main`. Original plan status: proposed at the baseline. Implementation is now in progress. The baseline review did not send messages, change production, or measure cost; subsequent implementation and live evidence are tracked in [the implementation status](delegated-conversation-status.md).
 
 ## Goal
 
