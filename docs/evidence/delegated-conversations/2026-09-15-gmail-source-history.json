@@ -1,0 +1,101 @@
+{
+  "recorded_at": "2026-09-15",
+  "scope": "Incremental Gmail source acquisition with durable ingress progress. Live Slack eval deferred by Kent. This does not establish months-long end-to-end continuity.",
+  "deployments": [
+    {
+      "commit": "de752a8d3ac7e2684bc08b477379f1652decbc9c",
+      "workflow": 35031069439,
+      "conclusion": "success",
+      "revision": "maraithon-00374-r5k"
+    },
+    {
+      "commit": "7a820edf2c2501f5411ea378d9f0b444fb14c9d2",
+      "workflow": 35031427439,
+      "conclusion": "success",
+      "revision": "maraithon-00375-2s5"
+    }
+  ],
+  "verification": {
+    "server_build": "passed",
+    "focused_unique_checks_passed": 35,
+    "groups": {
+      "gmail_source_and_policy": 24,
+      "gmail_send_and_reconciliation": 4,
+      "local_slack_sender_regression": 7
+    },
+    "metadata_reader_reuse_source_checks_passed": 5,
+    "synthetic_history": {
+      "messages": 180,
+      "days": 180,
+      "leased_workers": 23,
+      "initial_metadata_reads": 23,
+      "initial_body_reads": 6,
+      "unchanged_next_turn_metadata_reads": 1,
+      "unchanged_next_turn_body_reads": 0,
+      "snapshot_below_bytes": 8000,
+      "late_reply_invalidated_pending_send": true,
+      "reply_revision_advanced_once": true,
+      "model_calls": 0
+    },
+    "fixture_limits": "One-second retries are advanced immediately, with an accelerated local tenant admission rate. These checks exercise separate leased workers, not a whole-BEAM crash or provider thread rollover."
+  },
+  "production_check": {
+    "execution": "maraithon-todo-validation-4lk4w",
+    "image_revision": "maraithon-00374-r5k",
+    "execution_succeeded": true,
+    "samples": [
+      {
+        "status": "ok",
+        "actor": "as_user",
+        "delegation_id": "9304a220-2dce-4870-8d6a-60fdc02b5124",
+        "account_id": 2,
+        "indexed_messages": 5,
+        "all_dates_present": true,
+        "metadata_has_no_bodies": true,
+        "pending_ingress_messages": 0,
+        "complete_snapshot": true,
+        "recent_bodies": 5,
+        "snapshot_bytes": 5627,
+        "fingerprint_matches_index": true
+      },
+      {
+        "status": "ok",
+        "actor": "as_assistant",
+        "delegation_id": "fc5e4ce6-8d3c-40f7-8bea-6db91244a3d2",
+        "account_id": 9,
+        "indexed_messages": 2,
+        "all_dates_present": true,
+        "metadata_has_no_bodies": true,
+        "pending_ingress_messages": 0,
+        "complete_snapshot": true,
+        "recent_bodies": 2,
+        "snapshot_bytes": 2224,
+        "fingerprint_matches_index": true
+      }
+    ],
+    "checked_at": "2026-09-15T22:36:54.825956Z",
+    "model_calls": 0,
+    "messages_sent": 0,
+    "conversation_writes": 0
+  },
+  "final_settings": {
+    "ready_revision": "maraithon-00375-2s5",
+    "model": "meta/muse-spark-1.3-contributor",
+    "projected_daily_usd": 3,
+    "eval_only": true,
+    "gmail_eval_sends_enabled": true,
+    "slack_sends_enabled": false,
+    "development_spending": true
+  },
+  "remaining": [
+    "Verified continuity when Gmail changes thread IDs",
+    "Compact fact ledger and retrieval of older cited evidence",
+    "Slack pagination",
+    "Whole-app restart and schema evolution checks",
+    "Real longevity canary"
+  ],
+  "provider_reference": {
+    "url": "https://support.google.com/mail/answer/5900?hl=en",
+    "finding": "Gmail documents conversation splitting after more than 100 emails or a subject change. The synthetic 180-message source fixture is not proof of this rollover."
+  }
+}

@@ -54,13 +54,19 @@ Commit `49bcd252` deployed through workflow `35028690308`; revision `maraithon-0
 
 ## Long Gmail conversations
 
-Gmail delegation sync no longer stops when a thread passes 100 messages. It reads the complete header index, records progress in the existing event ledger eight messages at a time, and keeps six recent bodies in the turn snapshot. An unfinished batch reschedules the same job. A new worker resumes from committed events without admitting a model decision early. Unchanged bodies can be reused from three prior authenticated turn snapshots.
+The Gmail reader no longer rejects a source merely for containing more than 100 messages, or because old bodies exceed the snapshot limit. It reads the complete header index, records progress in the existing event ledger eight messages at a time, and keeps six recent bodies in the turn snapshot. An unfinished batch reschedules the same job. A new worker resumes from committed events without admitting a model decision early. Unchanged bodies can be reused from three prior authenticated turn snapshots.
 
 Before sending, the worker compares the full thread fingerprint. A late reply invalidates the pending send, including before October opens a separate thread. That first sync uses Kent's source account and provider queue. Missing or foreign account bindings cannot fall back to another mailbox. The index remains bounded at 10,000 messages and the recent snapshot at 240 KB; unreadable or oversized recent evidence still holds the conversation.
 
 The server build and 35 focused checks passed. The long-thread fixture covers 180 messages across 180 days and 23 separately leased workers. It fetched six bodies; the next unchanged turn fetched none. It also covered a late reply, old-message removal, a mismatched body, source-account isolation, and durable deduplication. The existing Gmail delivery and local Slack sender checks passed. The accelerated fixture raises only its local admission rate so one-second retries can run immediately. It does not prove whole-app crash recovery or a six-month production run.
 
-This removes the Gmail history-size failure. The compact fact ledger, retrieval of older cited evidence, Slack pagination, and the real longevity canary remain unfinished. Deployment and live metadata verification are pending.
+This removes the reader's history-size failure. Google also documents that Gmail conversations split after more than 100 emails or a subject change. The 180-message fixture is synthetic; it does not prove continuity when Gmail assigns a different thread ID. Routing that continuation through verified RFC message ancestry remains necessary. [Gmail conversation grouping](https://support.google.com/mail/answer/5900?hl=en), [Gmail API threading rules](https://developers.google.com/workspace/gmail/api/guides/threads).
+
+Commit `de752a8d` deployed through workflow `35031069439` to revision `maraithon-00374-r5k`. Read-only production job `maraithon-todo-validation-4lk4w` then verified an existing conversation for Kent and one for October on that image. All seven messages had usable dates, metadata without bodies, and matching full-read fingerprints. Both snapshots were complete, with no pending ingress messages. The check made no model calls, sent no emails, and wrote no conversation state. It verifies the real API shape on small threads, not a live 180-message conversation.
+
+Commit `7a820edf` reuses the connector's existing metadata reader instead of adding another entry point. Its build and five source checks passed; workflow `35031427439` deployed revision `maraithon-00375-2s5`, which is ready. Muse, controlled Gmail evals, disabled Slack sends, and active development spending remain configured. [Long Gmail source evidence](evidence/delegated-conversations/2026-09-15-gmail-source-history.json).
+
+The compact fact ledger, retrieval of older cited evidence, Gmail thread rollover, Slack pagination, and the real longevity canary remain unfinished.
 
 ## Previously verified
 
