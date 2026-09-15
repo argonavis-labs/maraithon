@@ -980,7 +980,7 @@ defmodule Maraithon.Delegations.IngressTest do
     {d, grant, %{id: Ecto.UUID.generate(), kind: "decision", data: %{"turn_id" => turn.id}}}
   end
 
-  for response <- [:accepted, :lost_response, :unproven] do
+  for response <- [:accepted, :lost_response, :rewritten_response, :unproven] do
     @tag timeout: 30_000, send_response: response
     test "leased sender #{response} never replays an entered send", c do
       alias Maraithon.Delegations.{Execution, Turn}
@@ -1090,8 +1090,13 @@ defmodule Maraithon.Delegations.IngressTest do
           })
         end)
 
-        if c.send_response == :lost_response do
-          Bypass.expect_once(bypass, "GET", "/users/me/messages/445566", fn conn ->
+        if c.send_response in [:lost_response, :rewritten_response] do
+          path =
+            if c.send_response == :lost_response,
+              do: "/users/me/messages/445566",
+              else: "/users/me/threads/aabbcc"
+
+          Bypass.expect_once(bypass, "GET", path, fn conn ->
             [headers, body] = String.split(Agent.get(accepted, & &1), "\r\n\r\n", parts: 2)
 
             headers =
@@ -1100,7 +1105,21 @@ defmodule Maraithon.Delegations.IngressTest do
                 %{"name" => name, "value" => String.trim(value)}
               end)
 
-            json(conn, %{
+            headers =
+              if c.send_response == :rewritten_response do
+                [
+                  %{"name" => "Message-ID", "value" => "<rewritten@mail.gmail.com>"}
+                  | Enum.map(headers, fn h ->
+                      if String.downcase(h["name"]) == "message-id",
+                        do: %{h | "name" => "X-Google-Original-Message-ID"},
+                        else: h
+                    end)
+                ]
+              else
+                headers
+              end
+
+            message = %{
               "id" => "445566",
               "threadId" => "aabbcc",
               "labelIds" => ["SENT"],
@@ -1108,9 +1127,24 @@ defmodule Maraithon.Delegations.IngressTest do
                 "headers" => headers,
                 "body" => %{"data" => Base.url_encode64(body, padding: false)}
               }
-            })
+            }
+
+            json(
+              conn,
+              if(c.send_response == :rewritten_response,
+                do: %{"id" => "aabbcc", "messages" => [message]},
+                else: message
+              )
+            )
           end)
         else
+          Bypass.expect_once(
+            bypass,
+            "GET",
+            "/users/me/threads/aabbcc",
+            &json(&1, %{"id" => "aabbcc", "messages" => []})
+          )
+
           observer =
             Repo.get_by!(BackgroundJob, job_type: "assistant_action_reconcile")
             |> BackgroundJob.hydrate_payloads()
@@ -1120,13 +1154,18 @@ defmodule Maraithon.Delegations.IngressTest do
 
         run_leased_job(node, partitions, "assistant_action_reconcile", fn job ->
           result = ActionReconciliation.execute(job)
-          expected = if c.send_response == :lost_response, do: "executed", else: "needs_review"
+
+          expected =
+            if c.send_response in [:lost_response, :rewritten_response],
+              do: "executed",
+              else: "needs_review"
+
           assert {:ok, %{state: ^expected}} = result
           result
         end)
       end
 
-      if c.send_response in [:accepted, :lost_response] do
+      if c.send_response in [:accepted, :lost_response, :rewritten_response] do
         assert {:ok, :ok} =
                  Repo.transaction(fn ->
                    Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)

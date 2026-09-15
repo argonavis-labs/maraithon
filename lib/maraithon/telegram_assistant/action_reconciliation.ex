@@ -302,22 +302,16 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
         "exact_account" => true
       }
 
-      query = URI.encode_query(%{q: "in:sent rfc822msgid:#{id}", maxResults: 2})
-
-      with {:ok, response} <- gmail_request(args, "/users/me/messages?" <> query),
-           [%{"id" => message_id}] <- response["messages"] || [],
-           true <- is_nil(response["nextPageToken"]),
-           {:ok, message} <-
-             gmail_request(args, "/users/me/messages/#{URI.encode(message_id)}?format=full"),
+      with {:ok, message} <- sent_mail(args, action, id),
            true <- "SENT" in (message["labelIds"] || []),
-           true <- header(message, "message-id") == id,
+           true <- original_message?(message, id),
            true <- mail_headers_match?(action.payload, message),
            true <- delegated_mail_matches?(action, message),
            true <- draft_matches?(action, message) do
         {:ok,
          %{
            source: "gmail",
-           message_id: message_id,
+           message_id: message["id"],
            thread_id: message["threadId"],
            message: "Verified the approved email in Sent mail.",
            reconciled: true
@@ -330,6 +324,54 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
       {:pending, :message_identity_unavailable}
     end
   end
+
+  defp sent_mail(args, action, id) do
+    query = URI.encode_query(%{q: "in:sent rfc822msgid:#{id}", maxResults: 2})
+
+    with {:ok, response} <- gmail_request(args, "/users/me/messages?" <> query),
+         true <- is_nil(response["nextPageToken"]) do
+      case response["messages"] || [] do
+        [%{"id" => message_id}] ->
+          gmail_request(args, "/users/me/messages/#{URI.encode(message_id)}?format=full")
+
+        [] ->
+          sent_in_bound_thread(args, action, id)
+
+        _ ->
+          {:error, :sent_message_not_proven}
+      end
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :sent_message_not_proven}
+    end
+  end
+
+  # Gmail can replace our RFC ID while retaining it in this header. Search may
+  # then miss a successful send. Read only the frozen thread, never the mailbox.
+  defp sent_in_bound_thread(args, %{authorization_kind: "delegation_grant", payload: payload}, id) do
+    with thread when is_binary(thread) <- payload["thread_id"],
+         {:ok, response} <-
+           gmail_request(args, "/users/me/threads/#{URI.encode(thread)}?format=full"),
+         true <- response["id"] == thread and is_nil(response["nextPageToken"]),
+         messages when is_list(messages) and length(messages) <= 100 <- response["messages"],
+         true <- byte_size(Jason.encode!(response)) <= 240_000,
+         [message] <-
+           Enum.filter(
+             messages,
+             &(original_message?(&1, id) and "SENT" in (&1["labelIds"] || []))
+           ) do
+      {:ok, message}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :sent_message_not_proven}
+    end
+  end
+
+  defp sent_in_bound_thread(_, _, _), do: {:error, :sent_message_not_proven}
+
+  defp original_message?(message, id),
+    do:
+      header(message, "message-id") == id or header(message, "x-google-original-message-id") == id
 
   defp draft_matches?(%{action_type: "gmail_draft_send", payload: payload}, message) do
     if payload["_maraithon_update_draft_before_send"] == true do

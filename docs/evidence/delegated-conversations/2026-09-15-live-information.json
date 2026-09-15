@@ -1,0 +1,38 @@
+{
+  "recorded_at": "2026-09-15T15:57:00Z",
+  "scenario": "information_reply",
+  "live_eval_passed": true,
+  "owner": "kent@runner.now",
+  "counterparty": "kent.fenwick@gmail.com",
+  "model": "meta/muse-spark-1.3-contributor",
+  "serving_revision": "maraithon-00339-sl2",
+  "reader_execution": "maraithon-todo-validation-89wbw",
+  "result": {
+    "error": null,
+    "status": "completed",
+    "result": {
+      "accepted_slot": null,
+      "agent_messages": 1,
+      "completion_cites_reply": true,
+      "cost_micro_usd": 1421,
+      "delegation_id": "600d47a3-a1f7-4e56-a667-b701807f3609",
+      "model_calls": 4,
+      "offered_slots_count": 0,
+      "phase": "passed",
+      "reply_action_id": "8965060d-12b4-b831-9d64-502682c74c8b",
+      "reply_count": 1,
+      "reply_message_id": "1a0a5c748f6e7e42",
+      "todo_id": "4d689e10-46ff-4cbc-b601-a00b598d2508",
+      "todo_state": "done",
+      "turns": 2
+    },
+    "job_id": "4ffe6067-0842-421f-9937-e3644284fe67"
+  },
+  "cost_usd": 0.001421,
+  "scope": "One controlled live information conversation, verified from durable rows and the exact recipient Gmail message. The todo reached Done and cited the counterparty reply.",
+  "limitations": [
+    "Two model calls per turn; the plan target below 1.3 is not yet met.",
+    "This run does not prove calendar booking or assistant-account authorship.",
+    "The cost is provider-reported model spend for this delegation; it excludes application infrastructure."
+  ]
+}

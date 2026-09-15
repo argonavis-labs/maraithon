@@ -158,6 +158,76 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliationTest do
     assert {:ok, _, :executed} = TelegramAssistant.reconcile_prepared_action(action)
   end
 
+  test "a rewritten RFC ID is recovered only from exact evidence in the frozen thread", ctx do
+    action =
+      unknown(ctx, "gmail_send", Map.put(mail_payload(ctx), "thread_id", "controlled-thread"))
+
+    assert_received {:provider_entered, _}
+    action = %{action | authorization_kind: "delegation_grant"}
+    original_id = ActionReconciliation.message_id(action)
+
+    mail =
+      update_in(sent_mail(action), ["payload", "headers"], fn headers ->
+        [
+          %{"name" => "Message-ID", "value" => "<rewritten@mail.gmail.com>"}
+          | Enum.map(headers, fn h ->
+              if h["name"] == "Message-ID",
+                do: %{h | "name" => "X-Google-Original-Message-ID"},
+                else: h
+            end)
+        ]
+      end)
+
+    pid = self()
+
+    for messages <- [
+          [mail],
+          [mail, mail],
+          [Map.put(mail, "labelIds", ["INBOX"])],
+          [Map.put(mail, "threadId", "different-thread")],
+          [put_in(mail, ["payload", "body", "data"], Base.url_encode64("Different body"))],
+          [
+            update_in(
+              mail,
+              ["payload", "headers"],
+              &Enum.reject(&1, fn h -> h["value"] == original_id end)
+            )
+          ],
+          List.duplicate(mail, 101)
+        ] do
+      Application.put_env(:maraithon, ActionReconciliation,
+        gmail_request: fn _, path ->
+          if String.contains?(path, "/messages?") do
+            {:ok, %{}}
+          else
+            assert path == "/users/me/threads/controlled-thread?format=full"
+            send(pid, :thread_read)
+            {:ok, %{"id" => "controlled-thread", "messages" => messages}}
+          end
+        end
+      )
+
+      if messages == [mail] do
+        assert {:ok, %{message_id: "sent-controlled", reconciled: true}} =
+                 ActionReconciliation.observe(action)
+      else
+        assert {:pending, :sent_message_not_proven} = ActionReconciliation.observe(action)
+      end
+
+      assert_received :thread_read
+      refute_received {:provider_entered, _}
+    end
+
+    # An unknown new-thread send has no bounded thread to inspect.
+    assert {:pending, :sent_message_not_proven} =
+             ActionReconciliation.observe(%{
+               action
+               | payload: Map.delete(action.payload, "thread_id")
+             })
+
+    refute_received :thread_read
+  end
+
   test "account replacement blocks provider lookup and original execution", ctx do
     action = unknown(ctx)
     assert_received {:provider_entered, _}
