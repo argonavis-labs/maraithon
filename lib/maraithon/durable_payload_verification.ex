@@ -23,6 +23,9 @@ defmodule Maraithon.DurablePayloadVerification do
   alias Maraithon.Vault
 
   @tables DurablePayloadRegistry.tables()
+  @ciphertext_only_tables DurablePayloadRegistry.all()
+                          |> Enum.filter(&Map.get(&1, :ciphertext_only, false))
+                          |> Enum.map(& &1.table)
   @default_limit 25
   @max_limit 100
 
@@ -509,6 +512,10 @@ defmodule Maraithon.DurablePayloadVerification do
     end
   end
 
+  defp validate_registered_semantics(table, fields) when table in @ciphertext_only_tables do
+    validate_maps(fields, %{"data" => 65_536}, Maraithon.Delegations.Record.bounds())
+  end
+
   defp validate_registered_semantics("telegram_conversations", fields) do
     with {:ok, summary} <- field(fields, "summary"),
          {:ok, historical} <- field(fields, "historical_summary"),
@@ -713,6 +720,15 @@ defmodule Maraithon.DurablePayloadVerification do
     end
   end
 
+  defp validate_registered_authority(%{ciphertext_only: true}, %{authority: [columns]}, fields) do
+    with {:ok, %{"_bound" => bound}} <- field(fields, "data"),
+         true <- bound == columns do
+      :ok
+    else
+      _ -> {:error, :binding_mismatch}
+    end
+  end
+
   defp validate_registered_authority(_source, %{authority: []}, _fields), do: :ok
 
   defp validate_registered_authority(_source, _parsed, _fields),
@@ -726,6 +742,7 @@ defmodule Maraithon.DurablePayloadVerification do
         "telegram_prepared_actions" -> [%{}, nil]
         "user_memory_profiles" -> ["[encrypted]", %{}]
         "operator_memory_summaries" -> ["[encrypted]"]
+        table when table in @ciphertext_only_tables -> [nil]
         _table -> Enum.map(projections, fn _projection -> %{} end)
       end
 
@@ -1012,16 +1029,21 @@ defmodule Maraithon.DurablePayloadVerification do
     scope_values = Enum.map(source.scope, &registered_context_sql(table, &1))
 
     authority =
-      if table == "agent_work_results" do
-        [
-          "source.result_digest_version",
-          "source.result_digest_key_tag",
-          "source.result_digest",
-          "source.result_content_digest_version",
-          "source.result_content_digest"
-        ]
-      else
-        []
+      cond do
+        Map.get(source, :ciphertext_only, false) ->
+          [bound_columns_sql(source)]
+
+        table == "agent_work_results" ->
+          [
+            "source.result_digest_version",
+            "source.result_digest_key_tag",
+            "source.result_digest",
+            "source.result_content_digest_version",
+            "source.result_content_digest"
+          ]
+
+        true ->
+          []
       end
 
     select =
@@ -1068,10 +1090,28 @@ defmodule Maraithon.DurablePayloadVerification do
   defp registered_projection_sql("telegram_conversations", _source),
     do: ["source.summary", "source.metadata -> 'historical_summary'"]
 
+  defp registered_projection_sql(_table, %{ciphertext_only: true}), do: ["NULL::jsonb"]
+
   defp registered_projection_sql(_table, source) do
     Enum.map(source.fields, fn {field, _column, _type, _max_bytes, _required} ->
       "source.#{field}"
     end)
+  end
+
+  defp bound_columns_sql(source) do
+    fields = source.module.payload_binding_spec().bound_fields
+
+    values =
+      Enum.map_join(fields, ",", fn field ->
+        value =
+          if source.module.__schema__(:type, field) == :utc_datetime_usec,
+            do: "to_char(source.#{field}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
+            else: "source.#{field}"
+
+        "'#{field}',#{value}"
+      end)
+
+    "jsonb_build_object(#{values})"
   end
 
   defp candidate_sql_for(table, identity_expression, select, eligible, order) do

@@ -9,7 +9,17 @@ defmodule Maraithon.Tools.SlackHelpers do
     preference = normalize_preference(Keyword.get(opts, :token_preference, "auto"))
     slack_user_id = Keyword.get(opts, :slack_user_id)
     required_scopes = normalize_required_scopes(Keyword.get(opts, :required_scopes, []))
-    candidates = token_candidates(user_id, team_id, preference, slack_user_id)
+
+    candidates =
+      if Keyword.get(opts, :strict_identity?, false) do
+        case {preference, slack_user_id} do
+          {:user, id} when is_binary(id) and id != "" -> ["slack:#{team_id}:user:#{id}"]
+          {:bot, _} -> ["slack:#{team_id}"]
+          _ -> []
+        end
+      else
+        token_candidates(user_id, team_id, preference, slack_user_id)
+      end
 
     resolve_from_candidates(user_id, candidates, preference, required_scopes)
   end

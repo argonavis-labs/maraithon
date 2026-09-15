@@ -208,6 +208,30 @@ defmodule Maraithon.DurablePayloadRegistry do
     }
   ]
 
+  @sources @sources ++
+             Enum.map(
+               [
+                 {"assistant_identities", Maraithon.Delegations.AssistantIdentity},
+                 {"delegation_preferences", Maraithon.Delegations.Preference},
+                 {"delegations", Maraithon.Delegations.Delegation},
+                 {"delegation_grants", Maraithon.Delegations.Grant},
+                 {"delegation_events", Maraithon.Delegations.Event},
+                 {"delegation_turns", Maraithon.Delegations.Turn}
+               ],
+               fn {table, module} ->
+                 %{
+                   table: table,
+                   module: module,
+                   identity: [:id],
+                   scope: [:user_id],
+                   ciphertext_only: true,
+                   purge: :payload_purged_at,
+                   version: :payload_encryption_version,
+                   fields: [{:data, :data_ciphertext, :map, 70_000, true}]
+                 }
+               end
+             )
+
   @doc "All registered sources in canonical lock/verification order."
   def all, do: @sources
 

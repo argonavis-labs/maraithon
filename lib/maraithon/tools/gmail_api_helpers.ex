@@ -39,7 +39,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
     with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id") do
       provider = provider_from_args(args)
 
-      case OAuth.get_valid_access_token(user_id, provider) do
+      case OAuth.get_valid_access_token(user_id, provider, exact?: args["exact_account"] == true) do
         {:ok, access_token} ->
           {:ok, user_id, provider, access_token}
 

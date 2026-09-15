@@ -65,6 +65,14 @@ defmodule Maraithon.PrivacyRetention do
 
   @extension_handlers [
     %{
+      name: :delegations,
+      window: :conversation_days,
+      migration: 20_260_915_124_134,
+      module: Maraithon.Delegations.Retention,
+      purge: :purge_retention_batch,
+      backlog: :retention_backlog
+    },
+    %{
       name: :telegram_conversations,
       window: :conversation_days,
       migration: 20_260_810_140_002,
@@ -180,6 +188,25 @@ defmodule Maraithon.PrivacyRetention do
     user_memory_profiles operator_memory_summaries background_jobs scheduled_jobs
     runtime_ingress_receipts agent_work_results
   )
+
+  @delegation_sources Enum.map(
+                        ~w(assistant_identities delegation_preferences delegations delegation_grants delegation_events delegation_turns),
+                        fn table ->
+                          %{
+                            table: table,
+                            tenant: :user,
+                            retention_handler:
+                              if(table in ~w(assistant_identities delegation_preferences),
+                                do: nil,
+                                else: :delegations
+                              ),
+                            marker: nil
+                          }
+                        end
+                      )
+  @encrypted_sources @encrypted_sources ++ @delegation_sources
+  @expected_encrypted_source_tables @expected_encrypted_source_tables ++
+                                      Enum.map(@delegation_sources, & &1.table)
 
   unless Enum.sort(Enum.map(@encrypted_sources, & &1.table)) ==
            Enum.sort(@expected_encrypted_source_tables) and

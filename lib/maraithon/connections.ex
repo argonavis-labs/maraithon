@@ -10,6 +10,8 @@ defmodule Maraithon.Connections do
   alias Maraithon.OAuth.{GitHub, Google, Linear, Notaui, Notion, Slack, Token}
   alias MaraithonWeb.LocalTime
 
+  defdelegate assistant_account?(account), to: Maraithon.AssistantIdentities
+
   @google_services [
     %{
       id: "gmail",

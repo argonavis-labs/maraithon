@@ -59,6 +59,7 @@ defmodule Maraithon.PrivacyErasure do
   # every supported schema generation. Effect/Directive/Run authority is
   # intentionally absent: Runtime.delete_agent/1 owns those rows.
   @agent_cleanup_tables [
+    "delegations",
     "action_ledger_actions",
     "agent_work_result_acquisitions",
     "chief_projection_receipts",
@@ -70,6 +71,7 @@ defmodule Maraithon.PrivacyErasure do
   # Complete fixed proof surface for Agent identifiers. Coordinator rows are
   # checked separately and removed only in the final receipt transaction.
   @agent_proof_specs [
+    {"delegations", "agent_id"},
     {"action_ledger_actions", "agent_id"},
     {"agent_directives", "agent_id"},
     {"agent_isolation_bindings", "agent_id"},
@@ -104,6 +106,12 @@ defmodule Maraithon.PrivacyErasure do
   # Child-first, fixed deletion plan for user/domain copies. Agent execution
   # authority is deliberately excluded and is proven absent below.
   @user_copy_specs [
+    {:delete, "delegations", "user_id"},
+    {:delete, "delegation_events", "user_id"},
+    {:delete, "delegation_turns", "user_id"},
+    {:delete, "delegation_grants", "user_id"},
+    {:delete, "assistant_identities", "user_id"},
+    {:delete, "delegation_preferences", "user_id"},
     {:delete, "people_network_snapshots", "user_id"},
     {:delete, "people_network_profiles", "user_id"},
     {:delete, "people_network_generations", "user_id"},

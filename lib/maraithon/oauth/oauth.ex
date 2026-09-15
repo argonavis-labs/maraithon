@@ -112,7 +112,8 @@ defmodule Maraithon.OAuth do
   }
 
   @doc "Whether `scopes` carry a Google write grant for `:calendar` or `:gmail`."
-  def google_write_scopes?(service, scopes) when service in [:calendar, :gmail] and is_list(scopes) do
+  def google_write_scopes?(service, scopes)
+      when service in [:calendar, :gmail] and is_list(scopes) do
     Enum.any?(scopes, &(&1 in Map.fetch!(@google_write_scopes, service)))
   end
 
@@ -132,8 +133,13 @@ defmodule Maraithon.OAuth do
   Automatically refreshes the token if it's expired.
   Returns `{:ok, access_token}` or `{:error, reason}`.
   """
-  def get_valid_access_token(user_id, provider) do
-    case get_token(user_id, provider) do
+  def get_valid_access_token(user_id, provider, opts \\ []) do
+    token =
+      if Keyword.get(opts, :exact?, false),
+        do: get_exact_token(user_id, provider),
+        else: get_token(user_id, provider)
+
+    case token do
       nil ->
         {:error, :no_token}
 
