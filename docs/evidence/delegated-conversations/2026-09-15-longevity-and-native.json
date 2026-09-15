@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-15",
+  "live_eval_passed": false,
+  "checks": {
+    "provider_receipts": {"tests": 46, "failures": 0, "providers": "local HTTP fixtures"},
+    "six_month_silence": {
+      "passed": true,
+      "simulated_days": 180,
+      "quiet_wakes": 720,
+      "checkpoint_restore": "JSON decode of a compact checkpoint between every wake",
+      "storage": "local PostgreSQL sandbox",
+      "quiet_model_calls": 0,
+      "quiet_sends": 0,
+      "late_reply_deliveries": 2,
+      "late_reply_turns": 1,
+      "grant_and_ledger_preserved": true,
+      "limits": "This is a coordinator/storage eval, not a six-month production run, schema upgrade, or whole-BEAM crash test."
+    },
+    "native": {
+      "shared_swift_package": "build passed",
+      "mac": "signed app build passed and installed at ~/Applications/Maraithon.app",
+      "iphone": "simulator build passed; XcodeGen generation passed",
+      "schema": "Two optional SwiftData cache fields, delegationData and canDelegate. Existing rows start with nil until their next sync.",
+      "manual_mac": "Tracking lists Charlie as owner. The grant sheet opens; its first production preview received HTTP 429. Native error copy was corrected and rebuilt."
+    }
+  },
+  "live_information_eval": {
+    "job_id": "4ffe6067-0842-421f-9937-e3644284fe67",
+    "status": "in progress",
+    "finding": "Gmail accepted the initial email once and assigned a different RFC Message-ID. Recipient lookup must follow the confirmed provider receipt. The fix is deploying; no resend was attempted."
+  }
+}

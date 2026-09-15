@@ -100,6 +100,75 @@ defmodule Maraithon.Delegations.IngressTest do
     assert next.state == "ready"
   end
 
+  test "six months of quiet checkpoints preserve the grant and admit one late reply", c do
+    alias Maraithon.Behaviors.DelegationCoordinator, as: Behavior
+    alias Maraithon.Runtime.BackgroundJob
+    alias Maraithon.Delegations.Turn
+    enable_gmail(c.user_id)
+
+    agent =
+      Repo.insert!(%Maraithon.Agents.Agent{user_id: c.user_id, behavior: "delegation_coordinator"})
+
+    ledger = %{"facts" => "The original question is still waiting for Kent's answer."}
+
+    d =
+      c.delegation
+      |> Delegation.changeset(%{agent_id: agent.id, data: %{"ledger" => ledger}})
+      |> Repo.update!()
+
+    grant = Maraithon.Delegations.current_grant(d)
+    first = DateTime.add(d.inserted_at, 2)
+
+    wake = fn state, now ->
+      Behavior.handle_wakeup(state, %{
+        user_id: c.user_id,
+        agent_id: agent.id,
+        write: fn callback ->
+          Repo.transaction(fn ->
+            Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+            callback.(now)
+          end)
+        end
+      })
+    end
+
+    state =
+      Enum.reduce(0..719, Behavior.init(%{}), fn tick, state ->
+        now = DateTime.add(first, tick * 6, :hour)
+        # A fresh decoded checkpoint models process memory being lost between wakes.
+        restored = state |> Behavior.snapshot_state() |> Jason.encode!() |> Jason.decode!()
+        restored = Behavior.reconcile_restored_state(restored, %{})
+        assert {:idle, next} = wake.(restored, now)
+        assert {:absolute, due} = Behavior.next_wakeup(next)
+        assert DateTime.diff(due, now) == 6 * 3600
+        assert byte_size(Jason.encode!(Behavior.snapshot_state(next))) < 1_024
+        next
+      end)
+
+    assert Repo.aggregate(BackgroundJob, :count) == 0
+    assert Repo.aggregate(Turn, :count) == 0
+    assert Maraithon.Delegations.current_grant(d).id == grant.id
+
+    assert Repo.get!(Delegation, d.id) |> Delegation.hydrate() |> Map.get(:data) == d.data
+
+    now = DateTime.add(first, 180, :day)
+    late = %{c.message | internal_date: now}
+    route(c, late)
+    route(c, late)
+    assert {:idle, next} = wake.(state, now)
+    assert {:idle, _} = wake.(next, now)
+    assert Repo.aggregate(Turn, :count) == 1
+
+    assert Repo.aggregate(
+             from(j in BackgroundJob, where: j.job_type == "delegation_sync"),
+             :count
+           ) == 1
+
+    assert Repo.one!(Turn).model_calls == 0
+    assert Repo.get!(Delegation, d.id).lifetime_sends == 0
+    assert Maraithon.Delegations.current_grant(d).id == grant.id
+  end
+
   test "same subject or thread on a different account cannot wake this delegation", c do
     assert {:ok, :ok} = Repo.transaction(fn -> Ingress.gmail!(c.user_id, -1, c.message) end)
     route(c, %{c.message | thread_id: "different"})
