@@ -38,6 +38,7 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
         public let outcome: String
         public let to: [String]
         public let cc: [String]
+        public let firstSendCc: [String]?
         public let scopeHash: String
         public let workflowRevision: Int
         public let identity: Identity
@@ -57,6 +58,7 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
         enum CodingKeys: String, CodingKey {
             case provider, actor, kind, outcome, to, cc, identity
             case scopeHash = "scope_hash", workflowRevision = "workflow_revision", taskOwner = "task_owner"
+            case firstSendCc = "first_send_cc"
         }
     }
 

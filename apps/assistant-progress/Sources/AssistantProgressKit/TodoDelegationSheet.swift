@@ -31,6 +31,9 @@ struct TodoDelegationSheet: View {
                         if scope.provider == "gmail" {
                             TextField("With", text: $recipients)
                             TextField("Cc", text: $cc)
+                            if let copies = scope.firstSendCc, !copies.isEmpty {
+                                LabeledContent("Copy on first message", value: copies.joined(separator: ", "))
+                            }
                         } else {
                             LabeledContent("Conversation", value: "Original Slack thread")
                         }
