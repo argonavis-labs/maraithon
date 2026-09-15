@@ -1,0 +1,56 @@
+{
+  "from": "2026-09-14T16:00:00Z",
+  "to": "2026-09-15T16:00:00Z",
+  "attempts": 1542,
+  "reported_cost_usd": 4.112878446149016,
+  "models": {
+    "meta/muse-spark-1.3-contributor": {
+      "attempts": 1539,
+      "reported_cost_usd": 3.8799404979999994,
+      "unpriced": 5
+    },
+    "moonshotai/kimi-k3": {
+      "attempts": 3,
+      "reported_cost_usd": 0.232937948149017,
+      "unpriced": 1
+    }
+  },
+  "jobs": {
+    "relationship_ingestion": 474,
+    "runtime_partition:source_account_discovery_reason": 733,
+    "delegation_decide": 4,
+    "todo_brief_generation": 156,
+    "unattributed": 61,
+    "runtime_partition:todo_completion": 55,
+    "runtime_partition:source_account_closure_reason": 44,
+    "runtime_partition:proactive_check_in": 4,
+    "runtime_partition:todo_outcome_learning": 6,
+    "runtime_partition:todo_ingestion": 5
+  },
+  "statuses": {
+    "completed": 1503,
+    "failed": 39
+  },
+  "all_attempts_after_final_muse_cutover_used_muse": true,
+  "billing_sample": {
+    "at": "2026-09-15T15:50:16Z",
+    "usage_daily_usd": 2.667108848,
+    "cumulative_usd": 5033.699097909,
+    "since_reset_usd": 4.267679719999251
+  },
+  "monitor": {
+    "checked_at": "2026-09-15T12:45:16Z",
+    "projected_daily_usd": 3,
+    "threshold_usd": 6,
+    "interval_hours": 6,
+    "status": "within_budget",
+    "daily_cost_usd": 1.952119688,
+    "observed_rolling_cost_usd": 3.5526905599999736,
+    "next_check_at": "2026-09-15T18:45:16Z"
+  },
+  "limitations": [
+    "Attempt logs omit the price for six attempts; the provider key counter remains the billing authority.",
+    "The window includes the requested todo and briefing rebuild, live eval work, and deployment interruptions. It is not a clean steady-state comparison.",
+    "The measured cost remains above the US$3 daily projection."
+  ]
+}

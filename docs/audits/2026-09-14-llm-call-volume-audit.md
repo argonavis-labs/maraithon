@@ -349,6 +349,39 @@ charge. All measured attempts on revision `00327-wk8` used Muse. These are
 different workloads, not a controlled model comparison; the billing-counter
 difference remains the authoritative total.
 
+## 4d. Full-day follow-up and live conversation cost (Sep 15)
+
+The changes have reduced costs, but the earlier under-US$1/day estimate has
+not held. From September 14 at 16:00 UTC to September 15 at 16:00 UTC, attempt
+logs recorded **1,542 attempts and US$4.112878 in provider-reported charges**.
+That is about 95% below the old US$87/day baseline. Six attempts have no reported
+price, so this is not the complete bill. The window also includes the requested
+todo and briefing rebuild, deployment interruptions, and the first live eval.
+
+The three Kimi attempts were on revision `00326`, before the final model
+cutover. Every measured attempt after 19:07 UTC on September 14 used
+`meta/muse-spark-1.3-contributor`. Discovery reasoning accounted for 733
+attempts, relationship ingestion for 474, and todo briefs for 156. Call volume
+still needs work; these measurements do not support the earlier 300 to 500
+calls/day target.
+
+A read-only Cloud Run check at 15:50 UTC found US$2.667109 on the provider's
+current UTC-day counter and US$4.267680 billed since the September 14 reset.
+The latest scheduled warning check, at 12:45 UTC, was within budget. Its next
+check was scheduled for 18:45 UTC. The fixed projection remains **US$3/day**,
+the alert threshold **US$6**, and the interval **six hours**. The observed
+full-day charges exceed the projection but remain below the alert threshold.
+
+The first live information delegation between the two Kent accounts passed.
+It sent one autonomous email, received the counterpart's answer, and marked
+the todo Done with a citation to that exact inbound message. Two turns made
+four Muse calls for **US$0.001421**. This proves the controlled information
+case, not the remaining calendar, Slack, or assistant-identity cases. Two
+model calls per turn also remains above the plan's target of less than 1.3.
+
+Evidence: [cost follow-up](../evidence/delegated-conversations/2026-09-15-cost-followup.json)
+and [live information eval](../evidence/delegated-conversations/2026-09-15-live-information.json).
+
 The billed increase includes the earlier Kimi attempts, timed-out calls, and
 background activity during the reset experiment. It is not a Muse-only price
 for rebuilding todos. The morning briefing's follow-on todo reconciliation
