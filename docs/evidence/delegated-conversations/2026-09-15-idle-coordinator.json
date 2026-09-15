@@ -1,0 +1,41 @@
+{
+  "verified_at": "2026-09-15T19:45:00Z",
+  "implementation_commits": ["0f40b402", "929ff6fc"],
+  "build": {"command": "make build", "result": "passed"},
+  "focused_checks": {
+    "result": "passed",
+    "distinct_checks": 8,
+    "partition": "_delegation_ready_eval",
+    "files": [
+      "test/maraithon/delegations/ingress_test.exs",
+      "test/maraithon/runtime/agent_lifecycle_operations_test.exs"
+    ],
+    "coverage": [
+      "Seven-day cutoff survives a restart; months-long live conversations stay active",
+      "Recent completion, stopped coordinators, and tripped guards prevent retirement",
+      "Unfinished turns prevent retirement",
+      "Unproven sends prevent retirement after their turn is superseded",
+      "Exact sweep retires once, preserves history, cancels timers, and recreates one coordinator",
+      "New live work cancels retirement; stale background-job claims cannot stop the Agent",
+      "Installation and binding remain until the monitored owner is proven down",
+      "Archived late replies remain consumed events without resetting inactivity"
+    ]
+  },
+  "deployment": {
+    "workflow_run": 35015027021,
+    "head_sha": "929ff6fc051373f8f7e8954bb1feaa6d4227a023",
+    "conclusion": "success",
+    "project": "maraithon",
+    "service": "maraithon",
+    "region": "us-central1",
+    "ready_revision": "maraithon-00360-w2m",
+    "created_revision": "maraithon-00360-w2m",
+    "ready_at": "2026-09-15T19:44:53.683871Z",
+    "traffic_percent": 100
+  },
+  "limits": [
+    "The inactivity interval was accelerated locally, not observed for seven production days",
+    "The sweep and recreation use exact job authority; owner-down uses the existing monitored lifecycle fixture",
+    "This does not prove whole-BEAM recovery or every runtime health criterion"
+  ]
+}

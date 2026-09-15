@@ -113,6 +113,8 @@ The recurring delegation sweep now includes coordinators with no live or recentl
 
 The server build and eight focused checks passed. The checks cover the seven-day boundary across restarts, months-long waiting conversations, recent completions, archived late replies, crash guards, unfinished turns and sends, stale job authority, recreation without identity-key collisions, and retention of the installation until the monitored owner is proven down. The sweep and recreation checks run under exact background-job authority. The owner-down check exercises the existing monitored lifecycle path. This does not establish whole-BEAM recovery or a seven-day production canary.
 
+Commits `0f40b402` and `929ff6fc` deployed successfully through workflow `35015027021`. Revision `maraithon-00360-w2m` became ready at 19:44 UTC and serves all traffic. [Retirement evidence](evidence/delegated-conversations/2026-09-15-idle-coordinator.json).
+
 ## Remaining work
 
 1. Finish Google's sending consent for October and run the assistant conversation. The extension is deployed; the Kent-pair information, regular scheduling, and busy-slot evals have passed.
