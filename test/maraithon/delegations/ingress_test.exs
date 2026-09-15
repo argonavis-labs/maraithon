@@ -133,6 +133,33 @@ defmodule Maraithon.Delegations.IngressTest do
     assert is_nil(turn.structured_data["prepared_action_id"])
   end
 
+  test "retention preserves a stopped conversation while model spend is unknown", c do
+    alias Maraithon.Delegations.{Retention, Turn}
+    exact_authority(c.user_id)
+
+    assert {:ok, _} =
+             Repo.transaction(fn ->
+               {d, _, event} = decision_turn(c)
+               d |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
+               turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
+
+               turn
+               |> Turn.changeset(%{status: "superseded", reserved_micro_usd: 105_268})
+               |> Repo.update!()
+             end)
+
+    cutoff = DateTime.add(DateTime.utc_now(), 1)
+    opts = [now: cutoff, limit: 50, per_tenant: 50]
+    assert {:ok, %{count: 0}} = Retention.retention_backlog(cutoff, nil, opts)
+    assert {:ok, %{purged: 0}} = Retention.purge_retention_batch(cutoff, nil, opts)
+    assert Repo.get(Delegation, c.delegation.id)
+    turn = Repo.one!(Turn) |> Turn.hydrate()
+    assert turn.reserved_micro_usd == 105_268
+
+    turn |> Turn.changeset(%{reserved_micro_usd: 0, cost_micro_usd: 100}) |> Repo.update!()
+    assert {:ok, %{count: 1}} = Retention.retention_backlog(cutoff, nil, opts)
+  end
+
   test "six months of quiet checkpoints preserve the grant and admit one late reply", c do
     alias Maraithon.Behaviors.DelegationCoordinator, as: Behavior
     alias Maraithon.Runtime.BackgroundJob

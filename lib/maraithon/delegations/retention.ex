@@ -27,7 +27,7 @@ defmodule Maraithon.Delegations.Retention do
   d.state IN ('completed','stopped','expired') AND d.updated_at <= $1
   AND NOT EXISTS (
     SELECT 1 FROM delegation_turns t WHERE t.delegation_id = d.id
-      AND t.status IN ('deciding','validated','dispatched')
+      AND (t.status IN ('deciding','validated','dispatched') OR t.reserved_micro_usd > 0)
   )
   AND NOT EXISTS (
     SELECT 1 FROM delegation_turns t
