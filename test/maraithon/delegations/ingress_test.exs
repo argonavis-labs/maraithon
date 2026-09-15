@@ -1178,6 +1178,8 @@ defmodule Maraithon.Delegations.IngressTest do
         :provider_cooldown,
         :repair,
         :repair_fails,
+        :fact_rejected,
+        :older_fact,
         :assistant_calendar
       ] do
     @tag admission: admission
@@ -1206,6 +1208,21 @@ defmodule Maraithon.Delegations.IngressTest do
       )
 
       ready_cost_monitor()
+
+      if c.admission == :older_fact do
+        configure(:gmail, api_base_url: "http://localhost:#{bypass.port}")
+
+        {:ok, _} =
+          Maraithon.OAuth.store_tokens(c.user_id, c.account.provider, %{
+            access_token: "older-fact-mailbox",
+            expires_in: 3600
+          })
+
+        Bypass.expect_once(bypass, "GET", "/users/me/messages/#{c.message.message_id}", fn conn ->
+          assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer older-fact-mailbox"]
+          json(conn, provider_message(c.message))
+        end)
+      end
 
       c =
         if c.admission == :assistant_calendar do
@@ -1287,6 +1304,23 @@ defmodule Maraithon.Delegations.IngressTest do
                )
 
         n = Agent.get_and_update(calls, &{&1 + 1, &1 + 1})
+
+        if c.admission == :older_fact do
+          input = request["messages"] |> Enum.at(1) |> Map.fetch!("content") |> Jason.decode!()
+          input = input["context"] || input
+          assert length(input["last_messages"]) == 6
+          refute Enum.any?(input["last_messages"], &(&1["message_id"] == c.message.message_id))
+
+          if n == 1 do
+            assert input["ledger"]["facts"]["project_colour"]["text"] =~ "indigo"
+            assert input["older_messages"] == []
+          else
+            assert [original] = input["older_messages"]
+            assert original["message_id"] == c.message.message_id
+            assert original["text_body"] == c.message.text_body
+          end
+        end
+
         assert c.admission != :cooldown
         expected_calls = if c.admission == :repair, do: 3, else: 2
         assert n <= expected_calls
@@ -1304,7 +1338,14 @@ defmodule Maraithon.Delegations.IngressTest do
             "kind" => "send",
             "body" => "Got it. Indigo.",
             "reason" => "Confirm the answer",
-            "evidence" => [c.message.message_id]
+            "evidence" => [c.message.message_id],
+            "facts" => [
+              %{
+                "key" => "project_colour",
+                "text" => "The counterparty says the colour is indigo.",
+                "evidence" => [c.message.message_id]
+              }
+            ]
           }
 
           content =
@@ -1316,7 +1357,11 @@ defmodule Maraithon.Delegations.IngressTest do
                 decision
 
               true ->
-                %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
+                %{
+                  "allowed" => c.admission != :fact_rejected,
+                  "outcome_proven" => true,
+                  "reason" => "Checked against the source"
+                }
             end
 
           json(conn, %{
@@ -1343,6 +1388,51 @@ defmodule Maraithon.Delegations.IngressTest do
                  {d, _grant, event} = decision_turn(c)
                  turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
 
+                 if c.admission == :older_fact do
+                   context = Jobs.context!(d, event)
+
+                   remembered = %{
+                     "evidence" => [c.message.message_id],
+                     "facts" => [
+                       %{
+                         "key" => "project_colour",
+                         "text" => "The counterparty says the colour is indigo.",
+                         "evidence" => [c.message.message_id]
+                       }
+                     ]
+                   }
+
+                   {:ok, ledger} =
+                     Maraithon.Delegations.Ledger.merge(context, remembered, DateTime.utc_now())
+
+                   d
+                   |> Delegation.changeset(%{data: Map.put(d.data, "ledger", ledger)})
+                   |> Repo.update!()
+
+                   messages =
+                     for n <- 1..6,
+                         do:
+                           Map.merge(c.message, %{
+                             message_id: "abcdef#{n}",
+                             text_body: "Later discussion #{n}",
+                             internal_date:
+                               DateTime.add(c.message.internal_date, 180 * 86_400 + n)
+                           })
+
+                   {:ok, sources} =
+                     Maraithon.Delegations.Sources.snapshot(
+                       messages,
+                       c.account.id,
+                       d.provider_thread_id
+                     )
+
+                   context.run
+                   |> Maraithon.TelegramAssistant.Run.changeset(%{
+                     prompt_snapshot: Map.put(context.run.prompt_snapshot, "sources", sources)
+                   })
+                   |> Repo.update!()
+                 end
+
                  turn
                  |> Turn.changeset(%{
                    status: "deciding",
@@ -1363,6 +1453,7 @@ defmodule Maraithon.Delegations.IngressTest do
             :cooldown -> "waiting_capacity"
             :provider_cooldown -> "waiting_capacity"
             :repair_fails -> "needs_user"
+            :fact_rejected -> "needs_user"
             _ -> "decided"
           end
 
@@ -1373,7 +1464,17 @@ defmodule Maraithon.Delegations.IngressTest do
           |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
 
         assert is_binary(run.prompt_snapshot["voice"]["version"])
+
+        ledger =
+          Repo.get!(Delegation, c.delegation.id)
+          |> Delegation.hydrate()
+          |> Map.fetch!(:data)
+          |> Map.get("ledger")
+
         assert {:ok, %{state: ^expected}} = result = Decision.execute(job)
+
+        assert (Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()).data["ledger"] ==
+                 ledger
 
         retried =
           Repo.get!(Maraithon.TelegramAssistant.Run, run.id)
@@ -1432,12 +1533,23 @@ defmodule Maraithon.Delegations.IngressTest do
         expected_calls = if c.admission == :repair, do: 3, else: 2
         assert Agent.get(calls, & &1) == expected_calls
         turn = Repo.one!(Turn) |> Turn.hydrate()
-        assert turn.status == if(c.admission == :repair_fails, do: "deciding", else: "validated")
+        rejected? = c.admission in [:repair_fails, :fact_rejected]
+        assert turn.status == if(rejected?, do: "deciding", else: "validated")
         assert turn.model_calls == expected_calls
         assert turn.reserved_micro_usd == 0
         assert turn.cost_micro_usd == expected_calls * 100
         assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == expected_calls * 100
-        expected_decisions = if c.admission == :repair_fails, do: 0, else: 1
+        expected_decisions = if rejected?, do: 0, else: 1
+        ledger = (Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()).data["ledger"]
+
+        if rejected? do
+          assert ledger == nil
+        else
+          assert ledger["facts"]["project_colour"]["text"] =~ "indigo"
+
+          assert hd(ledger["facts"]["project_colour"]["evidence"])["message_id"] ==
+                   c.message.message_id
+        end
 
         assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) ==
                  expected_decisions

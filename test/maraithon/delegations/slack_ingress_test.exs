@@ -361,6 +361,90 @@ defmodule Maraithon.Delegations.SlackIngressTest do
              StateMachine.apply(reload(c), List.last(events(c)))
   end
 
+  for dm? <- [false, true] do
+    @tag dm: dm?, fact_recall: true
+    test "older Slack evidence uses its exact timestamp and author (DM #{dm?})", c do
+      alias Maraithon.Delegations.{Ledger, Toolbox}
+      bypass = Bypass.open()
+      original = Application.get_env(:maraithon, :slack, [])
+      Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+      on_exit(fn -> Application.put_env(:maraithon, :slack, original) end)
+
+      {:ok, source} =
+        SlackSource.snapshot(
+          [c.root, c.message],
+          c.account.id,
+          c.scope["channel"],
+          c.scope["thread_id"]
+        )
+
+      context = %{
+        delegation: c.delegation,
+        grant: %{data: %{"scope" => c.scope}},
+        turn: %{source_revision: 0},
+        run: %{prompt_snapshot: %{"sources" => source}}
+      }
+
+      decision = %{
+        "evidence" => [c.message["ts"]],
+        "facts" => [
+          %{
+            "key" => "project_colour",
+            "text" => "Charlie says the colour is indigo.",
+            "evidence" => [c.message["ts"]]
+          }
+        ]
+      }
+
+      {:ok, ledger} = Ledger.merge(context, decision, DateTime.utc_now())
+
+      recent =
+        for n <- 2..7,
+            do:
+              c.message
+              |> Map.put("ts", ts(DateTime.add(DateTime.utc_now(), n)))
+              |> SlackSource.normalize(c.scope["channel"], c.scope["thread_id"])
+
+      context = put_in(context, [:run, :prompt_snapshot, "sources", "messages"], recent)
+      context = put_in(context, [:run, :prompt_snapshot, "fact_ledger"], ledger)
+
+      Bypass.expect(bypass, "POST", "/api/auth.test", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer local-slack-member"]
+        json(conn, %{"ok" => true, "team_id" => "T123", "user_id" => "UOWN"})
+      end)
+
+      endpoint =
+        if unquote(dm?), do: "/api/conversations.history", else: "/api/conversations.replies"
+
+      response = if unquote(dm?), do: Map.delete(c.message, "thread_ts"), else: c.message
+
+      Bypass.expect_once(bypass, "GET", endpoint, fn conn ->
+        query = URI.decode_query(conn.query_string)
+        assert query["channel"] == c.scope["channel"]
+        assert query["oldest"] == c.message["ts"]
+        assert query["latest"] == c.message["ts"]
+        assert query["inclusive"] == "true"
+        assert query["limit"] == "2"
+        json(conn, %{"ok" => true, "messages" => [response], "has_more" => false})
+      end)
+
+      assert {:ok, [recalled]} = Toolbox.read(context, decision)
+      assert recalled["message"]["from"] == "UCHARLIE"
+      assert recalled["message"]["text_body"] == c.message["text"]
+      context = put_in(context, [:run, :prompt_snapshot, "recalled_sources"], [recalled])
+
+      Bypass.expect_once(bypass, "GET", endpoint, fn conn ->
+        json(conn, %{
+          "ok" => true,
+          "messages" => [Map.put(response, "text", "Actually, violet.")],
+          "has_more" => false
+        })
+      end)
+
+      assert {:error, :recalled_evidence_changed} = Toolbox.verify_before_send(context)
+    end
+  end
+
   for {actor, response, new_dm} <- [
         {"as_user", :accepted, false},
         {"as_user", :lost_response, false},

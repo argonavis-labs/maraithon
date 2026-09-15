@@ -1,6 +1,6 @@
 defmodule Maraithon.Delegations.Decision do
   @moduledoc "A bounded read-only model continuation with a separate scope review."
-  alias Maraithon.{LLM, Repo}
+  alias Maraithon.{LLM, PromptBudget, Repo}
   alias Maraithon.AssistantChat.Execution
 
   alias Maraithon.Delegations.{
@@ -9,9 +9,11 @@ defmodule Maraithon.Delegations.Decision do
     Budget,
     Gates,
     Jobs,
+    Ledger,
     Policy,
     Scheduling,
     Turn,
+    Toolbox,
     Voice
   }
 
@@ -66,6 +68,7 @@ defmodule Maraithon.Delegations.Decision do
           snapshot =
             current.run.prompt_snapshot
             |> Map.put("scheduling", scheduling)
+            |> Map.put("fact_ledger", Ledger.snapshot(current))
             |> Voice.freeze(job.user_id, current.grant.data["scope"])
 
           run =
@@ -102,7 +105,8 @@ defmodule Maraithon.Delegations.Decision do
     response = checkpoint["response"]
     decision = response["decision"] || checkpoint["delegation_decision"]
 
-    with {:ok, decision} <- Policy.validate(context, decision) do
+    with {:ok, context} <- recall(job, context, decision),
+         {:ok, decision} <- Policy.validate(context, decision) do
       case response["stage"] do
         stage when stage in ~w(compose repair) ->
           call(job, context, checkpoint, state, "policy", decision)
@@ -116,6 +120,15 @@ defmodule Maraithon.Delegations.Decision do
           hold(job, :invalid_execution_checkpoint)
       end
     else
+      {:ok, :superseded} ->
+        {:ok, :superseded}
+
+      {:error, {:rate_limited, seconds, _}} when is_integer(seconds) ->
+        {:error, {:retry_after, max(seconds, 30), :source_rate_limited}}
+
+      {:error, {:rate_limited, _}} ->
+        {:error, {:retry_after, 30, :source_rate_limited}}
+
       {:error, reason}
       when reason in [:invalid_message, :unverified_slot_wording, :invalid_question] ->
         if response["stage"] == "compose" do
@@ -129,6 +142,25 @@ defmodule Maraithon.Delegations.Decision do
     end
   end
 
+  defp recall(job, context, decision) do
+    with {:ok, recalled} <- Toolbox.read(context, decision) do
+      if recalled == (context.run.prompt_snapshot["recalled_sources"] || []) do
+        {:ok, context}
+      else
+        Jobs.transaction(job, fn current ->
+          run =
+            current.run
+            |> Run.changeset(%{
+              prompt_snapshot: Map.put(current.run.prompt_snapshot, "recalled_sources", recalled)
+            })
+            |> Repo.update!()
+
+          %{current | run: run}
+        end)
+      end
+    end
+  end
+
   defp call(job, context, checkpoint, state, stage, decision) do
     with true <- LLM.provider_name() == "openrouter",
          true <- Gates.scope_enabled?(context.delegation, context.grant),
@@ -138,7 +170,7 @@ defmodule Maraithon.Delegations.Decision do
              do: Policy.repair_messages(context, decision),
              else: Policy.messages(context, decision)
            ),
-         true <- byte_size(Jason.encode!(messages)) <= 32_000,
+         true <- PromptBudget.encoded_bytes(messages) <= 64_000,
          {:ok, quote} <- Budget.quote(context.turn.model) do
       params = %{
         "messages" => messages,
@@ -274,26 +306,34 @@ defmodule Maraithon.Delegations.Decision do
 
   defp publish(job, decision, verdict) do
     Jobs.transaction(job, fn current ->
-      case Policy.validate(current, decision) do
-        {:ok, _} ->
-          current.turn
-          |> Turn.changeset(%{
-            status: "validated",
-            data:
-              Map.merge(
-                current.turn.data,
-                %{"decision" => decision, "policy_review" => verdict}
-              )
-          })
-          |> Repo.update!()
+      with {:ok, _} <- Policy.validate(current, decision),
+           {:ok, ledger} <- Ledger.merge(current, decision, DatabaseClock.now!()) do
+        current.delegation
+        |> Maraithon.Delegations.Delegation.changeset(%{
+          data: Map.put(current.delegation.data, "ledger", ledger)
+        })
+        |> Repo.update!()
 
-          current.run
-          |> Run.changeset(%{status: "completed", finished_at: DatabaseClock.now!()})
-          |> Repo.update!()
+        current.turn
+        |> Turn.changeset(%{
+          status: "validated",
+          data:
+            Map.merge(
+              current.turn.data,
+              %{"decision" => decision, "policy_review" => verdict}
+            )
+        })
+        |> Repo.update!()
 
-          Jobs.result!(current, "decision", decision)
-          %{state: "decided", run_id: current.run.id}
+        current.run
+        |> Run.changeset(%{status: "completed", finished_at: DatabaseClock.now!()})
+        |> Repo.update!()
 
+        # The reviewed decision already lives on the turn. The wake needs only
+        # its kind and user question, not another copy of its body and facts.
+        Jobs.result!(current, "decision", Map.take(decision, ~w(kind question)))
+        %{state: "decided", run_id: current.run.id}
+      else
         {:error, reason} ->
           Repo.rollback(reason)
       end

@@ -43,6 +43,11 @@ defmodule Maraithon.Delegations.Delegation do
     |> validate_inclusion(:provider, ~w(gmail slack))
     |> validate_number(:schema_version, equal_to: 1)
     |> validate_number(:revision, greater_than: 0)
+    |> validate_change(:data, fn :data, data ->
+      if Maraithon.Delegations.Ledger.valid_storage?(data["ledger"] || %{}),
+        do: [],
+        else: [data: "conversation memory exceeds its limit"]
+    end)
     |> foreign_key_constraint(:todo_id)
     |> foreign_key_constraint(:connected_account_id)
     |> unique_constraint(:todo_id, name: :delegations_live_todo)

@@ -78,7 +78,19 @@ The server build passed, and 60 focused ingress and source checks pass. The fixt
 
 Commit `c18cd3d1` deployed successfully through workflow `35033415934`. Revision `maraithon-00376-m9w` is ready and serving. Production job `maraithon-todo-validation-c5prq` then verified 32 authenticated legacy references across Kent's and October's mailboxes. Both accounts are well below the 2,048-row compatibility bound; the sampled query execution took 1.1 and 1.9 ms. The transaction was read-only, with no provider calls, model calls, messages, or conversation writes. This verifies stored upgrade evidence and lookup cost, not a live automatic thread split. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. [Thread continuity evidence](evidence/delegated-conversations/2026-09-15-gmail-thread-continuity.json).
 
-The compact fact ledger, retrieval of older cited evidence, Slack pagination, and the real longevity canary remain unfinished. Automatic Gmail rollover still needs live provider evidence.
+Slack pagination and the real longevity canary remain unfinished. Automatic Gmail rollover still needs live provider evidence. The fact-ledger work below adds recall for facts learned by reviewed turns.
+
+## Durable facts and cited recall
+
+Reviewed turns now save compact facts and their exact source references in the delegation's existing encrypted payload. No new table or process is needed. The model proposes facts during its normal composition call, and the existing independent review checks each fact against its cited message before anything is stored. A rejected or superseded decision cannot change memory. Retries reuse the committed turn and its frozen context.
+
+Each fact has a stable key, a short statement, and citations bound to the provider, account, channel or thread, message ID, and content digest. A correction replaces the same key. Other facts remain unless the reviewed decision explicitly removes them. Drafts, self-authored claims, unknown citations, and changed participants cannot supply a new fact. The grant and task owner remain separate from memory.
+
+When a decision cites evidence outside the last six messages, the read-only toolbox resolves only citations already present in the frozen ledger. Gmail reads the exact message from the bound mailbox. Slack reads the exact timestamp from the bound channel or DM, after verifying the token's author and workspace. The original message enters the review context and is saved with the turn. Before sending, the worker checks recalled evidence again; changed, missing, or inaccessible evidence prevents entry. The Slack read uses the provider's documented timestamp bounds. [Slack thread reads](https://docs.slack.dev/reference/methods/conversations.replies/), [Slack history reads](https://docs.slack.dev/reference/methods/conversations.history/).
+
+The ledger is capped at 32 KiB, with 28 KB available to facts and room reserved for existing outcome and booking notes. A turn may update eight facts and recall six older messages totalling at most 128 KB. PromptBudget enforces a 64 KB prompt ceiling. Limits hold visibly; they do not silently truncate facts. Decision wake events now carry only the kind and user question because the reviewed decision is already stored on the turn.
+
+The server build and 105 focused checks passed. A simulated turn 180 days later used its stored fact, fetched one cited message, and passed independent review with the usual two model calls. Replaying the leased worker made no additional provider or model calls. Other checks cover rejected facts, corrections, explicit removal, size limits, foreign mailboxes, missing messages, changed evidence before sending, preserved Gmail signatures, and local Slack channel and DM reads. These fixtures do not prove whole-app recovery or a real six-month conversation. Live verification of the new memory path is pending.
 
 ## Previously verified
 
@@ -247,6 +259,6 @@ The completed information task is visible on the authenticated web app as Comple
 4. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Older cited-evidence retrieval, Slack pagination, scheduling preference refinements, and the full conversation ledger remain unfinished. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack pagination, scheduling preference refinements, and the full conversation ledger remain unfinished. Cited recall has local coverage; live memory verification is pending. Older conversations without saved facts still need a bounded way to seed their ledger from historical evidence. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.

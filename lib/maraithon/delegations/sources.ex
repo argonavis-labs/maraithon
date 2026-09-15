@@ -1,14 +1,14 @@
 defmodule Maraithon.Delegations.Sources do
   @moduledoc "A bounded, account-scoped source refresh outside the coordinator and DB transaction."
   alias Maraithon.Repo
-  alias Maraithon.Delegations.{GmailSource, Ingress, Jobs, SlackSource, SlackIngress}
+  alias Maraithon.Delegations.{GmailSource, Ingress, Jobs, SlackSource, SlackIngress, Toolbox}
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.TelegramAssistant.Run
 
   def verify_before_send(job, %{delegation: %{provider: "gmail"} = d} = context) do
     with {:ok, index} <- GmailSource.index(d, context.grant.data["scope"]) do
       if GmailSource.unchanged?(index, context.run.prompt_snapshot["sources"]) do
-        :ok
+        Toolbox.verify_before_send(context)
       else
         with {:ok, messages, sources} <- GmailSource.read(context, index),
              {:ok, _} <-
@@ -26,7 +26,7 @@ defmodule Maraithon.Delegations.Sources do
       ids = fn source -> MapSet.new(source["messages"], &{&1["message_id"], &1["revision"]}) end
 
       if ids.(fresh) == ids.(previous) do
-        :ok
+        Toolbox.verify_before_send(context)
       else
         case Jobs.transaction(job, fn _ ->
                route!(context, messages, fresh)
