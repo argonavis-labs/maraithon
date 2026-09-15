@@ -74,6 +74,41 @@ defmodule Maraithon.Delegations.PolicyTest do
     assert {:error, :source_gap} = Policy.validate(context, c.decision)
   end
 
+  test "as-user messages cannot introduce themselves as Kent's assistant", c do
+    for intro <- ["I am Kent's assistant", "I'm your assistant", "As an AI assistant"] do
+      assert {:error, :wrong_message_actor} =
+               Policy.validate(c.context, %{c.decision | "body" => intro <> ", sharing times."})
+    end
+
+    assert {:ok, _} =
+             Policy.validate(c.context, %{c.decision | "body" => "These times work for me."})
+  end
+
+  test "an offer must contain the exact local labels, not UTC marked Toronto", c do
+    slot = %{
+      "start_at" => "2026-09-16T16:15:00Z",
+      "end_at" => "2026-09-16T16:45:00Z",
+      "timezone" => "America/Toronto"
+    }
+
+    context = %{c.context | delegation: %{kind: "scheduling", data: %{}}}
+    context = put_in(context, [:run, :prompt_snapshot, "scheduling"], %{"slots" => [slot]})
+
+    decision =
+      Map.merge(c.decision, %{
+        "kind" => "propose_times",
+        "slot_ids" => [Policy.slot_id(slot)],
+        "body" => "2026-09-16T16:15:00Z to 2026-09-16T16:45:00Z America/Toronto"
+      })
+
+    assert {:error, :unverified_slot_wording} = Policy.validate(context, decision)
+    label = Maraithon.Delegations.Scheduling.slot_label(slot)
+    assert label =~ "12:15 PM"
+
+    assert {:ok, _} =
+             Policy.validate(context, %{decision | "body" => "Does this work?\n" <> label})
+  end
+
   test "slot identity binds dates and timezone; booking cannot pick a new time", c do
     slot = %{
       "start_at" => "2026-09-16T14:00:00Z",

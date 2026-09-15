@@ -36,6 +36,20 @@ defmodule Maraithon.Delegations.Receipts do
       data = Map.put(d.data, "last_send_status", status)
 
       data =
+        if status == "executed" do
+          label =
+            case get_in(turn.data, ["decision", "kind"]) do
+              "propose_times" -> "Sent #{length(turn.data["decision"]["slot_ids"])} time options."
+              "book" -> "Booked the agreed meeting."
+              _ -> "Sent a message."
+            end
+
+          Map.put(data, "last_action", label)
+        else
+          data
+        end
+
+      data =
         if status == "executed" and get_in(turn.data, ["decision", "kind"]) == "propose_times" do
           scheduling = run.prompt_snapshot["scheduling"]
           selected = turn.data["decision"]["slot_ids"]

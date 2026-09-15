@@ -69,15 +69,29 @@ defmodule Maraithon.Delegations.Scheduling do
               timezone: prefs["timezone"]
             )
             |> Enum.flat_map(&split_opening(&1, duration, prefs["timezone"]))
+            |> Enum.take(3)
           end
         end)
-        |> Enum.take(8)
 
       {:ok, slots}
     else
       false -> {:error, :invalid_meeting_duration}
       error -> error
     end
+  end
+
+  @doc "Display the actual local dates and times without labelling UTC as local time."
+  def slot_label(slot) do
+    prefs = %{"timezone" => slot["timezone"]}
+    {:ok, first, _} = DateTime.from_iso8601(slot["start_at"])
+    {:ok, last, _} = DateTime.from_iso8601(slot["end_at"])
+    first = Preferences.local_time(first, prefs)
+    last = Preferences.local_time(last, prefs)
+
+    Calendar.strftime(first, "%a, %b %-d, %Y, %-I:%M %p") <>
+      " to " <>
+      Calendar.strftime(last, "%a, %b %-d, %Y, %-I:%M %p") <>
+      " (#{slot["timezone"]})"
   end
 
   @doc "Re-read every calendar frozen into the offer immediately before booking."

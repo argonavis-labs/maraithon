@@ -186,7 +186,11 @@ defmodule Maraithon.LLM do
     complete_in_bucket(params, nil)
   end
 
-  defp complete_in_bucket(params, bucket) do
+  @doc "Run a caller's durable entry only after local admission, immediately before the provider."
+  def complete_with_admission(params, admitted) when is_map(params) and is_function(admitted, 1),
+    do: complete_in_bucket(params, nil, admitted)
+
+  defp complete_in_bucket(params, bucket, admitted \\ fn request -> request.() end) do
     case provider() do
       nil ->
         {:error,
@@ -198,7 +202,7 @@ defmodule Maraithon.LLM do
 
         with :ok <- UserModel.verify_expected(params),
              {:ok, bounded_params} <- RequestBudget.validate(params) do
-          run_provider_request(module, bounded_params, &module.complete/1, bucket)
+          run_provider_request(module, bounded_params, &module.complete/1, bucket, admitted)
         end
     end
   end
@@ -344,7 +348,8 @@ defmodule Maraithon.LLM do
     |> Keyword.get(:openai_stream_replies, true)
   end
 
-  defp run_provider_request(module, params, fun, bucket) when is_function(fun, 1) do
+  defp run_provider_request(module, params, fun, bucket, admitted \\ fn request -> request.() end)
+       when is_function(fun, 1) do
     timeout_ms =
       case params["timeout_ms"] do
         value when is_integer(value) and value > 0 -> min(value, 300_000)
@@ -352,11 +357,16 @@ defmodule Maraithon.LLM do
       end
 
     deadline = System.monotonic_time(:millisecond) + timeout_ms
+    bucket = bucket || rate_limit_bucket(params)
+
+    request = fn bounded ->
+      admitted.(fn -> fun.(bounded) |> tap(&record_provider_rate_limit(&1, bucket)) end)
+    end
 
     if provider_backpressure_enabled?(module) do
-      with_provider_slot(bucket || rate_limit_bucket(params), deadline, params, fun)
+      with_provider_slot(bucket, deadline, params, request)
     else
-      fun.(params)
+      request.(params)
     end
   end
 
@@ -420,7 +430,6 @@ defmodule Maraithon.LLM do
             params
             |> Map.put("timeout_ms", remaining)
             |> fun.()
-            |> tap(&record_provider_rate_limit(&1, bucket))
           else
             {:error, :timeout}
           end

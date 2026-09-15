@@ -16,7 +16,7 @@ defmodule Maraithon.Delegations.SchedulingTest do
 
     assert first["start_at"] == "2026-09-15T13:15:00Z"
     assert first["end_at"] == "2026-09-15T13:45:00Z"
-    assert length(slots) == 8
+    assert length(slots) == 3
   end
 
   test "opaque all-day events block the user's local day" do
@@ -69,6 +69,29 @@ defmodule Maraithon.Delegations.SchedulingTest do
 
     assert Enum.map(slots, & &1["start_at"]) ==
              ["2026-10-30T13:00:00Z", "2026-11-02T14:00:00Z", "2026-11-03T14:00:00Z"]
+  end
+
+  test "availability includes later days so next week is not crowded out by tomorrow" do
+    request = %{window: {@now, DateTime.add(@now, 14, :day)}}
+    assert {:ok, slots} = Scheduling.slots([], request, prefs(), @now)
+    assert Enum.any?(slots, &String.starts_with?(&1["start_at"], "2026-09-21"))
+    assert Enum.any?(slots, &String.starts_with?(&1["start_at"], "2026-09-28"))
+    assert length(slots) <= 45
+  end
+
+  test "offer labels convert UTC to local time on each side of DST" do
+    for {date, utc_hour} <- [{"2026-10-30", "13"}, {"2026-11-02", "14"}] do
+      label =
+        Scheduling.slot_label(%{
+          "start_at" => "#{date}T#{utc_hour}:00:00Z",
+          "end_at" => "#{date}T#{utc_hour}:30:00Z",
+          "timezone" => "America/Toronto"
+        })
+
+      assert label =~ "9:00 AM"
+      assert label =~ "9:30 AM (America/Toronto)"
+      refute label =~ "00Z"
+    end
   end
 
   test "an unbounded calendar window is rejected" do

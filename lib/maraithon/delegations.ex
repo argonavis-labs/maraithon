@@ -380,6 +380,11 @@ defmodule Maraithon.Delegations do
     do: "Waiting for #{data["counterparty_label"] || "a reply"}"
 
   defp status_line(%{state: "needs_user"}, _), do: "Needs your decision"
+
+  defp status_line(%{state: "waiting_capacity", data: %{"hold_reason" => reason}}, _)
+       when reason in ~w(rate_limited llm_busy),
+       do: "Model is busy. Retrying automatically."
+
   defp status_line(%{state: "waiting_capacity"}, _), do: "Waiting for capacity"
   defp status_line(%{state: "reconciling"}, _), do: "Checking whether the message was sent"
   defp status_line(_, _), do: "Maraithon is working on this"

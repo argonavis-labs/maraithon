@@ -2,6 +2,34 @@ defmodule Maraithon.Delegations.Evaluation do
   @moduledoc "The controlled Kent-to-Kent evaluation. Preflight is read-only and never calls a model."
   alias Maraithon.{Accounts, AssistantIdentities, ConnectedAccounts, LLM}
   alias Maraithon.Connectors.GoogleCalendar
+  alias Maraithon.Delegations.{Preferences, Scheduling}
+
+  @doc "Check the actual recipient's offered dates and wording before the fixture accepts a time."
+  def verify_offer(scenario, slots, body, requested_at) do
+    valid =
+      is_list(slots) and length(slots) == 3 and is_binary(body) and
+        not Regex.match?(
+          ~r/\b(?:I am|I'm|I’m|as)\s+(?:\w+[’']?s?\s+){0,3}(?:AI\s+)?assistant\b/iu,
+          body
+        ) and
+        Enum.all?(slots, fn slot ->
+          {:ok, first, _} = DateTime.from_iso8601(slot["start_at"])
+          {:ok, last, _} = DateTime.from_iso8601(slot["end_at"])
+          prefs = %{"timezone" => slot["timezone"]}
+          date = Preferences.local_time(first, prefs) |> DateTime.to_date()
+          requested = Preferences.local_time(requested_at, prefs) |> DateTime.to_date()
+          monday = Date.add(requested, 8 - Date.day_of_week(requested))
+
+          next_week? =
+            Date.compare(date, monday) != :lt and Date.compare(date, Date.add(monday, 7)) == :lt
+
+          String.contains?(body, Scheduling.slot_label(slot)) and
+            DateTime.diff(last, first) == 1_800 and
+            (scenario["expect"]["requested_week_offset"] != 1 or next_week?)
+        end)
+
+    if valid, do: :ok, else: {:error, :received_offer_not_proven}
+  end
 
   def scenarios do
     :maraithon

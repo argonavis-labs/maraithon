@@ -110,6 +110,37 @@ defmodule Maraithon.LLMTest do
       refute_received {:rate_limited_provider_called, _params}
     end
 
+    test "durable admission runs only after checkout, while provider failures retain entry" do
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        llm_provider: Maraithon.LLMTest.RateLimitedProvider,
+        llm_provider_name: "openai",
+        llm_model: "gpt-5.4"
+      )
+
+      admitted = fn request ->
+        send(self(), :durably_entered)
+        {:entered, request.()}
+      end
+
+      params = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
+
+      assert {:entered, {:error, {:rate_limited, 60_000}}} =
+               LLM.complete_with_admission(params, admitted)
+
+      assert_received :durably_entered
+      assert_received {:rate_limited_provider_called, _}
+      assert {:error, {:rate_limited, _}} = LLM.complete_with_admission(params, admitted)
+      refute_received :durably_entered
+      refute_received {:rate_limited_provider_called, _}
+      LLMRateLimiter.reset()
+
+      assert {:entered, {:error, {:rate_limited, 60_000}}} =
+               LLM.complete_with_admission(params, admitted)
+
+      assert_received :durably_entered
+      assert_received {:rate_limited_provider_called, _}
+    end
+
     test "does not block chat model calls behind a saturated reasoning lane" do
       Application.put_env(:maraithon, Maraithon.Runtime,
         llm_provider: Maraithon.LLMTest.CapturingProvider,

@@ -107,53 +107,68 @@ defmodule Maraithon.Delegations.Decision do
          remaining when remaining > 1_000 <- Continuation.remaining_ms(checkpoint),
          messages = Policy.messages(context, decision),
          true <- byte_size(Jason.encode!(messages)) <= 32_000,
-         {:ok, quote} <- Budget.quote(context.turn.model),
-         {:ok, entered} <- enter(job, context, checkpoint, state, stage, decision, quote) do
-      if entered == :superseded do
-        {:ok, :superseded}
-      else
-        {next_checkpoint, next_state} = entered
+         {:ok, quote} <- Budget.quote(context.turn.model) do
+      params = %{
+        "messages" => messages,
+        "model" => quote["model"],
+        "_expected_model" => quote["model"],
+        "provider" => quote["provider"],
+        "max_tokens" => quote["max_tokens"],
+        "response_format" => %{"type" => "json_object"},
+        "temperature" => 0.2,
+        "reasoning_effort" => "low",
+        "timeout_ms" => min(remaining, 60_000)
+      }
 
-        params = %{
-          "messages" => messages,
-          "model" => quote["model"],
-          "_expected_model" => quote["model"],
-          "provider" => quote["provider"],
-          "max_tokens" => quote["max_tokens"],
-          "response_format" => %{"type" => "json_object"},
-          "temperature" => 0.2,
-          "reasoning_effort" => "low",
-          "timeout_ms" => min(Continuation.remaining_ms(next_checkpoint), 60_000)
-        }
+      result =
+        LLM.complete_with_admission(params, fn request ->
+          case enter(job, context, checkpoint, state, stage, decision, quote) do
+            {:ok, {next_checkpoint, next_state}} ->
+              {:entered, next_checkpoint, next_state, request.()}
 
-        case LLM.complete(params) do
-          {:ok, result} ->
-            save_response(job, context, next_checkpoint, next_state, stage, decision, result)
+            other ->
+              other
+          end
+        end)
 
-          {:error, reason} ->
-            hold(job, reason)
-        end
+      case result do
+        {:entered, next_checkpoint, next_state, {:ok, response}} ->
+          save_response(job, context, next_checkpoint, next_state, stage, decision, response)
+
+        {:entered, _, _, {:error, reason}} ->
+          hold(job, reason)
+
+        {:error, {reason, delay}} when reason in [:rate_limited, :llm_busy] ->
+          capacity(job, reason, delay)
+
+        {:error, reason} ->
+          call_error(job, reason)
+
+        {:ok, :superseded} ->
+          {:ok, :superseded}
       end
     else
       false ->
         hold(job, :decision_unavailable)
 
-      {:error, reason}
-      when reason in [
-             :delegation_cost_limit,
-             :user_cost_limit,
-             :model_call_limit,
-             :account_cost_hold
-           ] ->
-        capacity(job, reason)
-
       {:error, reason} ->
-        hold(job, reason)
+        call_error(job, reason)
 
       _ ->
         hold(job, :decision_deadline_reached)
     end
   end
+
+  defp call_error(job, reason)
+       when reason in [
+              :delegation_cost_limit,
+              :user_cost_limit,
+              :model_call_limit,
+              :account_cost_hold
+            ],
+       do: capacity(job, reason)
+
+  defp call_error(job, reason), do: hold(job, reason)
 
   defp enter(job, context, checkpoint, state, stage, decision, quote) do
     Jobs.transaction(job, fn current ->
@@ -275,9 +290,13 @@ defmodule Maraithon.Delegations.Decision do
     end)
   end
 
-  defp capacity(job, reason) do
+  defp capacity(job, reason, delay \\ nil) do
     Jobs.transaction(job, fn context ->
-      Jobs.result!(context, "capacity_hold", %{"reason" => Atom.to_string(reason)})
+      Jobs.result!(context, "capacity_hold", %{
+        "reason" => Atom.to_string(reason),
+        "retry_after_ms" => delay
+      })
+
       %{state: "waiting_capacity", run_id: context.run.id}
     end)
   end

@@ -570,121 +570,169 @@ defmodule Maraithon.Delegations.IngressTest do
     end
   end
 
-  test "a leased model turn checkpoints decisions and actual cost before dispatch", c do
-    alias Maraithon.Delegations.{Decision, Jobs, Turn}
-    alias Maraithon.LLM.OpenRouterProvider
-    enable_gmail(c.user_id)
-    {node, partitions} = exact_authority(c.user_id)
-    bypass = Bypass.open()
-    model = "meta/muse-spark-1.3-contributor"
-    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+  for admission <- [:ready, :cooldown] do
+    @tag admission: admission
+    test "a leased model turn with #{admission} admission charges only provider entries", c do
+      alias Maraithon.Delegations.{Decision, Jobs, Turn}
+      alias Maraithon.LLM.OpenRouterProvider
+      enable_gmail(c.user_id)
+      {node, partitions} = exact_authority(c.user_id)
+      bypass = Bypass.open()
+      model = "meta/muse-spark-1.3-contributor"
+      runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
 
-    configure(
-      Maraithon.Runtime,
-      Keyword.merge(runtime,
-        llm_provider: OpenRouterProvider,
-        llm_provider_name: "openrouter",
-        openrouter_model: model,
-        openrouter_api_key: "local-eval-only"
+      configure(
+        Maraithon.Runtime,
+        Keyword.merge(runtime,
+          llm_provider: OpenRouterProvider,
+          llm_provider_name: "openrouter",
+          openrouter_model: model,
+          openrouter_api_key: "local-eval-only"
+        )
       )
-    )
 
-    configure(:openrouter,
-      base_url: "http://localhost:#{bypass.port}/api/v1/chat/completions",
-      models_base_url: "http://localhost:#{bypass.port}/api/v1/models"
-    )
+      configure(:openrouter,
+        base_url: "http://localhost:#{bypass.port}/api/v1/chat/completions",
+        models_base_url: "http://localhost:#{bypass.port}/api/v1/models"
+      )
 
-    ready_cost_monitor()
-    calls = start_supervised!({Agent, fn -> 0 end})
+      ready_cost_monitor()
+      calls = start_supervised!({Agent, fn -> 0 end})
 
-    Bypass.expect(bypass, "GET", "/api/v1/models/#{model}/endpoints", fn conn ->
-      json(conn, %{
-        "data" => %{
-          "id" => model,
-          "endpoints" => [
-            %{
-              "tag" => "meta",
-              "context_length" => 1_048_576,
-              "supported_parameters" => ["max_tokens"],
-              "pricing" => %{"prompt" => "0.0000001", "completion" => "0.0000002"}
-            }
-          ]
-        }
-      })
-    end)
-
-    Bypass.expect(bypass, "POST", "/api/v1/chat/completions", fn conn ->
-      {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      request = Jason.decode!(raw)
-      assert request["model"] == model
-      assert request["provider"]["only"] == ["meta"]
-
-      assert Decimal.equal?(
-               Decimal.new(request["provider"]["max_price"]["prompt"]),
-               Decimal.new("0.1")
-             )
-
-      n = Agent.get_and_update(calls, &{&1 + 1, &1 + 1})
-      assert n in [1, 2]
-
-      content =
-        if n == 1,
-          do: %{
-            "kind" => "send",
-            "body" => "Got it. Indigo.",
-            "reason" => "Confirm the answer",
-            "evidence" => [c.message.message_id]
-          },
-          else: %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
-
-      json(conn, %{
-        "id" => "gen-#{n}",
-        "model" => model,
-        "choices" => [
-          %{
-            "finish_reason" => "stop",
-            "message" => %{"role" => "assistant", "content" => Jason.encode!(content)}
+      Bypass.expect(bypass, "GET", "/api/v1/models/#{model}/endpoints", fn conn ->
+        json(conn, %{
+          "data" => %{
+            "id" => model,
+            "endpoints" => [
+              %{
+                "tag" => "meta",
+                "context_length" => 1_048_576,
+                "supported_parameters" => ["max_tokens"],
+                "pricing" => %{"prompt" => "0.0000001", "completion" => "0.0000002"}
+              }
+            ]
           }
-        ],
-        "usage" => %{
-          "prompt_tokens" => 500,
-          "completion_tokens" => 100,
-          "total_tokens" => 600,
-          "cost" => 0.0001
-        }
-      })
-    end)
+        })
+      end)
 
-    assert {:ok, _} =
-             Repo.transaction(fn ->
-               {d, _grant, event} = decision_turn(c)
-               turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
+      Bypass.stub(bypass, "POST", "/api/v1/chat/completions", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(raw)
+        assert request["model"] == model
+        assert request["provider"]["only"] == ["meta"]
 
-               turn
-               |> Turn.changeset(%{
-                 status: "deciding",
-                 data: Map.drop(turn.data, ~w(decision policy_review))
-               })
-               |> Repo.update!()
+        assert Decimal.equal?(
+                 Decimal.new(request["provider"]["max_price"]["prompt"]),
+                 Decimal.new("0.1")
+               )
 
-               Jobs.start_decide!(d, event, DateTime.utc_now())
-             end)
+        n = Agent.get_and_update(calls, &{&1 + 1, &1 + 1})
+        assert c.admission == :ready
+        assert n in [1, 2]
 
-    run_leased_job(node, partitions, "delegation_decide", fn job ->
-      assert {:ok, %{state: "decided"}} = Decision.execute(job)
-      assert {:ok, %{state: "decided"}} = result = Decision.execute(job)
-      result
-    end)
+        content =
+          if n == 1,
+            do: %{
+              "kind" => "send",
+              "body" => "Got it. Indigo.",
+              "reason" => "Confirm the answer",
+              "evidence" => [c.message.message_id]
+            },
+            else: %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
 
-    assert Agent.get(calls, & &1) == 2
-    turn = Repo.one!(Turn) |> Turn.hydrate()
-    assert turn.status == "validated"
-    assert turn.model_calls == 2
-    assert turn.reserved_micro_usd == 0
-    assert turn.cost_micro_usd == 200
-    assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == 200
-    assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) == 1
-    assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
+        json(conn, %{
+          "id" => "gen-#{n}",
+          "model" => model,
+          "choices" => [
+            %{
+              "finish_reason" => "stop",
+              "message" => %{"role" => "assistant", "content" => Jason.encode!(content)}
+            }
+          ],
+          "usage" => %{
+            "prompt_tokens" => 500,
+            "completion_tokens" => 100,
+            "total_tokens" => 600,
+            "cost" => 0.0001
+          }
+        })
+      end)
+
+      assert {:ok, _} =
+               Repo.transaction(fn ->
+                 {d, _grant, event} = decision_turn(c)
+                 turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
+
+                 turn
+                 |> Turn.changeset(%{
+                   status: "deciding",
+                   data: Map.drop(turn.data, ~w(decision policy_review))
+                 })
+                 |> Repo.update!()
+
+                 Jobs.start_decide!(d, event, DateTime.utc_now())
+               end)
+
+      limiter = Maraithon.Runtime.Effects.LLMRateLimiter
+      on_exit(fn -> limiter.reset() end)
+      if c.admission == :cooldown, do: limiter.record_rate_limit(60_000, :reasoning)
+
+      run_leased_job(node, partitions, "delegation_decide", fn job ->
+        expected = if c.admission == :ready, do: "decided", else: "waiting_capacity"
+        assert {:ok, %{state: ^expected}} = Decision.execute(job)
+        assert {:ok, %{state: ^expected}} = result = Decision.execute(job)
+        result
+      end)
+
+      if c.admission == :cooldown do
+        assert Agent.get(calls, & &1) == 0
+        turn = Repo.one!(Turn) |> Turn.hydrate()
+        assert turn.model_calls == 0
+        assert turn.reserved_micro_usd == 0
+        assert turn.cost_micro_usd == 0
+        assert turn.data["model_entries"] == nil
+
+        assert {:ok, _} =
+                 Repo.transaction(fn ->
+                   d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+
+                   event =
+                     Repo.one!(from e in Event, where: e.kind == "capacity_hold")
+                     |> Event.hydrate()
+
+                   {d, commands} = StateMachine.apply(d, event)
+
+                   next =
+                     Maraithon.Delegations.Commands.apply(
+                       d,
+                       nil,
+                       event,
+                       commands,
+                       DateTime.utc_now()
+                     )
+
+                   assert next.state == "waiting_capacity"
+                   assert DateTime.diff(next.next_wake_at, DateTime.utc_now()) in 59..61
+                   assert Repo.get!(Turn, turn.id).status == "superseded"
+
+                   assert {%{state: "ready"}, [:enqueue_sync]} =
+                            StateMachine.apply(next, %{
+                              kind: "timer_due",
+                              occurred_at: next.next_wake_at
+                            })
+                 end)
+      else
+        assert Agent.get(calls, & &1) == 2
+        turn = Repo.one!(Turn) |> Turn.hydrate()
+        assert turn.status == "validated"
+        assert turn.model_calls == 2
+        assert turn.reserved_micro_usd == 0
+        assert turn.cost_micro_usd == 200
+        assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == 200
+        assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) == 1
+        assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
+      end
+    end
   end
 
   @tag controlled_eval: true
@@ -1204,6 +1252,10 @@ defmodule Maraithon.Delegations.IngressTest do
         assert Repo.get!(PreparedAction, action.id).status == "executed"
         assert Repo.get!(Turn, action.delegation_turn_id).status == "settled"
         assert Repo.get!(Delegation, c.delegation.id).lifetime_sends == 1
+
+        assert (Repo.get!(Delegation, c.delegation.id)
+                |> Delegation.hydrate()).data["last_action"] == "Sent a message."
+
         assert Repo.aggregate(from(e in Event, where: e.kind == "send_receipt"), :count) == 1
       end
     end

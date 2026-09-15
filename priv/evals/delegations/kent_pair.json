@@ -24,7 +24,7 @@
       "outcome": "Arrange a 30-minute Maraithon eval meeting within the next seven working days and invite kent.fenwick@gmail.com.",
       "initial_email": "Let's find 30 minutes for a Maraithon test call next week. Please send a few times that work.\n\n-Kent",
       "counterparty_replies": ["The second time you offered works for me. Please send the invite.\n\n-Kent"],
-      "expect": {"state": "completed", "offered_slots": 3, "event_count": 1, "accepted_slot": 2, "attendees": ["kent.fenwick@gmail.com"], "recipient_calendar_copy": true, "todo_state": "waiting", "max_agent_messages": 2}
+      "expect": {"state": "completed", "offered_slots": 3, "requested_week_offset": 1, "event_count": 1, "accepted_slot": 2, "attendees": ["kent.fenwick@gmail.com"], "recipient_calendar_copy": true, "todo_state": "waiting", "max_agent_messages": 2}
     },
     {
       "id": "accepted_slot_becomes_busy",

@@ -113,6 +113,9 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       d.state == "completed" ->
         verify(job, state, d)
 
+      d.state == "waiting_capacity" and d.data["hold_reason"] in ~w(rate_limited llm_busy) ->
+        {:wait, Map.put(state, "phase", "waiting_for_model_capacity")}
+
       d.state in ~w(needs_user paused stopped expired waiting_capacity) ->
         {:error, {:conversation_held, d.state}}
 
@@ -219,6 +222,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
                &(&1["role"] == "from" and &1["identifier"]["email"] == @user)
              ) and "DRAFT" not in m.labels
            end),
+         :ok <- verify_received_offer(job, d, parent),
          :ok <- maybe_make_busy(job, d, count),
          {:ok, action} <-
            action(job, reply_key(count), %{
@@ -239,7 +243,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
          "phase" => "waiting_for_completion",
          "reply_action_id" => action.id,
          "reply_count" => count + 1,
-         "reply_message_id" => message.message_id
+         "reply_message_id" => message.message_id,
+         "received_offer_verified" => d.kind == "scheduling"
        })}
     else
       nil -> {:wait, state}
@@ -247,6 +252,17 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       error -> error
     end
   end
+
+  defp verify_received_offer(job, %{kind: "scheduling"} = d, message),
+    do:
+      Evaluation.verify_offer(
+        job.payload["scenario"],
+        d.data["offered_slots"],
+        message.text_body,
+        job.inserted_at
+      )
+
+  defp verify_received_offer(_, _, _), do: :ok
 
   defp action(job, key, content, type \\ "gmail_send") do
     id = deterministic_id(job.id, key)

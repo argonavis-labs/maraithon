@@ -43,7 +43,6 @@ defmodule Maraithon.Delegations.Outcomes do
             sources = context.run.prompt_snapshot["sources"]
 
             Map.merge(d.data, %{
-              "last_action" => attrs["next_action"],
               "evidence" =>
                 Enum.map(decision["evidence"] || [], fn id ->
                   %{"source" => "gmail", "account_id" => sources["account_id"], "id" => id}

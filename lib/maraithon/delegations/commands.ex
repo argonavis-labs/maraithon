@@ -54,9 +54,15 @@ defmodule Maraithon.Delegations.Commands do
   # send. Unknown delivery must not restart its counter or enqueue a new send.
   defp execute(d, _, :observe_action), do: %{d | next_wake_at: nil}
 
-  defp execute(d, _, {:schedule_capacity, _}) do
+  defp execute(d, _, {:schedule_capacity, data}) do
     Actions.supersede_unentered!(d)
-    %{d | next_wake_at: DateTime.add(Maraithon.Runtime.DatabaseClock.now!(), 6, :hour)}
+
+    delay =
+      if data["reason"] in ~w(rate_limited llm_busy) and is_integer(data["retry_after_ms"]),
+        do: max(60_000, min(data["retry_after_ms"], 300_000)),
+        else: 6 * 60 * 60 * 1_000
+
+    %{d | next_wake_at: DateTime.add(Maraithon.Runtime.DatabaseClock.now!(), delay, :millisecond)}
   end
 
   # Uninstalled providers and commands remain gated independently.
