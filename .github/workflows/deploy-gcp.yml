@@ -20,6 +20,7 @@ on:
           - deploy
           - validate-todo
           - diagnose-runtime
+          - delegation-eval-preflight
           - reset-rebuild-kent
           - replay-gmail
           - replay-slack
@@ -102,6 +103,10 @@ jobs:
           MARAITHON_GCP_SERVICE: maraithon
           MARAITHON_OPERATOR_USER: kent@runner.now
           MARAITHON_RESET_CONFIRMATION: RESET_AND_REBUILD_KENT
+
+      - name: Check Kent's delegation eval accounts
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'delegation-eval-preflight'
+        run: scripts/monorepo/delegation-eval-preflight
 
       - name: Replay Kent's Gmail source window
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'

@@ -27,6 +27,23 @@ defmodule Maraithon.Release do
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
   end
 
+  def delegation_eval_preflight do
+    load_app()
+    {:ok, _} = Application.ensure_all_started(:req)
+    {:ok, vault} = Maraithon.Vault.start_link([])
+
+    try do
+      {:ok, report, _} =
+        Ecto.Migrator.with_repo(Maraithon.Repo, fn _ ->
+          Maraithon.Delegations.Evaluation.preflight()
+        end)
+
+      IO.puts("DELEGATION_EVAL_PREFLIGHT=" <> Jason.encode!(report))
+    after
+      GenServer.stop(vault)
+    end
+  end
+
   def validate_authorized_todo_launch do
     target = System.get_env("TODO_VALIDATION_USER", "")
 

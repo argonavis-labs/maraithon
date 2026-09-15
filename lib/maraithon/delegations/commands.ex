@@ -2,6 +2,8 @@ defmodule Maraithon.Delegations.Commands do
   @moduledoc "Admission for reducer commands. The identity/control slice cannot dispatch external work."
   alias Maraithon.Delegations.{Actions, Gates}
 
+  def execution_ready?, do: false
+
   def apply(delegation, grant, _event, commands, _now) do
     Enum.reduce(commands, delegation, fn command, current ->
       execute(current, grant, command)
