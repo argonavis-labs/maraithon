@@ -73,7 +73,7 @@ defmodule Maraithon.Todos.BriefTest do
     refute Map.has_key?(Brief.public(updated), "fingerprint")
   end
 
-  test "open todos precompute their brief on the durable model lane" do
+  test "open todos prepare their brief on the durable todo preparation lane" do
     user_id = new_user("brief-precompute")
 
     assert {:ok, [todo]} =
@@ -96,7 +96,7 @@ defmodule Maraithon.Todos.BriefTest do
 
     assert {:ok, job} = Brief.enqueue_generation(todo)
     assert job.job_type == "todo_brief_generation"
-    assert job.queue == "runtime_model_user"
+    assert job.queue == "runtime_todo_preparation"
     assert String.starts_with?(job.partition_key, "tenant:")
     assert job.rate_limit_key == "model"
     assert job.payload["todo_id"] == todo.id
@@ -168,20 +168,24 @@ defmodule Maraithon.Todos.BriefTest do
     assert Brief.current(second)["generated_at"] == Brief.current(first)["generated_at"]
   end
 
-  test "editing the todo makes the brief stale, but a partial update keeps the draft" do
+  test "editing the todo hides a stale generated draft while preserving its stored wording" do
     user_id = new_user("brief-stale")
     todo = create_todo(user_id)
 
     assert {:ok, briefed} = Brief.generate_and_store(user_id, todo.id)
     assert Brief.current(briefed)
 
-    # Partial updates (notes, project) must not clobber the ready draft with a
-    # placeholder next step.
+    # Notes can change the intended reply. Keep the previous wording as history,
+    # but do not offer it as a current, ready-to-send draft.
     assert {:ok, noted} =
              Todos.update_for_user(user_id, todo.id, %{"notes" => "Keep it short."})
 
-    assert noted.action_draft["source"] == "todo_brief"
-    assert noted.action_draft["style"] == "ready_to_send"
+    assert noted.action_draft == %{}
+    assert Brief.current(noted) == nil
+    assert Brief.stored(noted)["reply"] == Brief.stored(briefed)["reply"]
+
+    stored = Repo.get!(Maraithon.Todos.Todo, todo.id)
+    assert stored.action_draft == briefed.action_draft
 
     # Changing the substance of the todo invalidates the brief.
     assert {:ok, retitled} =
@@ -209,6 +213,15 @@ defmodule Maraithon.Todos.BriefTest do
 
     assert Brief.generating?(leased)
     assert {:error, :in_progress} = Brief.generate_and_store(user_id, todo.id)
+    assert {:error, :in_progress} = Brief.generate_and_store(user_id, todo.id, force: true)
+
+    assert {:ok, _} =
+             Todos.merge_metadata(user_id, todo.id, %{
+               "brief_generation" => %{
+                 "lease_until" => DateTime.utc_now() |> DateTime.add(-1) |> DateTime.to_iso8601()
+               }
+             })
+
     assert {:ok, _todo} = Brief.generate_and_store(user_id, todo.id, force: true)
   end
 
@@ -228,7 +241,9 @@ defmodule Maraithon.Todos.BriefTest do
          model: "mock-brief",
          content: """
          ```json
-         {"why_it_matters": "Mock Person is waiting — the deck is due Friday.",
+         {"summary": "Send the deck to Mock Person by Friday.",
+          "involvement": "direct",
+          "why_it_matters": "Mock Person is waiting — the deck is due Friday.",
           "situation": "They asked twice.",
           "recommendation": "Send it today.",
           "steps": ["Export the deck", "", 42],

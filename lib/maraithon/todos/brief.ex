@@ -179,6 +179,9 @@ defmodule Maraithon.Todos.Brief do
       todo.status not in ~w(open snoozed) ->
         {:ok, nil}
 
+      Maraithon.Delegations.attached?(todo) ->
+        {:ok, nil}
+
       current(todo) && not force? ->
         {:ok, nil}
 
@@ -425,11 +428,13 @@ defmodule Maraithon.Todos.Brief do
        when status not in ~w(open snoozed),
        do: {:error, :not_actionable}
 
-  defp ensure_generation_needed(todo, false) do
-    if current(todo), do: {:error, :already_current}, else: :ok
+  defp ensure_generation_needed(todo, force?) do
+    cond do
+      Maraithon.Delegations.attached?(todo) -> {:error, :not_actionable}
+      not force? and current(todo) -> {:error, :already_current}
+      true -> :ok
+    end
   end
-
-  defp ensure_generation_needed(_todo, true), do: :ok
 
   defp claim_lease(user_id, %Todo{} = todo, _force?) do
     if generating?(todo) do

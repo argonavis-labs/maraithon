@@ -100,6 +100,39 @@ defmodule Maraithon.Delegations.IngressTest do
     assert next.state == "ready"
   end
 
+  test "opening a delegated todo does not run a second brief or fabricate a draft", c do
+    alias Maraithon.Todos.{Brief, Todo}
+    alias Maraithon.AssistantChat.TodoThreadPrimer
+    todo = Repo.get!(Todo, c.delegation.todo_id)
+    assert Maraithon.Delegations.attached?(todo)
+    assert {:ok, nil} = Brief.enqueue_generation(todo, force: true)
+
+    assert {:ok, _} =
+             Brief.generate_and_store(c.user_id, todo.id,
+               force: true,
+               llm_complete: fn _ -> flunk("delegation already owns the model work") end
+             )
+
+    refute Repo.exists?(
+             from j in Maraithon.Runtime.BackgroundJob,
+               where: j.job_type == "todo_brief_generation"
+           )
+
+    assert {:ok, thread} = Maraithon.AssistantChat.get_or_create_todo_thread(c.user_id, todo.id)
+    assert :skip = TodoThreadPrimer.resolve_send_action_attrs(thread, todo)
+    assert is_nil(TodoThreadPrimer.prepared_action_for(thread, todo))
+
+    turn =
+      Repo.one!(
+        from t in Maraithon.TelegramConversations.Turn, where: t.conversation_id == ^thread.id
+      )
+      |> Maraithon.TelegramConversations.Turn.hydrate()
+
+    assert turn.structured_data["delegation_managed"]
+    assert is_nil(turn.structured_data["drafted_next_step"])
+    assert is_nil(turn.structured_data["prepared_action_id"])
+  end
+
   test "six months of quiet checkpoints preserve the grant and admit one late reply", c do
     alias Maraithon.Behaviors.DelegationCoordinator, as: Behavior
     alias Maraithon.Runtime.BackgroundJob

@@ -118,6 +118,8 @@ defmodule Maraithon.LLM.MockProvider do
       end
 
     Jason.encode!(%{
+      "summary" => "Send the revised deck to Mock Person and confirm the timing.",
+      "involvement" => "direct",
       "why_it_matters" => "Mock Person is blocked on this and it is due today.",
       "situation" => "Mock Person asked for this in the source thread and has not heard back.",
       "recommendation" => "Send the reply below and mark it done.",

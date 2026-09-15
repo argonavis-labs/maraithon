@@ -163,7 +163,10 @@ defmodule MaraithonWeb.MobileChatJSON do
   def scrub(%Date{} = value), do: value
   def scrub(%Decimal{} = value), do: value
   def scrub(%{__struct__: _} = value), do: value
-  def scrub(value) when is_map(value), do: Map.new(value, fn {key, item} -> {key, scrub(item)} end)
+
+  def scrub(value) when is_map(value),
+    do: Map.new(value, fn {key, item} -> {key, scrub(item)} end)
+
   def scrub(value) when is_list(value), do: Enum.map(value, &scrub/1)
   def scrub(value), do: value
 
@@ -685,7 +688,8 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp todo_primer_draft_card(user_id, structured_data)
        when is_binary(user_id) and is_map(structured_data) do
-    with %{} = linked_todo <- Map.get(structured_data, "linked_todo"),
+    with false <- structured_data["delegation_managed"] == true,
+         %{} = linked_todo <- Map.get(structured_data, "linked_todo"),
          source when is_binary(source) <- primer_action_source(linked_todo, structured_data) do
       case source do
         "gmail" -> todo_primer_gmail_card(user_id, structured_data, linked_todo)

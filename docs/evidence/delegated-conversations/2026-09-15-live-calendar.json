@@ -1,0 +1,53 @@
+{
+  "recorded_at": "2026-09-15T16:32:50Z",
+  "reader_execution": "maraithon-todo-validation-65lwx",
+  "serving_revision": "maraithon-00342-w6c",
+  "scenario": "schedule_and_book",
+  "live_eval_passed": true,
+  "owner": "kent@runner.now",
+  "counterparty": "kent.fenwick@gmail.com",
+  "model": "meta/muse-spark-1.3-contributor",
+  "cost_usd": 0.002783,
+  "result": {
+    "error": null,
+    "status": "completed",
+    "result": {
+      "accepted_slot": {
+        "end_at": "2026-09-21T13:00:00Z",
+        "start_at": "2026-09-21T12:30:00Z",
+        "timezone": "America/Toronto"
+      },
+      "agent_messages": 1,
+      "booked_events": 1,
+      "calendar_cleanup": "completed",
+      "completion_cites_reply": true,
+      "cost_micro_usd": 2783,
+      "delegation_id": "31177fae-57de-44cd-a0ae-c4cf46c7ae9a",
+      "event_id": "6am9cn7b78kj1lushb1v21gq8ek5l4doupno5i1iu22108neou90",
+      "model_calls": 4,
+      "offered_slots_count": 3,
+      "phase": "passed",
+      "recipient_calendar_copy": true,
+      "reoffered": false,
+      "reply_count": 1,
+      "reply_message_id": "1a0a5e54ac24f830",
+      "todo_id": "862c3d3a-7b7e-4e68-93b4-5f58ae7b8370",
+      "todo_state": "waiting",
+      "turns": 2,
+      "verified_booked_action_id": "77014ce8-7e2a-4e99-8235-247039a6d501"
+    },
+    "job_id": "0e78ba4e-935f-406d-bebb-fa7d9c008234"
+  },
+  "checks": [
+    "The actual recipient email offered three 30-minute slots next week, with exact Toronto local-time labels and as-user wording.",
+    "One meeting was booked in the explicitly accepted second slot on the runner calendar.",
+    "The personal calendar contained the invitation with the same iCalUID.",
+    "The todo moved to Waiting until the meeting time, with the acceptance message as evidence.",
+    "The eval cancelled its labelled calendar event after recording the provider proof."
+  ],
+  "limits": [
+    "The busy-slot conflict scenario is still running.",
+    "This verifies the as-user Gmail and Calendar path, not October or Slack.",
+    "Two model calls per turn; the below-1.3 target is still unmet."
+  ]
+}

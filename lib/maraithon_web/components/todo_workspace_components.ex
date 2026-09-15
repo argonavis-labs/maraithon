@@ -35,6 +35,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       )
       |> assign(:people, (assigns.brief || %{})["people"] || [])
       |> assign(:actions, (assigns.brief || %{})["suggested_actions"] || [])
+      |> assign(:delegated?, Maraithon.Delegations.attached?(assigns.todo))
 
     ~H"""
     <div id={"todo-workspace-#{@todo.id}"} phx-hook="TodoWorkspace"
@@ -43,7 +44,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       class="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_16rem]">
       <div class="min-w-0 space-y-6">
         <.live_component module={MaraithonWeb.DelegationPanel} id={"delegation-#{@todo.id}"} todo={@todo} />
-        <section aria-label="Maraithon’s read" class="space-y-3">
+        <section :if={not @delegated?} aria-label="Maraithon’s read" class="space-y-3">
           <p :if={@brief && @brief["summary"]} class="whitespace-pre-line text-base/7 text-zinc-800"><%= @brief["summary"] %></p>
           <p :if={@brief && @brief["done_when"]} class="text-sm/6 text-zinc-600"><span class="font-medium text-zinc-950">Done when:</span> <%= @brief["done_when"] %></p>
           <div :if={@brief && (@brief["open_questions"] || []) != []} class="space-y-1 text-sm/6 text-zinc-700">
@@ -60,7 +61,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           </div>
         </section>
 
-        <section :if={@todo.status in ~w(open snoozed) && @actions != []} aria-labelledby="todo-next-actions-title">
+        <section :if={not @delegated? && @todo.status in ~w(open snoozed) && @actions != []} aria-labelledby="todo-next-actions-title">
           <h2 id="todo-next-actions-title" class="text-sm/6 font-semibold text-zinc-950">Suggested next actions</h2>
           <div class="mt-2 divide-y divide-zinc-950/10 border-y border-zinc-950/10">
             <.button :for={action <- @actions} variant="plain" class="w-full justify-start py-3 text-left"
@@ -259,12 +260,23 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
     purpose = action["purpose"]
 
     case action["provider"] do
-      "gmail" -> "Draft an email#{target} for review. #{purpose}"
-      "imessage" -> "Draft an iMessage#{target} for review. #{purpose}"
-      "slack" -> "Draft a Slack message#{target} for review. #{purpose}"
-      "browser" -> "Use the background Chrome browser on my Mac to help with this step: #{purpose}"
-      "calendar" -> "Find time in my calendar and prepare an event for review. #{purpose}"
-      _ -> "Help me with this next step: #{purpose}"
+      "gmail" ->
+        "Draft an email#{target} for review. #{purpose}"
+
+      "imessage" ->
+        "Draft an iMessage#{target} for review. #{purpose}"
+
+      "slack" ->
+        "Draft a Slack message#{target} for review. #{purpose}"
+
+      "browser" ->
+        "Use the background Chrome browser on my Mac to help with this step: #{purpose}"
+
+      "calendar" ->
+        "Find time in my calendar and prepare an event for review. #{purpose}"
+
+      _ ->
+        "Help me with this next step: #{purpose}"
     end
   end
 
@@ -285,7 +297,9 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
   defp terminal?(card),
     do:
       card["status"] in [
-        "Completed", "Running", "Could not complete",
+        "Completed",
+        "Running",
+        "Could not complete",
         "Sent",
         "Saved to calendar",
         "Cancelled",
@@ -301,5 +315,4 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
 
   defp initials(name),
     do: (name || "") |> String.split() |> Enum.take(2) |> Enum.map_join(&String.first/1)
-
 end

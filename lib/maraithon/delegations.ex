@@ -77,6 +77,10 @@ defmodule Maraithon.Delegations do
 
   def for_todo(user_id, todo_id), do: Map.get(for_todos(user_id, [todo_id]), todo_id)
 
+  @doc "Delegated todos use their conversation ledger instead of an automatic brief or reply draft."
+  def attached?(%Todo{user_id: user_id, id: todo_id}),
+    do: Repo.exists?(from d in Delegation, where: d.user_id == ^user_id and d.todo_id == ^todo_id)
+
   def available?(todo),
     do:
       Gates.enabled?(todo.user_id) and todo.status in ~w(open snoozed) and

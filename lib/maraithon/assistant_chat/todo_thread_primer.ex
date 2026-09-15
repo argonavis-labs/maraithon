@@ -25,7 +25,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   alias Maraithon.Todos
   alias Maraithon.Todos.{ActionDrafts, Brief, Todo}
 
-  @primer_version 11
+  @primer_version 12
   @gmail_routing_version 1
   @availability_timezone "America/Toronto"
   @availability_offset_hours -5
@@ -37,10 +37,12 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   def ensure(conversation, todo, opts \\ [])
 
   def ensure(%Conversation{} = conversation, %Todo{} = todo, opts) when is_list(opts) do
+    delegated? = Maraithon.Delegations.attached?(todo)
+    opts = Keyword.put(opts, :delegation_managed, delegated?)
     todo = Brief.with_current_draft(todo)
     card = ActionCards.for_todo(todo, include_disconnected: true)
-    draft = draft_for(todo, card)
-    text = primer_text(todo, card, draft)
+    draft = if not delegated?, do: draft_for(todo, card)
+    text = if delegated?, do: todo.summary || todo.title, else: primer_text(todo, card, draft)
 
     case primer_turn(conversation, todo.id) do
       %Turn{} = turn ->
@@ -66,7 +68,8 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   use this to offer Send / Post directly from the todo page.
   """
   def prepared_action_for(%Conversation{} = conversation, %Todo{} = todo) do
-    with %Turn{} = turn <- primer_turn(conversation, todo.id),
+    with false <- Maraithon.Delegations.attached?(todo),
+         %Turn{} = turn <- primer_turn(conversation, todo.id),
          prepared_action_id when is_binary(prepared_action_id) <-
            get_in(turn.structured_data || %{}, ["prepared_action_id"]),
          %PreparedAction{status: "awaiting_confirmation"} = prepared_action <-
@@ -100,10 +103,14 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   def resolve_send_action_attrs(%Conversation{} = conversation, %Todo{} = todo, opts)
       when is_list(opts) do
-    todo = Brief.with_current_draft(todo)
-    card = ActionCards.for_todo(todo, include_disconnected: true)
-    draft = draft_for(todo, card)
-    prepared_action_attrs_with_timeout(conversation, todo, draft, opts)
+    if Maraithon.Delegations.attached?(todo) do
+      :skip
+    else
+      todo = Brief.with_current_draft(todo)
+      card = ActionCards.for_todo(todo, include_disconnected: true)
+      draft = draft_for(todo, card)
+      prepared_action_attrs_with_timeout(conversation, todo, draft, opts)
+    end
   end
 
   def resolve_send_action_attrs(_conversation, _todo, _opts), do: :skip
@@ -117,7 +124,10 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
          turn,
          opts
        ) do
-    prepared_action_id = prepared_action_id_for(conversation, todo, draft, turn, opts)
+    delegated? = Keyword.get(opts, :delegation_managed, false)
+
+    prepared_action_id =
+      if not delegated?, do: prepared_action_id_for(conversation, todo, draft, turn, opts)
 
     %{
       "role" => "assistant",
@@ -129,6 +139,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
       "structured_data" =>
         %{
           "message_class" => "todo_chat_primer",
+          "delegation_managed" => delegated?,
           "todo_chat_primer_version" => @primer_version,
           "linked_todo" => Todos.serialize_for_prompt(todo),
           "todo_action_card" => public_card(card),
