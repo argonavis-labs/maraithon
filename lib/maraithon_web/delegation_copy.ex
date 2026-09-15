@@ -18,6 +18,11 @@ defmodule MaraithonWeb.DelegationCopy do
       do: "Connect the sending account in Settings, then try again."
 
   def error(:assistant_identity_required), do: "Set up your assistant in Settings first."
+
+  def error(:gmail_sending_permission_required),
+    do:
+      "This account cannot send Gmail yet. Connect it with Gmail sending permission to continue."
+
   def error(:source_is_not_sent_mail), do: "A draft cannot be the evidence for a delegation."
   def error(:invalid_answer), do: "Enter an answer of up to 2,000 characters."
 

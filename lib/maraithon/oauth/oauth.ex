@@ -121,6 +121,14 @@ defmodule Maraithon.OAuth do
 
   def google_write_scopes?(_service, _scopes), do: false
 
+  @doc "Whether scopes allow sending Gmail, including send-only access without draft access."
+  def gmail_send_scopes?(scopes) when is_list(scopes),
+    do:
+      google_write_scopes?(:gmail, scopes) or
+        "https://www.googleapis.com/auth/gmail.send" in scopes
+
+  def gmail_send_scopes?(_), do: false
+
   @doc "Whether the user's best Google token can write to `:calendar` or `:gmail`."
   def google_write_granted?(user_id, service) do
     case get_token(user_id, "google") do

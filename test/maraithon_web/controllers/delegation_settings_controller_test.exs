@@ -17,6 +17,21 @@ defmodule MaraithonWeb.DelegationSettingsControllerTest do
     for email <- [user, other],
         do: OAuth.store_tokens(email, "google:#{email}", %{access_token: "must-not-leak"})
 
+    account = Maraithon.ConnectedAccounts.get(user, "google:#{user}")
+    bypass = Bypass.open()
+    gmail = Application.get_env(:maraithon, :gmail, [])
+    Application.put_env(:maraithon, :gmail, api_base_url: "http://localhost:#{bypass.port}")
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, gmail) end)
+
+    Bypass.expect(bypass, "GET", "/users/me/settings/sendAs", fn request ->
+      request
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"sendAs" => [%{"sendAsEmail" => user, "isPrimary" => true}]})
+      )
+    end)
+
     previous =
       Map.new(
         [:delegations_enabled, :delegation_user_allowlist],
@@ -35,10 +50,11 @@ defmodule MaraithonWeb.DelegationSettingsControllerTest do
 
     for {root, token, minutes} <- [{"/api/v1/companion", mac, 45}, {"/api/mobile", mobile, 60}] do
       c = recycle(conn) |> put_req_header("authorization", "Bearer #{token}")
-      response = get(c, root <> "/delegation-settings")
+      response = get(c, root <> "/delegation-settings", %{"assistant_account" => account.id})
       settings = json_response(response, 200)["settings"]
       assert settings["enabled"]
-      assert [%{"label" => ^user}] = settings["accounts"]
+      assert [%{"label" => ^user, "can_send" => false}] = settings["accounts"]
+      assert settings["error"] =~ "cannot send"
       assert Enum.any?(settings["timezones"], &(&1["value"] == "America/Toronto"))
       assert Enum.any?(settings["numeric_preferences"], &(&1["key"] == "default_duration_min"))
       refute response.resp_body =~ "must-not-leak"
@@ -58,5 +74,23 @@ defmodule MaraithonWeb.DelegationSettingsControllerTest do
       assert Preferences.get(user)["work_days"] == [1, 3, 5]
       refute Preferences.get(other)["default_duration_min"] == minutes
     end
+
+    page =
+      conn
+      |> recycle()
+      |> log_in_test_user(user)
+      |> get("/settings/assistant", %{"assistant_account" => account.id})
+
+    assert html_response(page, 200) =~ "cannot send"
+
+    {:ok, _} =
+      OAuth.store_tokens(user, account.provider, %{
+        access_token: "must-not-leak",
+        scopes: Maraithon.OAuth.Google.scopes_for(["gmail_compose"])
+      })
+
+    settings = MaraithonWeb.AssistantSettings.load(user, %{"assistant_account" => account.id})
+    assert settings.error == nil
+    assert [%{can_send: true}] = settings.accounts
   end
 end

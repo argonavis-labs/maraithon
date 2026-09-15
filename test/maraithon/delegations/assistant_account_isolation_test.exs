@@ -82,6 +82,46 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     assert AssistantIdentities.assistant_account_ids(user) == []
   end
 
+  test "a connected read-only mailbox cannot become a sending identity", %{user: user} do
+    assistant = account(user, "readonly-assistant@example.invalid", true)
+
+    {:ok, _} =
+      AssistantIdentities.put(user, %{
+        "display_name" => "October",
+        "gmail_mode" => "account",
+        "gmail_connected_account_id" => assistant.id,
+        "gmail_send_as_email" => "readonly-assistant@example.invalid"
+      })
+
+    {:ok, _} =
+      OAuth.store_tokens(user, assistant.provider, %{
+        access_token: "read-only-fixture",
+        scopes: Google.scopes_for(["gmail"])
+      })
+
+    assert {:error, :gmail_sending_permission_required} =
+             AssistantIdentities.gmail_snapshot(user, "as_assistant", nil)
+
+    own = account(user, user)
+
+    {:ok, _} =
+      OAuth.store_tokens(user, own.provider, %{
+        access_token: "read-only-fixture",
+        scopes: Google.scopes_for(["gmail"])
+      })
+
+    assert {:error, :gmail_sending_permission_required} =
+             AssistantIdentities.gmail_snapshot(user, "as_user", own.id)
+
+    for scope <-
+          ~w(https://mail.google.com/ https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send) do
+      assert OAuth.gmail_send_scopes?([scope])
+    end
+
+    refute OAuth.gmail_send_scopes?(nil)
+    refute OAuth.gmail_send_scopes?(Google.scopes_for(["gmail"]))
+  end
+
   test "a cached identity cannot override a newly isolated account", %{user: user} do
     account(user, "cached-assistant@example.invalid")
     assert UserIdentity.own_handle?(user, "cached-assistant@example.invalid")
@@ -429,7 +469,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     {:ok, _} =
       OAuth.store_tokens(user, provider, %{
         access_token: "isolation-test-token",
-        scopes: Google.scopes_for(["gmail"]),
+        scopes: Google.scopes_for(["gmail_compose"]),
         metadata: %{"account_email" => email, "assistant_account" => assistant?}
       })
 

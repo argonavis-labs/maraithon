@@ -1,7 +1,7 @@
 defmodule Maraithon.AssistantIdentities do
   @moduledoc "User-owned assistant identities, never substitutes for a missing user grant."
   import Ecto.Query
-  alias Maraithon.{Repo, Accounts.ConnectedAccount}
+  alias Maraithon.{Repo, OAuth, Accounts.ConnectedAccount}
   alias Maraithon.Delegations.AssistantIdentity
   alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Tools.GmailApiHelpers
@@ -207,6 +207,9 @@ defmodule Maraithon.AssistantIdentities do
          %ConnectedAccount{status: "connected"} = account <-
            Repo.get_by(ConnectedAccount, id: id, user_id: user_id),
          false <- actor == "as_user" and assistant_account?(account),
+         true <-
+           OAuth.gmail_send_scopes?(account.scopes) ||
+             {:error, :gmail_sending_permission_required},
          {:ok, aliases} <- send_as(user_id, account.id),
          %{} = sender <- sender_alias(aliases, identity) do
       {:ok,

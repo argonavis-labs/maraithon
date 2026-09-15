@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.AssistantSettings do
   @moduledoc "Shared, credential-free assistant settings for web and native clients."
   import Ecto.Query
-  alias Maraithon.{AssistantIdentities, Repo, SourceLabels}
+  alias Maraithon.{AssistantIdentities, OAuth, Repo, SourceLabels}
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Delegations.{Gates, Preferences}
 
@@ -14,22 +14,33 @@ defmodule MaraithonWeb.AssistantSettings do
           where:
             a.user_id == ^user_id and a.status == "connected" and
               (a.provider == "google" or like(a.provider, "google:%")),
-          select: map(a, [:id, :provider, :external_account_id, :metadata])
+          select: map(a, [:id, :provider, :external_account_id, :metadata, :scopes])
         )
         |> Repo.all()
-        |> Enum.map(&%{id: &1.id, label: SourceLabels.account(&1)})
+        |> Enum.map(
+          &%{
+            id: &1.id,
+            label: SourceLabels.account(&1),
+            can_send: OAuth.gmail_send_scopes?(&1.scopes)
+          }
+        )
 
       selected =
         integer(params["assistant_account"]) || (identity && identity.gmail_connected_account_id)
 
       selected = if Enum.any?(accounts, &(&1.id == selected)), do: selected
+      account = Enum.find(accounts, &(&1.id == selected))
+
+      permission_error =
+        if account && not account.can_send,
+          do: MaraithonWeb.DelegationCopy.error(:gmail_sending_permission_required)
 
       {aliases, error} =
         if selected do
           case AssistantIdentities.send_as(user_id, selected) do
             {:ok, aliases} ->
               {Enum.map(aliases, &%{email: &1["sendAsEmail"], primary: &1["isPrimary"] == true}),
-               nil}
+               permission_error}
 
             {:error, reason} ->
               {[], MaraithonWeb.DelegationCopy.error(reason)}

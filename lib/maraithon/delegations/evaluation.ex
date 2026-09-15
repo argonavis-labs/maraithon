@@ -72,7 +72,6 @@ defmodule Maraithon.Delegations.Evaluation do
          true <- identity["email"] == spec["assistant"]["email"],
          account when not is_nil(account) <-
            Enum.find(accounts, &(&1.id == identity["account_id"])),
-         true <- send_scope?(account),
          true <- AssistantIdentities.assistant_account?(account),
          false <-
            Enum.any?(ConnectedAccounts.list_personal_for_user(user_id), &(&1.id == account.id)) do
@@ -85,7 +84,11 @@ defmodule Maraithon.Delegations.Evaluation do
         "isolated_from_personal_sources" => true
       }
     else
-      _ -> %{"status" => "assistant_setup_required"}
+      {:error, :gmail_sending_permission_required} ->
+        %{"status" => "gmail_sending_permission_required"}
+
+      _ ->
+        %{"status" => "assistant_setup_required"}
     end
   end
 
@@ -100,7 +103,6 @@ defmodule Maraithon.Delegations.Evaluation do
     with [account] <- matching,
          {:ok, identity} <- AssistantIdentities.gmail_snapshot(user_id, "as_user", account.id),
          true <- identity["email"] == email,
-         true <- send_scope?(account),
          {:ok, _events} <-
            GoogleCalendar.events_in_window(
              user_id,
@@ -127,16 +129,4 @@ defmodule Maraithon.Delegations.Evaluation do
         }
     end
   end
-
-  defp send_scope?(account),
-    do:
-      Enum.any?(
-        account.scopes,
-        &(&1 in [
-            "https://mail.google.com/",
-            "https://www.googleapis.com/auth/gmail.compose",
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.modify"
-          ])
-      )
 end
