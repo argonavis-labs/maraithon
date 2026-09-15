@@ -1,0 +1,86 @@
+{
+  "recorded_at": "2026-09-15",
+  "actor": "as_assistant",
+  "scenario": "information_reply",
+  "serving_revision": "maraithon-00365-hq8",
+  "execution": "maraithon-todo-validation-4ng55",
+  "passed": false,
+  "development_spending": true,
+  "finding": "The composer selected needs_user to ask the operator for the project colour, even though obtaining it from the counterparty was the delegated outcome. Review approved that misrouted question. The previous blanket instruction to ask the user for missing facts caused an unnecessary escalation. No assistant email was sent in this run.",
+  "decision_and_review": {
+    "decision": {
+      "evidence": [
+        "1a0a6c7e1e8d04f0"
+      ],
+      "kind": "needs_user",
+      "question": "What is the colour for the Maraithon test project?",
+      "reason": "The message states the colour is available but does not include the actual colour value"
+    },
+    "policy_review": {
+      "allowed": true,
+      "outcome_proven": false,
+      "reason": "Source message claims colour is available but contains no colour value, so asking for the missing fact is within grant and outcome is not yet achieved."
+    }
+  },
+  "verification": {
+    "ASSISTANT_EVAL_OUTCOMES": [
+      {
+        "scenario": "information_reply",
+        "job_id": "65d19db4-3de0-4f09-9cee-e082465349a2",
+        "phase": "failed",
+        "cost_micro_usd": 512
+      }
+    ],
+    "MAILBOX_EVAL_PROOF": {
+      "messages": [
+        {
+          "action_id": "e3e74430-de42-e265-dd62-33ed4823ba58",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        }
+      ],
+      "at": "2026-09-15T20:37:09.163800Z",
+      "state": "stopped",
+      "result": {
+        "calendar_cleanup": "completed",
+        "cleanup_checks": 1,
+        "delegation_id": "8fac8393-992b-4521-8afd-e892a5cc5eb4",
+        "phase": "failed",
+        "reason": "conversation_held",
+        "todo_id": "75c8dfa6-7d83-48a6-97ac-9044f7aae811"
+      },
+      "job_id": "65d19db4-3de0-4f09-9cee-e082465349a2",
+      "delegation_id": "8fac8393-992b-4521-8afd-e892a5cc5eb4",
+      "lifetime_sends": 0,
+      "turns": [
+        {
+          "id": "f253fd6c-2103-4de4-90dc-759f9cc3ac37",
+          "status": "superseded",
+          "cost_micro_usd": 512,
+          "calls": 2
+        }
+      ],
+      "cost_micro_usd": 512,
+      "assistant_isolation": {
+        "email": "october@ewakened.com",
+        "account_id": 9,
+        "actor": "as_assistant",
+        "bound_to_assistant": true,
+        "excluded_from_personal_accounts": true,
+        "default_google_excludes_assistant": true,
+        "excluded_from_user_handles": true
+      },
+      "job_status": "completed"
+    }
+  }
+}

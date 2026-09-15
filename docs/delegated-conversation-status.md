@@ -145,7 +145,13 @@ With development spending enabled, October sent its first email from the bound a
 
 The eval then stopped because it tried to find the reply using the ordinary user mailbox helper, which excludes assistant accounts. Commit `10b813e8` uses the existing bound-account read for that fixture lookup. The same commit corrects assistant scheduling to use the source calendar frozen in the grant instead of defaulting to the first connected account. The six focused model-admission cases passed, including the new source-calendar case. The server build passed. [Failed-run evidence](evidence/delegated-conversations/2026-09-15-october-reply-lookup.json).
 
-Commit `dd0c50e8` also keeps a failed voice-profile refresh from being treated as learned style. New turns use explicit style instructions in that case. Five focused voice checks and the server build passed. Both corrections deployed successfully in workflow `35019664976`, revision `maraithon-00365-hq8`. The fixture lookup check passed, and the next live assistant run is in progress.
+Commit `dd0c50e8` also keeps a failed voice-profile refresh from being treated as learned style. New turns use explicit style instructions in that case. Five focused voice checks and the server build passed. Both corrections deployed successfully in workflow `35019664976`, revision `maraithon-00365-hq8`. The fixture lookup check passed. The next live run exposed the question-routing issue below.
+
+## Asking the right person
+
+The next assistant run made two calls, cost US$0.000512, and sent no assistant email. The model chose `needs_user` to ask Kent the operator for the project colour, even though the counterparty had offered to supply it. Review approved that unnecessary escalation. The prompt's blanket instruction to ask the user for missing facts conflicted with the delegated outcome.
+
+Composition and review now share explicit routing instructions: use `send` to obtain the requested information from the granted counterparty; use `needs_user` for a decision, permission, preference, or authority gap that requires the operator. The review also checks the chosen recipient. Signature-composition instructions now appear only in the composition prompt. The server build and 13 focused policy checks passed. [Failed-run evidence](evidence/delegated-conversations/2026-09-15-october-question-routing.json).
 
 ## Remaining work
 
