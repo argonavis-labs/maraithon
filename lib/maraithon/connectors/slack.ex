@@ -254,7 +254,11 @@ defmodule Maraithon.Connectors.Slack do
                    event,
                    durable_content
                  ),
-               :ok <- wake_source_account(account, "slack_message") do
+               :ok <-
+                 if(private_bot_dm?(account, event),
+                   do: :ok,
+                   else: wake_source_account(account, "slack_message")
+                 ) do
             :ok
           end
         end)
@@ -409,31 +413,33 @@ defmodule Maraithon.Connectors.Slack do
         }
 
         changeset =
-          Maraithon.Crm.Observation.new(%{
-            "user_id" => user_id,
-            "source" => "slack",
-            "source_account" => source_account,
-            "source_item_id" => slack_observation_source_item_id(team_id, event),
-            "occurred_at" => occurred_at,
-            "direction" => slack_message_direction(account, sender_id),
-            "participants" => [participant],
-            "subject" => nil,
-            "excerpt" => durable_content.excerpt,
-            "metadata" => %{
-              "team_id" => team_id,
-              "channel" => event["channel"],
-              "ts" => ts,
-              "thread_ts" => event["thread_ts"],
-              "target_ts" => event["target_ts"],
-              "event_type" => event["event_type"],
-              "provider_event_id" => event["provider_event_id"],
-              "text" => durable_content.text,
-              "files" => durable_content.files,
-              "file_count" => durable_content.file_count,
-              "blocks" => durable_content.blocks,
-              "block_count" => durable_content.block_count
-            }
-          })
+          if not private_bot_dm?(account, event) do
+            Maraithon.Crm.Observation.new(%{
+              "user_id" => user_id,
+              "source" => "slack",
+              "source_account" => source_account,
+              "source_item_id" => slack_observation_source_item_id(team_id, event),
+              "occurred_at" => occurred_at,
+              "direction" => slack_message_direction(account, sender_id),
+              "participants" => [participant],
+              "subject" => nil,
+              "excerpt" => durable_content.excerpt,
+              "metadata" => %{
+                "team_id" => team_id,
+                "channel" => event["channel"],
+                "ts" => ts,
+                "thread_ts" => event["thread_ts"],
+                "target_ts" => event["target_ts"],
+                "event_type" => event["event_type"],
+                "provider_event_id" => event["provider_event_id"],
+                "text" => durable_content.text,
+                "files" => durable_content.files,
+                "file_count" => durable_content.file_count,
+                "blocks" => durable_content.blocks,
+                "block_count" => durable_content.block_count
+              }
+            })
+          end
 
         case observe_with_account_lock(account, user_id, changeset, team_id, event) do
           {:ok, :buffered, _observation_id} ->
@@ -469,7 +475,12 @@ defmodule Maraithon.Connectors.Slack do
           |> select([candidate], candidate.id)
           |> Repo.one!()
 
-        case Maraithon.Crm.Ingest.observe(user_id, changeset) do
+        result =
+          if changeset,
+            do: Maraithon.Crm.Ingest.observe(user_id, changeset),
+            else: {:ok, :duplicate}
+
+        case result do
           {:error, reason} ->
             Repo.rollback(reason)
 
@@ -487,6 +498,14 @@ defmodule Maraithon.Connectors.Slack do
       do: Maraithon.Delegations.Outbox.publish_pending(user_id)
 
     result
+  end
+
+  # Bot-only DMs belong to assistant conversations. Persist their delegated
+  # events, but never learn them as the operator's inbox, people, or voice.
+  defp private_bot_dm?(account, event) do
+    bot = (account.metadata || %{})["bot_user_id"]
+    ids = event["authorized_user_ids"] || []
+    is_binary(bot) and String.starts_with?(event["channel"] || "", "D") and ids == [bot]
   end
 
   defp slack_observation_source_item_id(team_id, event) do

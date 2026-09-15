@@ -32,7 +32,10 @@ defmodule Maraithon.Delegations.SlackDelivery do
       identity["text_sha256"] == hash(action.payload["text"]) and
       author["actor"] in ~w(as_user as_assistant) and
       id?(author["user_id"]) and id?(identity["team_id"]) and id?(identity["channel"]) and
-      timestamp?(identity["thread_ts"])
+      (timestamp?(identity["thread_ts"]) or
+         (is_nil(identity["thread_ts"]) and author["actor"] == "as_assistant" and
+            String.starts_with?(identity["channel"], "D") and id?(author["dm_user_id"]) and
+            id?(author["source_channel"]) and identity["channel"] != author["source_channel"]))
   end
 
   def valid?(_, _), do: false
@@ -63,7 +66,10 @@ defmodule Maraithon.Delegations.SlackDelivery do
          {:ok, %{"channel" => channel}} <- Slack.get_channel_info(token, identity["channel"]),
          true <-
            channel["id"] == identity["channel"] and channel["is_archived"] != true and
-             (channel["is_member"] == true or channel["is_im"] == true) do
+             (channel["is_member"] == true or channel["is_im"] == true),
+         true <-
+           is_nil(author["dm_user_id"]) or
+             (channel["is_im"] == true and channel["user"] == author["dm_user_id"]) do
       post(token, args, identity)
     else
       {:pending, reason} -> {:error, reason}
@@ -137,7 +143,7 @@ defmodule Maraithon.Delegations.SlackDelivery do
          {:ok, token} <-
            SlackIdentity.read_token(action.user_id, author, identity["channel"]),
          {:ok, response} <-
-           Slack.get_thread_replies(token, identity["channel"], identity["thread_ts"],
+           Slack.get_thread_replies(token, identity["channel"], identity["thread_ts"] || ts,
              oldest: ts,
              latest: ts,
              inclusive: true,
@@ -163,7 +169,7 @@ defmodule Maraithon.Delegations.SlackDelivery do
         else: message["user"] == author["user_id"] and is_nil(message["bot_id"])
 
     timestamp?(ts) and message["ts"] == ts and expected_author? and
-      message["thread_ts"] == identity["thread_ts"] and
+      (message["thread_ts"] || ts) == (identity["thread_ts"] || ts) and
       message["subtype"] in [nil, "bot_message"] and
       is_nil(message["edited"]) and hash(message["text"]) == identity["text_sha256"]
   end
@@ -176,7 +182,7 @@ defmodule Maraithon.Delegations.SlackDelivery do
       team_id: identity["team_id"],
       channel: identity["channel"],
       ts: ts,
-      thread_id: identity["thread_ts"],
+      thread_id: identity["thread_ts"] || ts,
       user: identity["author"]["user_id"],
       bot_id: identity["author"]["bot_id"],
       text_sha256: identity["text_sha256"],

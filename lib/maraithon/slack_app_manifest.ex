@@ -15,6 +15,7 @@ defmodule Maraithon.SlackAppManifest do
   @required_user_events ~w(message.channels message.groups message.im message.mpim)
   @required_bot_events ~w(
     app_mention
+    message.im
     reaction_added
     reaction_removed
     member_joined_channel

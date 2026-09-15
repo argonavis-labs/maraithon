@@ -97,16 +97,26 @@ defmodule Maraithon.Delegations.Sources do
   end
 
   defp fetch(%{provider: "slack"} = d, scope) do
+    channel = if d.provider_thread_id, do: d.slack_channel, else: scope["source_channel_id"]
+    thread = d.provider_thread_id || scope["source_thread_id"]
+
     with {:ok, sources} <-
-           SlackSource.fetch(d.user_id, scope["identity"], d.slack_channel, d.provider_thread_id,
+           SlackSource.fetch(d.user_id, scope["identity"], channel, thread,
              include_unthreaded?:
-               String.starts_with?(d.slack_channel, "D") and
+               not is_nil(d.provider_thread_id) and String.starts_with?(d.slack_channel, "D") and
                  SlackIngress.only_live_id(d.user_id, d.slack_channel) == d.id
            ),
          do: {:ok, sources["messages"], sources}
   end
 
   defp fetch(_, _), do: {:error, :unsupported_delegation_source}
+
+  defp route!(
+         %{delegation: %{provider: "slack", provider_thread_id: nil} = d, grant: grant},
+         messages,
+         _sources
+       ),
+       do: Enum.each(messages, &SlackIngress.accept_source!(d, grant.data["scope"], &1))
 
   defp route!(%{delegation: %{provider: "slack"} = d, grant: grant}, messages, _sources),
     do: Enum.each(messages, &SlackIngress.accept!(d.user_id, grant.data["scope"]["team_id"], &1))

@@ -215,7 +215,8 @@ defmodule Maraithon.Delegations.Receipts do
     identity = action.payload["_maraithon_reconciliation_identity"]
 
     is_map(identity) and receipt["team_id"] == identity["team_id"] and
-      receipt["channel"] == identity["channel"] and receipt["thread_id"] == identity["thread_ts"] and
+      receipt["channel"] == identity["channel"] and
+      receipt["thread_id"] == (identity["thread_ts"] || receipt["ts"]) and
       receipt["user"] == identity["author"]["user_id"] and
       receipt["bot_id"] == identity["author"]["bot_id"] and
       receipt["text_sha256"] == identity["text_sha256"]

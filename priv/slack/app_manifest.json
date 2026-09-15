@@ -58,6 +58,7 @@
       "request_url": "https://maraithon.com/webhooks/slack",
       "bot_events": [
         "app_mention",
+        "message.im",
         "reaction_added",
         "reaction_removed",
         "member_joined_channel",

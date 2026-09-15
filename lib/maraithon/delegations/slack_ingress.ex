@@ -32,7 +32,8 @@ defmodule Maraithon.Delegations.SlackIngress do
           from d in Delegation,
             where:
               d.user_id == ^user_id and d.provider == "slack" and d.slack_channel == ^channel and
-                (d.provider_thread_id == ^root or d.id in ^live or d.id in subquery(seen)),
+                (d.provider_thread_id == ^root or
+                   (not is_nil(d.provider_thread_id) and d.id in ^live) or d.id in subquery(seen)),
             order_by: d.id,
             lock: "FOR UPDATE",
             limit: 100
@@ -43,12 +44,25 @@ defmodule Maraithon.Delegations.SlackIngress do
         scope = Delegations.current_grant(d).data["scope"]
 
         if scope["team_id"] == team do
-          record!(d, scope, event)
+          record!(d, scope, event, d.slack_channel, d.provider_thread_id)
         end
       end
     end
 
     :ok
+  end
+
+  @doc "Recheck the original DM before the assistant's first send establishes its own thread."
+  def accept_source!(d, scope, message) do
+    unless Repo.in_transaction?(), do: raise(ArgumentError, "source routing needs a transaction")
+
+    if is_nil(d.provider_thread_id) and message["channel"] == scope["source_channel_id"] and
+         message["thread_id"] == scope["source_thread_id"] do
+      # Each message may advance the revision. Never overwrite a prior advance
+      # while processing a batch from the same source read.
+      d = Repo.get!(Delegation, d.id) |> Delegation.hydrate()
+      record!(d, scope, message, scope["source_channel_id"], scope["source_thread_id"])
+    end
   end
 
   def only_live_id(user_id, channel) do
@@ -65,11 +79,11 @@ defmodule Maraithon.Delegations.SlackIngress do
     end
   end
 
-  defp record!(d, scope, raw) do
-    message = SlackSource.normalize(raw, d.slack_channel, d.provider_thread_id)
+  defp record!(d, scope, raw, channel, root) do
+    message = SlackSource.normalize(raw, channel, root)
 
     key =
-      "slack:#{scope["team_id"]}:#{d.slack_channel}:#{message["message_id"]}:#{message["revision"]}"
+      "slack:#{scope["team_id"]}:#{channel}:#{message["message_id"]}:#{message["revision"]}"
 
     event_id = raw["provider_event_id"]
     prior = from e in Event, where: e.delegation_id == ^d.id
@@ -112,7 +126,7 @@ defmodule Maraithon.Delegations.SlackIngress do
           "source_revision" => d.source_revision,
           "message_id" => message["message_id"],
           "message_revision" => message["revision"],
-          "thread_id" => d.provider_thread_id,
+          "thread_id" => root,
           "provider_event_id" => event_id
         },
         %{source_ref: message["message_id"], source_revision: event_id, occurred_at: occurred}

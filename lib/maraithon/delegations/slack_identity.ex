@@ -20,6 +20,11 @@ defmodule Maraithon.Delegations.SlackIdentity do
     scopes =
       if actor == "as_assistant", do: ["chat:write", "chat:write.customize"], else: ["chat:write"]
 
+    scopes =
+      if actor == "as_assistant" and String.starts_with?(location.channel || "", "D"),
+        do: ["im:write" | scopes],
+        else: scopes
+
     with true <- is_binary(team) and team == location.team and valid_id?(location.channel),
          true <- actor == "as_user" or assistant != nil,
          {:ok, token} <-
@@ -32,24 +37,14 @@ defmodule Maraithon.Delegations.SlackIdentity do
          {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token.access_token),
          true <- auth["team_id"] == team and is_binary(auth["user_id"]),
          true <- valid_author?(auth, actor, member),
-         sender when not is_nil(sender) <- ConnectedAccounts.get(todo.user_id, token.provider),
-         {:ok, %{"channel" => channel}} <-
-           Slack.get_channel_info(token.access_token, location.channel),
-         true <- channel["is_member"] == true or channel["is_im"] == true,
-         true <- channel["is_archived"] != true do
+         sender when not is_nil(sender) <- ConnectedAccounts.get(todo.user_id, token.provider) do
       root = location.timestamp
-      counterparty = channel["user"]
-      to = if is_binary(counterparty), do: [counterparty], else: [location.channel]
-
-      topic =
-        if counterparty,
-          do: "slack:#{team}:dm:#{counterparty}",
-          else: "slack:#{team}:#{location.channel}"
 
       identity = %{
         "account_id" => account.id,
         "external_account_id" => account.external_account_id,
         "source_provider" => account.provider,
+        "source_channel" => location.channel,
         "provider" => token.provider,
         "sender_account_id" => sender.id,
         "sender_external_account_id" => sender.external_account_id,
@@ -68,23 +63,10 @@ defmodule Maraithon.Delegations.SlackIdentity do
         "token_preference" => preference
       }
 
-      source = %{
-        "provider" => "slack",
-        "source_account_id" => account.id,
-        "channel" => location.channel,
-        "thread_id" => root,
-        "source_thread_id" => root,
-        "source_message_id" => root,
-        "team_id" => team,
-        "topic" => topic,
-        "to" => to,
-        "cc" => [],
-        "evidence" => [
-          %{"source" => "slack", "team" => team, "channel" => location.channel, "id" => root}
-        ]
-      }
-
-      with {:ok, snapshot} <-
+      with {:ok, reader} <- read_token(todo.user_id, identity, location.channel),
+           {:ok, %{"channel" => channel}} <- Slack.get_channel_info(reader, location.channel),
+           true <- available?(channel, location.channel),
+           {:ok, snapshot} <-
              Maraithon.Delegations.SlackSource.fetch(
                todo.user_id,
                identity,
@@ -93,10 +75,36 @@ defmodule Maraithon.Delegations.SlackIdentity do
              ),
            participants =
              if(channel["is_im"] == true,
-               do: [counterparty],
+               do: [channel["user"]],
                else: Maraithon.Delegations.SlackSource.participants(snapshot, identity)
              ),
-           true <- participants != [] and Enum.all?(participants, &valid_id?/1) do
+           true <- participants != [] and Enum.all?(participants, &valid_id?/1),
+           true <- Enum.all?(participants, &(&1 not in [member, auth["user_id"]])),
+           {:ok, destination} <- destination(token, channel, identity) do
+        counterparty = if channel["is_im"] == true, do: channel["user"]
+        identity = Map.put(identity, "dm_user_id", counterparty)
+
+        source = %{
+          "provider" => "slack",
+          "source_account_id" => account.id,
+          "source_channel_id" => location.channel,
+          "channel" => destination,
+          "thread_id" => if(destination == location.channel, do: root),
+          "source_thread_id" => root,
+          "source_message_id" => root,
+          "team_id" => team,
+          "topic" =>
+            if(counterparty,
+              do: "slack:#{team}:dm:#{counterparty}",
+              else: "slack:#{team}:#{destination}"
+            ),
+          "to" => if(counterparty, do: [counterparty], else: [destination]),
+          "cc" => [],
+          "evidence" => [
+            %{"source" => "slack", "team" => team, "channel" => location.channel, "id" => root}
+          ]
+        }
+
         {:ok, Map.put(source, "counterparty_user_ids", participants), identity}
       else
         {:error, _} = error -> error
@@ -107,6 +115,40 @@ defmodule Maraithon.Delegations.SlackIdentity do
       _ -> {:error, :slack_identity_or_channel_unavailable}
     end
   end
+
+  # Opening a DM resolves its destination, but never posts a message. Slack
+  # returns the same channel for the same participants on subsequent previews.
+  defp destination(token, %{"is_im" => true, "user" => member} = source, %{
+         "actor" => "as_assistant"
+       }) do
+    with {:ok, %{"channel" => channel}} <-
+           Slack.open_conversation(token.access_token, [member], return_im: true),
+         true <- available?(channel, channel["id"]) and channel["is_im"] == true,
+         true <- channel["user"] == member and channel["id"] != source["id"] do
+      {:ok, channel["id"]}
+    else
+      false -> {:error, :slack_assistant_dm_unavailable}
+      {:error, _} = error -> error
+      _ -> {:error, :slack_assistant_dm_unavailable}
+    end
+  end
+
+  defp destination(token, source, _identity) do
+    with {:ok, %{"channel" => channel}} <-
+           Slack.get_channel_info(token.access_token, source["id"]),
+         true <- available?(channel, source["id"]) do
+      {:ok, channel["id"]}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :slack_identity_or_channel_unavailable}
+    end
+  end
+
+  defp available?(channel, id),
+    do:
+      valid_id?(id) and channel["id"] == id and channel["is_archived"] != true and
+        (channel["is_member"] == true or
+           (channel["is_im"] == true and String.starts_with?(id, "D")))
 
   @doc "Resolve only the frozen author, then verify the credential's live Slack identity."
   def access_token(user_id, identity, scopes) do
@@ -133,7 +175,8 @@ defmodule Maraithon.Delegations.SlackIdentity do
   @doc "Read the frozen conversation with its actor in a DM or its source member in a channel."
   def read_token(user_id, identity, channel) do
     reader =
-      if String.starts_with?(channel, "D") do
+      if String.starts_with?(channel, "D") and
+           not (identity["actor"] == "as_assistant" and channel == identity["source_channel"]) do
         identity
       else
         member = identity["operator_user_id"]

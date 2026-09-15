@@ -30,7 +30,15 @@ defmodule Maraithon.Delegations.SlackIngressTest do
       })
 
     account = ConnectedAccounts.get(user_id, "slack:T123:user:UOWN")
-    channel = if tags[:dm], do: "D123", else: "C123"
+
+    channel =
+      cond do
+        tags[:new_dm] -> "DBOT"
+        tags[:dm] -> "D123"
+        true -> "C123"
+      end
+
+    source_channel = if tags[:new_dm], do: "DORIGINAL", else: channel
     now = DateTime.utc_now()
     root = ts(DateTime.add(now, -60))
 
@@ -44,6 +52,8 @@ defmodule Maraithon.Delegations.SlackIngressTest do
       "team_id" => "T123",
       "user_id" => "UOWN",
       "operator_user_id" => "UOWN",
+      "source_channel" => source_channel,
+      "dm_user_id" => if(tags[:new_dm], do: "UCHARLIE"),
       "provider" => account.provider,
       "token_preference" => "user",
       "bot_id" => nil
@@ -89,7 +99,8 @@ defmodule Maraithon.Delegations.SlackIngressTest do
       "actor" => identity["actor"],
       "team_id" => "T123",
       "channel" => channel,
-      "thread_id" => root,
+      "thread_id" => if(tags[:new_dm], do: nil, else: root),
+      "source_channel_id" => source_channel,
       "source_thread_id" => root,
       "source_account_id" => account.id,
       "identity" => identity,
@@ -104,7 +115,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
 
     message = %{
       "ts" => ts(DateTime.add(now, 1)),
-      "channel" => channel,
+      "channel" => source_channel,
       "thread_ts" => root,
       "user" => "UCHARLIE",
       "text" => "The colour is indigo.",
@@ -288,6 +299,46 @@ defmodule Maraithon.Delegations.SlackIngressTest do
     assert reload(c).source_revision == 1
   end
 
+  @tag dm: true, actor: "as_assistant"
+  test "private bot DM replies persist without becoming operator observations", c do
+    {:ok, _} =
+      OAuth.store_tokens(c.user_id, "slack:T123", %{
+        access_token: "local-slack-bot",
+        scopes: ["im:history"],
+        metadata: %{"authed_user_id" => "UOWN", "bot_user_id" => "UBOT"}
+      })
+
+    params = %{
+      "type" => "event_callback",
+      "team_id" => "T123",
+      "event_id" => "EvPRIVATE",
+      "authorizations" => [%{"user_id" => "UBOT", "is_bot" => true}],
+      "event" => Map.put(c.message, "type", "message")
+    }
+
+    conn = Plug.Test.conn(:post, "/webhooks/slack", params)
+    assert {:ok, _, _} = Maraithon.Connectors.Slack.handle_webhook(conn, params)
+    assert reload(c).source_revision == 1
+    assert List.last(events(c)).data["classification"] == "reply"
+    refute Repo.exists?(from o in Maraithon.Crm.Observation, where: o.user_id == ^c.user_id)
+    assert {:ok, _, _} = Maraithon.Connectors.Slack.handle_webhook(conn, params)
+    assert reload(c).source_revision == 1
+    # Another DM visible only to the bot is not the operator's inbox either.
+    other = params |> Map.put("event_id", "EvOTHERDM") |> put_in(["event", "channel"], "DOTHER")
+    assert {:ok, _, _} = Maraithon.Connectors.Slack.handle_webhook(conn, other)
+    assert length(events(c)) == 1
+    refute Repo.exists?(from o in Maraithon.Crm.Observation, where: o.user_id == ^c.user_id)
+  end
+
+  @tag new_dm: true, actor: "as_assistant"
+  test "unthreaded messages cannot become answers before the assistant sends its first message",
+       c do
+    unrelated = c.message |> Map.delete("thread_ts") |> Map.put("channel", "DBOT")
+    route(c, unrelated)
+    assert events(c) == []
+    assert reload(c).source_revision == 0
+  end
+
   test "editing an ignored bot message still invalidates earlier evidence", c do
     bot = Map.merge(c.message, %{"user" => "UBOT", "bot_id" => "BOTHER"})
     route(c, bot)
@@ -310,14 +361,18 @@ defmodule Maraithon.Delegations.SlackIngressTest do
              StateMachine.apply(reload(c), List.last(events(c)))
   end
 
-  for {actor, response} <- [
-        {"as_user", :accepted},
-        {"as_user", :lost_response},
-        {"as_user", :edited_before_send},
-        {"as_assistant", :accepted}
+  for {actor, response, new_dm} <- [
+        {"as_user", :accepted, false},
+        {"as_user", :lost_response, false},
+        {"as_user", :edited_before_send, false},
+        {"as_assistant", :accepted, false},
+        {"as_assistant", :accepted, true},
+        {"as_assistant", :edited_before_send, true},
+        {"as_assistant", :lost_response, true}
       ] do
-    @tag timeout: 30_000, slack_response: response, actor: actor
-    test "leased Slack source and #{actor} #{response} sender preserve the approved turn", c do
+    @tag timeout: 30_000, slack_response: response, actor: actor, new_dm: new_dm
+    test "leased Slack source and #{actor} #{response} sender (new DM #{new_dm}) preserve the approved turn",
+         c do
       enable(c.user_id)
       {node, partitions} = exact_authority(c.user_id)
       bypass = Bypass.open()
@@ -347,16 +402,39 @@ defmodule Maraithon.Delegations.SlackIngressTest do
         bypass,
         "GET",
         "/api/conversations.replies",
-        &json(&1, %{"ok" => true, "messages" => Agent.get(messages, fn list -> list end)})
+        fn conn ->
+          if c.new_dm do
+            assert URI.decode_query(conn.query_string)["channel"] == "DORIGINAL"
+
+            assert Plug.Conn.get_req_header(conn, "authorization") == [
+                     "Bearer local-slack-member"
+                   ]
+          end
+
+          json(conn, %{"ok" => true, "messages" => Agent.get(messages, fn list -> list end)})
+        end
       )
 
-      route(c, c.message)
+      if c.new_dm do
+        c.delegation |> Delegation.changeset(%{state: "ready"}) |> Repo.update!()
+      else
+        route(c, c.message)
+      end
+
       d = reload(c)
       grant = Maraithon.Delegations.current_grant(d)
 
       assert {:ok, _} =
                Repo.transaction(fn ->
-                 event = hd(events(c))
+                 event =
+                   if c.new_dm,
+                     do: %{
+                       id: Ecto.UUID.generate(),
+                       kind: "user_action",
+                       data: %{"action" => "start"}
+                     },
+                     else: hd(events(c))
+
                  {next, commands} = StateMachine.apply(d, event)
 
                  next =
@@ -443,14 +521,23 @@ defmodule Maraithon.Delegations.SlackIngressTest do
           bypass,
           "GET",
           "/api/conversations.info",
-          &json(&1, %{"ok" => true, "channel" => %{"id" => "C123", "is_member" => true}})
+          &json(&1, %{
+            "ok" => true,
+            "channel" => %{
+              "id" => c.scope["channel"],
+              "is_member" => true,
+              "is_im" => c.new_dm,
+              "user" => if(c.new_dm, do: "UCHARLIE")
+            }
+          })
         )
 
         Bypass.expect_once(bypass, "POST", "/api/chat.postMessage", fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           body = Jason.decode!(body)
           assert body["client_msg_id"] == action.id
-          assert body["thread_ts"] == c.root["ts"]
+          assert body["thread_ts"] == c.scope["thread_id"]
+          assert body["channel"] == c.scope["channel"]
 
           sent =
             Map.merge(body, %{
@@ -465,7 +552,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
             do:
               json(conn, %{
                 "ok" => true,
-                "channel" => "C123",
+                "channel" => c.scope["channel"],
                 "ts" => sent["ts"],
                 "message" => sent
               }),
@@ -493,6 +580,42 @@ defmodule Maraithon.Delegations.SlackIngressTest do
           route(c, Agent.get(accepted, & &1))
           assert List.last(events(c)).data["classification"] == "own_send"
 
+          if c.new_dm do
+            sent = Agent.get(accepted, & &1)
+            assert reload(c).provider_thread_id == sent["ts"]
+
+            reply =
+              c.message
+              |> Map.delete("thread_ts")
+              |> Map.merge(%{
+                "channel" => "DBOT",
+                "ts" => ts(DateTime.add(DateTime.utc_now(), 5)),
+                "provider_event_id" => "EvBOTDMREPLY"
+              })
+
+            route(c, reply)
+            assert List.last(events(c)).data["classification"] == "reply"
+            assert reload(c).source_revision == 1
+
+            Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
+              assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer local-slack-bot"]
+              assert URI.decode_query(conn.query_string)["ts"] == sent["ts"]
+              json(conn, %{"ok" => true, "messages" => [sent]})
+            end)
+
+            Bypass.expect_once(bypass, "GET", "/api/conversations.history", fn conn ->
+              assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer local-slack-bot"]
+              json(conn, %{"ok" => true, "messages" => [sent, reply]})
+            end)
+
+            assert {:ok, snapshot} =
+                     SlackSource.fetch(c.user_id, c.scope["identity"], "DBOT", sent["ts"],
+                       include_unthreaded?: true
+                     )
+
+            assert Enum.map(snapshot["messages"], & &1["from"]) == ["UBOT", "UCHARLIE"]
+          end
+
         :lost_response ->
           assert {:ok, %{state: "reconciling"}} = result
           assert saved.status == "execution_unknown"
@@ -503,7 +626,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
           assert {:ok, %{state: "superseded"}} = result
           assert (saved.payload["_maraithon_execution_attempts"] || 0) == 0
           assert Agent.get(accepted, & &1) == nil
-          assert reload(c).source_revision == 2
+          assert reload(c).source_revision == if(c.new_dm, do: 1, else: 2)
 
           assert {:ok, :ok} =
                    Repo.transaction(fn ->

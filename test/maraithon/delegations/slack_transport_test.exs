@@ -24,7 +24,7 @@ defmodule Maraithon.Delegations.SlackTransportTest do
       {:ok, _} =
         OAuth.store_tokens(user_id, provider, %{
           access_token: token,
-          scopes: ["chat:write", "chat:write.customize", "channels:history"],
+          scopes: ["chat:write", "chat:write.customize", "channels:history", "im:write"],
           metadata: %{"authed_user_id" => "UOTHER"}
         })
     end
@@ -114,6 +114,127 @@ defmodule Maraithon.Delegations.SlackTransportTest do
     assert {:ok, _, identity} = SlackIdentity.preview(todo, c.source, "as_user")
     assert identity["user_id"] == "U123"
     assert identity["operator_user_id"] == "U123"
+  end
+
+  for destination <- ["valid", "wrong_member", "original_dm"] do
+    @tag dm_destination: destination
+    test "assistant DM preview #{destination} binds its own channel without posting", c do
+      %Maraithon.Delegations.AssistantIdentity{user_id: c.user_id}
+      |> Maraithon.Delegations.AssistantIdentity.changeset(%{data: %{"display_name" => "October"}})
+      |> Maraithon.Repo.insert!()
+
+      auth(c)
+
+      Bypass.expect(c.bypass, "GET", "/api/conversations.info", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer fixture-member"]
+        assert URI.decode_query(conn.query_string)["channel"] == "DORIGINAL"
+
+        json(conn, %{
+          "ok" => true,
+          "channel" => %{"id" => "DORIGINAL", "is_im" => true, "user" => "UCHARLIE"}
+        })
+      end)
+
+      Bypass.expect(c.bypass, "GET", "/api/conversations.replies", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer fixture-member"]
+
+        json(conn, %{
+          "ok" => true,
+          "messages" => [
+            %{"ts" => @root, "user" => "UCHARLIE", "text" => "Ask me about the project."}
+          ]
+        })
+      end)
+
+      Bypass.expect(c.bypass, "POST", "/api/conversations.open", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer fixture-bot"]
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(body) == %{"users" => "UCHARLIE", "return_im" => true}
+
+        json(conn, %{
+          "ok" => true,
+          "channel" => %{
+            "id" => if(c.dm_destination == "original_dm", do: "DORIGINAL", else: "DBOT"),
+            "is_im" => true,
+            "user" => if(c.dm_destination == "wrong_member", do: "UOTHER", else: "UCHARLIE")
+          }
+        })
+      end)
+
+      todo = %Maraithon.Todos.Todo{
+        user_id: c.user_id,
+        source: "slack",
+        metadata: %{"team_id" => "T123", "channel_id" => "DORIGINAL", "thread_ts" => @root}
+      }
+
+      if c.dm_destination == "valid" do
+        for _ <- 1..2 do
+          assert {:ok, scope, identity} = SlackIdentity.preview(todo, c.source, "as_assistant")
+          assert scope["channel"] == "DBOT"
+          assert scope["source_channel_id"] == "DORIGINAL"
+          assert scope["source_thread_id"] == @root
+          assert scope["thread_id"] == nil
+          assert scope["to"] == ["UCHARLIE"]
+          assert identity["user_id"] == "UBOT"
+          assert identity["dm_user_id"] == "UCHARLIE"
+        end
+      else
+        assert {:error, :slack_assistant_dm_unavailable} =
+                 SlackIdentity.preview(todo, c.source, "as_assistant")
+      end
+    end
+  end
+
+  test "a new assistant DM proves the root timestamp and reconciles it with the bot", c do
+    action = action(c, "as_assistant")
+
+    payload =
+      action.payload
+      |> Map.merge(%{"channel" => "DBOT", "thread_ts" => nil})
+      |> Map.update!(
+        "_maraithon_slack_author",
+        &Map.merge(&1, %{"source_channel" => "DORIGINAL", "dm_user_id" => "UCHARLIE"})
+      )
+
+    action = %{action | payload: ActionReconciliation.freeze_identity(action, payload)}
+    auth(c)
+
+    Bypass.expect_once(c.bypass, "GET", "/api/conversations.info", fn conn ->
+      json(conn, %{
+        "ok" => true,
+        "channel" => %{"id" => "DBOT", "is_im" => true, "user" => "UCHARLIE"}
+      })
+    end)
+
+    sent = message(action) |> Map.delete("thread_ts")
+
+    Bypass.expect_once(c.bypass, "POST", "/api/chat.postMessage", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      refute Map.has_key?(Jason.decode!(body), "thread_ts")
+      json(conn, %{"ok" => true, "channel" => "DBOT", "ts" => @sent, "message" => sent})
+    end)
+
+    assert {:ok, %{thread_id: @sent, ts: @sent}} = SlackPostMessage.execute(action.payload)
+
+    Bypass.expect_once(c.bypass, "GET", "/api/conversations.replies", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer fixture-bot"]
+      assert URI.decode_query(conn.query_string)["ts"] == @sent
+      json(conn, %{"ok" => true, "messages" => [sent]})
+    end)
+
+    action =
+      put_in(action.payload["_maraithon_execution_result"], %{
+        "slack_observation" => %{"channel" => "DBOT", "ts" => @sent}
+      })
+
+    assert {:ok, %{thread_id: @sent, reconciled: true}} =
+             SlackDelivery.observe(action, action.payload[@key])
+
+    refute SlackDelivery.message_matches?(
+             Map.put(sent, "thread_ts", @root),
+             action.payload[@key],
+             @sent
+           )
   end
 
   test "reconnected credentials for a different author stop before posting", c do

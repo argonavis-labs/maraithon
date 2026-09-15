@@ -16,9 +16,19 @@ Slack messages now enter the delegation event log in the same transaction as sou
 
 Grant preview reads the thread and freezes its known counterparties. Source refresh verifies the bound reader and preserves authors, message IDs, and content revisions. A DM includes unthreaded replies only when it has one live delegation; unrelated threads stay out of the snapshot. The coordinator's command dispatch now admits Slack through the same source, decision, and send path as Gmail.
 
-The server build and focused checks passed. Coverage includes real leased source and sender jobs for the member and assistant bot, a lost response with no repeated write, an edit before send, webhook persistence before acknowledgement, duplicate events, ambiguous DMs, and Gmail sender regression checks. The test runtime helpers are shared with the Gmail evals. These checks use local provider fixtures and make no paid model calls or live Slack sends.
+The server build and focused checks passed. Coverage includes real leased source and sender jobs for the member and assistant bot, a lost response with no repeated write, an edit before send, webhook persistence before acknowledgement, duplicate events, ambiguous DMs, and Gmail sender regression checks. The test runtime helpers are shared with the Gmail evals. These checks use local provider fixtures and make no paid model calls or live Slack sends. Commit `b14ecb92` deployed through workflow `35025526204`; revision `maraithon-00369-5ft` is ready.
 
-Slack autonomous sends remain disabled. The controlled live workspace and second test account are still needed. Assistant DMs that need a separate bot conversation, Slack-to-calendar scheduling, source pagination beyond the bounded snapshot, and the live round trip remain unfinished.
+Slack autonomous sends remain disabled. The controlled live workspace and second test account are still needed. Slack-to-calendar scheduling, source pagination beyond the bounded snapshot, and the live round trip remain unfinished.
+
+## Assistant Slack DMs
+
+An assistant delegation now resolves a separate bot DM with the exact counterparty before activation. Kent's member token reads the original DM; October's bot posts the first message in its own channel. Repeated previews resolve the same destination and send no message. The confirmed provider timestamp becomes the durable thread root. Later replies and source reads use that bot conversation. [Slack DM reference](https://docs.slack.dev/reference/methods/conversations.open/).
+
+A changed original thread invalidates the first unsent decision. Messages in the bot DM before that first send cannot count as answers. Once a send is entered, a lost response stays uncertain without another write. Reconciliation requires the exact returned timestamp, actor, channel, thread, and content. Bot-only DM ingress saves delegated events without adding CRM observations or waking personal discovery. The committed Slack manifest now includes bot `message.im` events.
+
+The server build and focused transport, leased-worker, isolation, manifest, and connector checks passed. Local fixtures cover opening the DM, rejecting the wrong recipient or original channel, binding the first receipt, an unthreaded reply, switching reads to the bot, edits before sending, and lost responses. No live Slack message or model call was made. This does not complete the controlled Slack conversation eval.
+
+A read-only production inventory on September 15 found one connected Runner member and its bot. The bot lacks `chat:write.customize`; the external Slack installation must also adopt the updated message subscription. A second controlled test member is still needed. Autonomous Slack sends remain disabled while these live prerequisites are outstanding.
 
 ## Previously verified
 
