@@ -107,12 +107,18 @@ Each delegated turn freezes a bounded voice snapshot in its existing authenticat
 
 The server build and 26 focused checks passed: 20 profile, draft, and policy checks, plus six leased-turn and prepared-action checks. The draft checks also caught and corrected a missing optional account being parsed as the string `nil`. Commit `3033a205` deployed successfully in workflow `35013622962`; revision `maraithon-00358-zmw` became ready at 19:29 UTC and serves all traffic. This is local verification of account isolation and durable voice selection; no live October exchange or Slack voice proof is claimed. The refreshed production account page still shows October's missing Gmail sending permission.
 
+## Idle coordinator retirement
+
+The recurring delegation sweep now includes coordinators with no live or recently changed conversations for seven days. It uses the existing lifecycle operation to stop and soft-remove the unused installation after quiescence is proven. Conversation, grant, and action history remain stored. The next delegation creates one new coordinator with a fresh identity key; the retired binding stays revoked. A new conversation between candidate selection and the locked retirement check cancels retirement. Stopped agents, tripped crash guards, unfinished turns, and unproven sends are not retired automatically.
+
+The server build and seven focused checks passed. The checks cover the seven-day boundary, months-long waiting conversations, recent completions, crash guards, unfinished turns and sends, stale job authority, recreation without identity-key collisions, and retention of the installation until the monitored owner is proven down. The sweep and recreation checks run under exact background-job authority. The owner-down check exercises the existing monitored lifecycle path. This does not establish whole-BEAM recovery or a seven-day production canary.
+
 ## Remaining work
 
 1. Finish Google's sending consent for October and run the assistant conversation. The extension is deployed; the Kent-pair information, regular scheduling, and busy-slot evals have passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
-4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.
+4. Add delegation proposals and brief reporting.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 6. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 

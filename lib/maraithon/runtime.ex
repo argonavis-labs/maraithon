@@ -336,6 +336,28 @@ defmodule Maraithon.Runtime do
 
   def stop_agent(_id, _reason), do: {:error, :invalid_agent_id}
 
+  @doc "Retire an idle conversation coordinator under a current sweep job's authority."
+  def retire_delegation_coordinator(
+        id,
+        %Maraithon.Runtime.BackgroundJob{job_type: "runtime_recurring:delegation_due_sweep"} = job
+      ) do
+    planner = fn agent ->
+      Maraithon.Runtime.JobAuthority.fence!(job)
+      if job.user_id && job.user_id != agent.user_id, do: Repo.rollback(:user_mismatch)
+      Maraithon.Delegations.Lifecycle.retirement_plan(agent, DatabaseClock.now!())
+    end
+
+    # Replay adopts the same durable stop. A new coordinator is admitted only
+    # after finalization marks this installation removed and proves it quiescent.
+    case execute_lifecycle(id, :remove, %{"reason" => "delegation_idle"}, planner) do
+      {:ok, %{status: :finalized}} -> {:ok, :retired}
+      {:ok, %{status: :reconciliation_pending}} -> {:ok, :retiring}
+      error -> error
+    end
+  end
+
+  def retire_delegation_coordinator(_, _), do: {:error, :delegation_sweep_required}
+
   @doc """
   Update an existing agent definition. Running agents are stopped, updated, and restarted.
   """

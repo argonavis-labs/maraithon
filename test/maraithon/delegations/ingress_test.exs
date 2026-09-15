@@ -165,6 +165,203 @@ defmodule Maraithon.Delegations.IngressTest do
     assert {:ok, %{count: 1}} = Retention.retention_backlog(cutoff, nil, opts)
   end
 
+  @tag idle_coordinator: true
+  test "retirement requires seven quiet days and never retires a waiting conversation", c do
+    agent = idle_coordinator(c)
+    now = DateTime.utc_now()
+    assert idle_coordinator?(agent.id, now)
+    refute idle_coordinator?(agent.id, DateTime.add(now, -2, :day))
+
+    for state <- ~w(waiting_reply paused needs_user waiting_capacity) do
+      d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+      d |> Delegation.changeset(%{state: state}) |> Repo.update!()
+      refute idle_coordinator?(agent.id, DateTime.add(now, 180, :day))
+    end
+  end
+
+  @tag idle_coordinator: true
+  test "recent completion, a stopped coordinator and a tripped guard all prevent retirement", c do
+    agent = idle_coordinator(c)
+    now = DateTime.utc_now()
+    d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+    d |> Delegation.changeset(%{state: "expired"}) |> Repo.update!()
+    refute idle_coordinator?(agent.id, now)
+
+    later = DateTime.add(now, 8, :day)
+    assert idle_coordinator?(agent.id, later)
+    agent |> Ecto.Changeset.change(status: "stopped") |> Repo.update!()
+    refute idle_coordinator?(agent.id, later)
+    agent |> Ecto.Changeset.change(status: "running") |> Repo.update!()
+
+    Repo.insert!(%Maraithon.Runtime.AgentRestartGuard{
+      agent_id: agent.id,
+      generation: Ecto.UUID.generate(),
+      tripped: true
+    })
+
+    refute idle_coordinator?(agent.id, later)
+  end
+
+  @tag idle_coordinator: true
+  test "an unfinished turn prevents an otherwise idle coordinator from retiring", c do
+    agent = idle_coordinator(c)
+    c = %{c | delegation: Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()}
+    assert {:ok, _} = Repo.transaction(fn -> decision_turn(c) end)
+    d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+    d |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
+    refute idle_coordinator?(agent.id, DateTime.add(DateTime.utc_now(), 8, :day))
+  end
+
+  @tag idle_coordinator: true
+  test "an unproven send prevents retirement even after its turn is superseded", c do
+    alias Maraithon.Delegations.{Execution, Turn}
+    alias Maraithon.TelegramAssistant.PreparedAction
+    enable_gmail(c.user_id)
+    agent = idle_coordinator(c)
+    c = %{c | delegation: Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()}
+
+    assert {:ok, action} =
+             Repo.transaction(fn ->
+               {d, grant, event} = decision_turn(c)
+               next = Execution.prepare!(d, grant, event, DateTime.utc_now())
+               assert next.state == "sending"
+               next |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
+               turn = Repo.one!(Turn) |> Turn.hydrate()
+               turn |> Turn.changeset(%{status: "superseded"}) |> Repo.update!()
+               Repo.one!(PreparedAction) |> PreparedAction.hydrate_payload()
+             end)
+
+    later = DateTime.add(DateTime.utc_now(), 8, :day)
+    refute idle_coordinator?(agent.id, later)
+    action |> PreparedAction.changeset(%{status: "expired"}) |> Repo.update!()
+    assert idle_coordinator?(agent.id, later)
+  end
+
+  @tag idle_coordinator: true
+  test "a sweep retires an empty coordinator once and a new delegation gets a new Agent", c do
+    alias Maraithon.Runtime.{BackgroundJobs, ScheduledJob}
+    alias Maraithon.Delegations.{Lifecycle, Wakes}
+    agent = idle_coordinator(c)
+
+    timer =
+      %ScheduledJob{}
+      |> ScheduledJob.changeset(%{
+        agent_id: agent.id,
+        job_type: "wakeup",
+        fire_at: DateTime.add(DateTime.utc_now(), 3600)
+      })
+      |> Repo.insert!()
+
+    assert {:ok, %{failures: []}} =
+             Maraithon.DurablePayloadVerification.verify_batch("scheduled_jobs")
+
+    {node, partitions} = exact_authority(c.user_id)
+    configure(:process_role, :web)
+
+    type = "runtime_recurring:delegation_due_sweep"
+    {:ok, _} = BackgroundJobs.enqueue(type, %{user_id: c.user_id, payload: %{}})
+
+    run_leased_job(node, partitions, type, fn job ->
+      assert {:ok, %{retired: 1, repaired: 0, held: 0}} = Wakes.run_once(job)
+      old = Repo.get!(Maraithon.Agents.Agent, agent.id)
+      assert old.status == "stopped"
+      assert old.install_status == "removed"
+      assert Repo.reload!(timer).status == "cancelled"
+
+      assert Repo.get!(Delegation, c.delegation.id).current_grant_id ==
+               c.delegation.current_grant_id
+
+      assert Repo.get_by!(Maraithon.AgentIsolation.Binding, agent_id: agent.id).status ==
+               "revoked"
+
+      assert {:ok, %{users: 0, retired: 0}} = Wakes.run_once(job)
+
+      assert {:ok, _} =
+               Maraithon.Runtime.JobAuthority.transaction(job, fn ->
+                 d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+                 d |> Delegation.changeset(%{state: "waiting_reply"}) |> Repo.update!()
+               end)
+
+      assert {:ok, fresh} = Lifecycle.ensure(c.user_id, job: job)
+      assert fresh.id != agent.id
+      assert fresh.status == "running"
+
+      assert Repo.get_by!(Maraithon.AgentIsolation.Binding, agent_id: fresh.id).identity_key !=
+               Repo.get_by!(Maraithon.AgentIsolation.Binding, agent_id: agent.id).identity_key
+
+      assert Repo.get!(Delegation, c.delegation.id).agent_id == fresh.id
+      assert {:ok, same} = Lifecycle.ensure(c.user_id, job: job)
+      assert same.id == fresh.id
+      {:ok, %{retired: 1}}
+    end)
+  end
+
+  @tag idle_coordinator: true
+  test "a new conversation after candidate selection cancels retirement and stale jobs cannot stop",
+       c do
+    alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs}
+    agent = idle_coordinator(c)
+    {node, partitions} = exact_authority(c.user_id)
+    configure(:process_role, :web)
+    type = "runtime_recurring:delegation_due_sweep"
+    {:ok, _} = BackgroundJobs.enqueue(type, %{user_id: c.user_id, payload: %{}})
+    assert idle_coordinator?(agent.id, DateTime.utc_now())
+
+    run_leased_job(node, partitions, type, fn job ->
+      assert {:error, :task_authority_lost} =
+               Maraithon.Runtime.retire_delegation_coordinator(agent.id, %{
+                 job
+                 | claim_token: Ecto.UUID.generate()
+               })
+
+      assert {:ok, _} =
+               Maraithon.Runtime.JobAuthority.transaction(job, fn ->
+                 d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+                 d |> Delegation.changeset(%{state: "waiting_reply"}) |> Repo.update!()
+               end)
+
+      assert {:error, :coordinator_not_idle} =
+               Maraithon.Runtime.retire_delegation_coordinator(agent.id, job)
+
+      assert Repo.get!(Maraithon.Agents.Agent, agent.id).status == "running"
+      assert Maraithon.Runtime.AgentLifecycleOperations.get(agent.id) == nil
+      assert Repo.get!(BackgroundJob, job.id).status == "running"
+      {:ok, %{retired: 0}}
+    end)
+  end
+
+  defp idle_coordinator(c) do
+    old = DateTime.add(DateTime.utc_now(), -8, :day)
+
+    agent =
+      Repo.insert!(%Maraithon.Agents.Agent{
+        user_id: c.user_id,
+        behavior: "delegation_coordinator",
+        status: "running",
+        inserted_at: old,
+        started_at: old
+      })
+
+    {:ok, _} =
+      Maraithon.AgentIsolation.grant_binding_consent(
+        agent,
+        binding_consent(agent, %{"identity_key" => "delegations:#{c.user_id}"})
+      )
+
+    c.delegation
+    |> Delegation.changeset(%{state: "completed", agent_id: agent.id})
+    |> Ecto.Changeset.put_change(:updated_at, old)
+    |> Repo.update!()
+
+    agent
+  end
+
+  defp idle_coordinator?(id, now),
+    do:
+      Repo.exists?(
+        from a in Maraithon.Delegations.Lifecycle.idle_coordinators(now), where: a.id == ^id
+      )
+
   test "six months of quiet checkpoints preserve the grant and admit one late reply", c do
     alias Maraithon.Behaviors.DelegationCoordinator, as: Behavior
     alias Maraithon.Runtime.BackgroundJob

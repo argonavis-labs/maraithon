@@ -82,6 +82,47 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     assert AgentLifecycleOperations.get(agent.id) == nil
   end
 
+  @tag idle_coordinator: true
+  test "idle retirement preserves its installation until the monitored owner is proven down" do
+    now = DateTime.utc_now()
+    old = DateTime.add(now, -8, :day)
+
+    agent =
+      running_consented_agent("idle-retirement")
+      |> Ecto.Changeset.change(
+        behavior: "delegation_coordinator",
+        inserted_at: old,
+        started_at: old
+      )
+      |> Repo.update!()
+
+    {_lease, watcher, owner_pid} = monitored_owner(agent.id)
+    request = %{"reason" => "delegation_idle"}
+
+    assert {:ok, fence} =
+             AgentLifecycleOperations.begin(
+               agent.id,
+               :remove,
+               request,
+               &Maraithon.Delegations.Lifecycle.retirement_plan(&1, now)
+             )
+
+    assert {:ok, %{status: :reconciliation_pending, reason: :runtime_lease_owned}} =
+             AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
+
+    assert Agents.get_agent(agent.id).install_status == "enabled"
+    assert Repo.get_by!(Maraithon.AgentIsolation.Binding, agent_id: agent.id).status == "active"
+
+    prove_owner_down(watcher, owner_pid)
+
+    assert {:ok, %{status: :finalized, agent: retired, resume_after: false}} =
+             AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
+
+    assert retired.status == "stopped"
+    assert retired.install_status == "removed"
+    assert Repo.get_by!(Maraithon.AgentIsolation.Binding, agent_id: agent.id).status == "revoked"
+  end
+
   test "unresolved work retains the marker and performs no delivery or config mutation" do
     agent = running_consented_agent("atomic-finalize", %{"subscribe" => ["topic:old"]})
     scheduled = scheduled_job(agent.id)
