@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Commands do
   @moduledoc "Reduce commands into durable jobs and todo progress, with no provider I/O."
   alias Maraithon.Delegations.{Actions, Gates, Jobs, Outcomes}
 
-  def execution_ready?, do: false
+  def execution_ready?, do: true
 
   def apply(delegation, grant, event, commands, now) do
     Enum.reduce(commands, delegation, fn command, current ->
@@ -23,7 +23,7 @@ defmodule Maraithon.Delegations.Commands do
           Outcomes.follow_up(current, grant, now)
 
         command in [:enqueue_sync, :enqueue_decide] and current.provider == "gmail" and
-          grant.control_state == "active" and Gates.sends_enabled?(current.user_id, "gmail") ->
+          grant.control_state == "active" and Gates.scope_enabled?(current, grant) ->
           if command == :enqueue_sync,
             do: Jobs.start_sync!(current, grant, event, now),
             else: Jobs.start_decide!(current, event, now)
@@ -63,7 +63,7 @@ defmodule Maraithon.Delegations.Commands do
   defp execute(d, grant, _) do
     cond do
       grant.control_state != "active" -> %{d | next_wake_at: nil}
-      not Gates.sends_enabled?(d.user_id, d.provider) -> hold(d, "sends_disabled")
+      not Gates.scope_enabled?(d, grant) -> hold(d, "sends_disabled")
       true -> hold(d, "execution_not_ready")
     end
   end

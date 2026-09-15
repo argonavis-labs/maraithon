@@ -21,6 +21,8 @@ on:
           - validate-todo
           - diagnose-runtime
           - delegation-eval-preflight
+          - delegation-eval-start
+          - delegation-eval-status
           - reset-rebuild-kent
           - replay-gmail
           - replay-slack
@@ -107,6 +109,12 @@ jobs:
       - name: Check Kent's delegation eval accounts
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'delegation-eval-preflight'
         run: scripts/monorepo/delegation-eval-preflight
+
+      - name: Run or inspect the controlled delegation eval
+        if: github.event_name == 'workflow_dispatch' && (inputs.operation == 'delegation-eval-start' || inputs.operation == 'delegation-eval-status')
+        run: scripts/monorepo/delegation-eval "${OPERATION}"
+        env:
+          OPERATION: ${{ inputs.operation }}
 
       - name: Replay Kent's Gmail source window
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'

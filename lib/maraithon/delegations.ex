@@ -335,13 +335,17 @@ defmodule Maraithon.Delegations do
   defp transaction(user_id, fun),
     do:
       Repo.transaction(fn ->
+        if job = Maraithon.AssistantChat.Execution.capture_authority(),
+          do: Maraithon.Runtime.JobAuthority.fence!(job)
+
         DurablePayload.require_current_mutation!()
         WriteFence.lock_user_writable!(user_id)
         fun.()
       end)
 
   defp after_control({:ok, d}, user_id) do
-    _ = Lifecycle.ensure(user_id)
+    job = Maraithon.AssistantChat.Execution.capture_authority()
+    _ = Lifecycle.ensure(user_id, if(job, do: [job: job], else: []))
     changed(d)
     {:ok, get(user_id, d.id)}
   end

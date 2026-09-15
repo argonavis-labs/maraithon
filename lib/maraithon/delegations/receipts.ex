@@ -41,10 +41,9 @@ defmodule Maraithon.Delegations.Receipts do
           selected = turn.data["decision"]["slot_ids"]
 
           slots =
-            Enum.filter(
-              scheduling["slots"],
-              &(Maraithon.Delegations.Policy.slot_id(&1) in selected)
-            )
+            Enum.map(selected, fn id ->
+              Enum.find(scheduling["slots"], &(Maraithon.Delegations.Policy.slot_id(&1) == id))
+            end)
 
           Map.merge(data, %{
             "offered_slots" => slots,

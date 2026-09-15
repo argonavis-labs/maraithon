@@ -37,7 +37,24 @@ defmodule Maraithon.Delegations.Outcomes do
         if context && context.turn.status == "validated",
           do: context.turn |> Turn.changeset(%{status: "settled"}) |> Repo.update!()
 
-        %{d | workflow_revision: Workflow.current(updated)["revision"]}
+        data =
+          if context && is_map(context.turn.data["decision"]) do
+            decision = context.turn.data["decision"]
+            sources = context.run.prompt_snapshot["sources"]
+
+            Map.merge(d.data, %{
+              "last_action" => attrs["next_action"],
+              "evidence" =>
+                Enum.map(decision["evidence"] || [], fn id ->
+                  %{"source" => "gmail", "account_id" => sources["account_id"], "id" => id}
+                end),
+              "ledger" => Map.put(d.data["ledger"] || %{}, "latest_outcome", decision["reason"])
+            })
+          else
+            d.data
+          end
+
+        %{d | workflow_revision: Workflow.current(updated)["revision"], data: data}
       else
         {:error, _} -> needs_review(d)
       end

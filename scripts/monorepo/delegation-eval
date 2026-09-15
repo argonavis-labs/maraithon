@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  delegation-eval-start) task=delegation_eval_start ;;
+  delegation-eval-status) task=delegation_eval_status ;;
+  *) echo "Expected delegation-eval-start or delegation-eval-status" >&2; exit 1 ;;
+esac
+
+revision="$(gcloud run services describe maraithon --project maraithon --region us-central1 --format='value(status.latestReadyRevisionName)')"
+image="$(gcloud run revisions describe "${revision}" --project maraithon --region us-central1 --format='value(status.imageDigest)')"
+[[ "${image}" == us-central1-docker.pkg.dev/maraithon/*@sha256:* ]] || exit 1
+
+eval_env='POOL_SIZE=2,DELEGATIONS_ENABLED=true,DELEGATION_EVAL_ONLY=true,DELEGATION_USER_ALLOWLIST=kent@runner.now,DELEGATION_GMAIL_SENDS_ENABLED=true,DELEGATION_SLACK_SENDS_ENABLED=false'
+if [[ "${task}" == delegation_eval_start ]]; then
+  # This is the only enable operation. Code checks the labelled thread and both
+  # addresses before sync, model entry, preparation and provider dispatch.
+  gcloud run services update maraithon --project maraithon --region us-central1 \
+    --update-env-vars "${eval_env#POOL_SIZE=2,}" --quiet
+fi
+
+gcloud run jobs update maraithon-todo-validation --project maraithon --region us-central1 --image "${image}" --quiet
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+gcloud run jobs execute maraithon-todo-validation --project maraithon --region us-central1 \
+  --args="^@^eval@Maraithon.Release.${task}" --update-env-vars "${eval_env}" --wait --quiet
+
+for attempt in $(seq 1 20); do
+  report="$(gcloud logging read \
+    "resource.type=cloud_run_job AND resource.labels.job_name=maraithon-todo-validation AND timestamp>=\"${started_at}\" AND textPayload:\"DELEGATION_EVAL=\"" \
+    --project maraithon --limit 1 --order=desc --format='value(textPayload)')"
+  if [[ "${report}" == DELEGATION_EVAL=* ]]; then
+    echo "${report}"
+    exit 0
+  fi
+  sleep 3
+done
+echo "Eval operation finished without a report" >&2
+exit 1

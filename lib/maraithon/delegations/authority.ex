@@ -44,7 +44,7 @@ defmodule Maraithon.Delegations.Authority do
 
                with true <- matches_job?(job, binding) and current?(context, binding),
                     true <- workflow_current?(context.delegation),
-                    true <- Gates.sends_enabled?(action.user_id, context.delegation.provider),
+                    true <- Gates.scope_enabled?(context.delegation, context.grant),
                     true <-
                       current.status == "confirmed" and context.turn.status == "dispatched" and
                         context.delegation.state == "sending",

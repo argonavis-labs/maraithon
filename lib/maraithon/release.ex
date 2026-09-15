@@ -28,6 +28,29 @@ defmodule Maraithon.Release do
   end
 
   def delegation_eval_preflight do
+    delegation_eval(
+      fn -> Maraithon.Delegations.Evaluation.preflight() end,
+      "DELEGATION_EVAL_PREFLIGHT="
+    )
+  end
+
+  def delegation_eval_start do
+    delegation_eval(
+      fn ->
+        case Maraithon.Delegations.EvaluationRunner.start("information_reply") do
+          {:ok, report} -> report
+          {:error, reason} -> raise "Delegation eval could not start: #{reason}"
+        end
+      end,
+      "DELEGATION_EVAL="
+    )
+  end
+
+  def delegation_eval_status do
+    delegation_eval(fn -> Maraithon.Delegations.EvaluationRunner.status() end, "DELEGATION_EVAL=")
+  end
+
+  defp delegation_eval(fun, prefix) do
     load_app()
     {:ok, _} = Application.ensure_all_started(:req)
     {:ok, vault} = Maraithon.Vault.start_link([])
@@ -38,10 +61,10 @@ defmodule Maraithon.Release do
     try do
       {:ok, report, _} =
         Ecto.Migrator.with_repo(Maraithon.Repo, fn _ ->
-          Maraithon.Delegations.Evaluation.preflight()
+          fun.()
         end)
 
-      IO.puts("DELEGATION_EVAL_PREFLIGHT=" <> Jason.encode!(report))
+      IO.puts(prefix <> Jason.encode!(report))
     after
       Supervisor.stop(tool_call_supervisor)
       GenServer.stop(vault)

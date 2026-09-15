@@ -99,7 +99,7 @@ defmodule Maraithon.Delegations.Decision do
 
   defp call(job, context, checkpoint, state, stage, decision) do
     with true <- LLM.provider_name() == "openrouter",
-         true <- Gates.sends_enabled?(job.user_id, context.delegation.provider),
+         true <- Gates.scope_enabled?(context.delegation, context.grant),
          remaining when remaining > 1_000 <- Continuation.remaining_ms(checkpoint),
          messages = Policy.messages(context, decision),
          true <- byte_size(Jason.encode!(messages)) <= 32_000,
@@ -153,7 +153,7 @@ defmodule Maraithon.Delegations.Decision do
 
   defp enter(job, context, checkpoint, state, stage, decision, quote) do
     Jobs.transaction(job, fn current ->
-      unless Gates.sends_enabled?(job.user_id, current.delegation.provider),
+      unless Gates.scope_enabled?(current.delegation, current.grant),
         do: Repo.rollback(:sends_disabled)
 
       if Continuation.remaining_ms(checkpoint) <= 1_000,

@@ -11,7 +11,10 @@ defmodule Maraithon.Delegations.Policy do
 
     %{
       "grant" =>
-        Map.take(scope, ~w(actor kind outcome instruction to cc facts allowed reserved identity)),
+        Map.take(
+          scope,
+          ~w(actor kind outcome instruction user_answers to cc facts allowed reserved identity)
+        ),
       "last_messages" => Enum.take(snapshot["messages"], -6),
       "ledger" => context.delegation.data["ledger"] || %{},
       "offered_slots" => slot_ids(context.delegation.data["offered_slots"] || []),
@@ -43,6 +46,7 @@ defmodule Maraithon.Delegations.Policy do
         needs_user, wait), reason, and evidence (message IDs). Include body for sends,
         question for needs_user, slot_ids for offers, accepted_slot_id for booking.
         A complete decision requires evidence that the granted outcome already happened.
+        Record the concrete answer or delivered result in its reason, with the source IDs.
         """
       },
       %{"role" => "user", "content" => Jason.encode!(context(context))}

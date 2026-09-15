@@ -4,7 +4,11 @@ defmodule Maraithon.Delegations.IngressTest do
   alias Maraithon.Delegations.{Delegation, Event, Grant, Ingress, Scope, StateMachine}
 
   setup tags do
-    user_id = "delegation-ingress-#{Ecto.UUID.generate()}@example.invalid"
+    user_id =
+      if tags[:controlled_eval],
+        do: "kent@runner.now",
+        else: "delegation-ingress-#{Ecto.UUID.generate()}@example.invalid"
+
     {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
 
     account =
@@ -614,6 +618,79 @@ defmodule Maraithon.Delegations.IngressTest do
     assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
   end
 
+  @tag controlled_eval: true
+  test "the live eval driver sends its fixed initial email once across a checkpoint retry", c do
+    alias Maraithon.Delegations.EvaluationRunner
+    alias Maraithon.Runtime.BackgroundJobs
+    enable_gmail(c.user_id)
+    configure(:delegation_eval_only, true)
+    {node, partitions} = exact_authority(c.user_id)
+    bypass = Bypass.open()
+    configure(:gmail, api_base_url: "http://localhost:#{bypass.port}")
+
+    sender =
+      Repo.insert!(%Maraithon.Accounts.ConnectedAccount{
+        user_id: c.user_id,
+        provider: "google:personal-eval",
+        status: "connected",
+        metadata: %{"email" => "kent.fenwick@gmail.com"}
+      })
+
+    for provider <- [sender.provider, c.account.provider] do
+      assert {:ok, _} =
+               Maraithon.OAuth.store_tokens(c.user_id, provider, %{
+                 access_token: "local-eval-only",
+                 refresh_token: "fixture",
+                 expires_in: 3600,
+                 scopes: ["https://www.googleapis.com/auth/gmail.compose"]
+               })
+    end
+
+    Bypass.expect_once(
+      bypass,
+      "GET",
+      "/users/me/settings/sendAs",
+      &json(
+        &1,
+        %{"sendAs" => [%{"isPrimary" => true, "sendAsEmail" => "kent.fenwick@gmail.com"}]}
+      )
+    )
+
+    Bypass.expect_once(bypass, "POST", "/users/me/messages/send", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      mime = raw |> Jason.decode!() |> Map.fetch!("raw") |> Base.url_decode64!(padding: false)
+      assert mime =~ "From: kent.fenwick@gmail.com\r\n"
+      assert mime =~ "To: kent@runner.now\r\n"
+      assert mime =~ "Subject: [Maraithon eval] local\r\n"
+      json(conn, %{"id" => "778899", "threadId" => "aabbcc"})
+    end)
+
+    Bypass.expect(bypass, "GET", "/users/me/messages", &json(&1, %{"messages" => []}))
+
+    assert {:ok, _} =
+             BackgroundJobs.enqueue("delegation_eval", %{
+               user_id: c.user_id,
+               payload: %{
+                 "scenario" => hd(Maraithon.Delegations.Evaluation.scenarios()["scenarios"]),
+                 "subject" => "[Maraithon eval] local",
+                 "sender_account_id" => sender.id,
+                 "owner_account_id" => c.account.id,
+                 "deadline" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 3600))
+               }
+             })
+
+    run_leased_job(node, partitions, "delegation_eval", fn job ->
+      for _ <- 1..2 do
+        assert {:ok, %{"phase" => "waiting_for_initial_email"}, {:reschedule_in, 30_000}} =
+                 EvaluationRunner.execute(job)
+      end
+
+      {:ok, %{state: "checked"}}
+    end)
+
+    assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 1
+  end
+
   defp decision_turn(c) do
     alias Maraithon.Delegations.{Jobs, Sources, Turn}
     alias Maraithon.TelegramAssistant.Run
@@ -877,7 +954,9 @@ defmodule Maraithon.Delegations.IngressTest do
 
     assert :ok = TaskSupervisor.bind_task(identity, task.pid)
     send(task.pid, {:bound, gate})
-    Task.await(task, 10_000)
+    result = Task.await(task, 10_000)
+    assert {:ok, :completion} = TaskSupervisor.terminate_exact(identity)
+    result
   end
 
   defp configure(key, value) do

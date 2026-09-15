@@ -1,0 +1,33 @@
+{
+  "phase": "local_leased_runtime",
+  "date": "2026-09-15",
+  "provider_mode": "local_http_stubs",
+  "live_provider_eval_passed": false,
+  "command": "MIX_ENV=test MIX_TEST_PARTITION=_delegation_ready_eval mix test test/maraithon/delegations/ test/maraithon/telegram_assistant/action_reconciliation_test.exs test/maraithon/todos/outcome_workflow_test.exs",
+  "checks": 79,
+  "failures": 0,
+  "verified": [
+    "Exact runtime activation after refreshing the three reviewed effect payload fingerprints",
+    "One provider send and one durable receipt; replay sends nothing",
+    "Lost send response settles from matching Sent-mail evidence without resending",
+    "An unproven send remains uncertain and asks for review after bounded observation",
+    "A model decision and its scope review reserve and settle cost under the job lease",
+    "Replaying a saved model decision makes no additional model calls",
+    "The eval driver's fixed first email is sent once across a checkpoint retry",
+    "Only the two Kent addresses and labelled eval threads pass the pilot gate",
+    "Waiting, clarification and a due review preserve the other person's ownership",
+    "A live delegation owns its follow-up clock; the ordinary waiting review does not race it"
+  ],
+  "synthetic_model_case": {
+    "requested_model": "meta/muse-spark-1.3-contributor",
+    "model_calls": 2,
+    "fixture_cost_micro_usd": 200,
+    "remaining_reserved_micro_usd": 0,
+    "is_actual_openrouter_spend": false
+  },
+  "remaining_live_proof": [
+    "The information conversation finishes through production Gmail and Muse",
+    "Calendar offers, booking, conflict re-offer and recipient calendar copy",
+    "Measured production dollars per finished delegation"
+  ]
+}

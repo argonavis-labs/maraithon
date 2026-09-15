@@ -36,7 +36,7 @@ defmodule Maraithon.Delegations.Execution do
     prefs = Preferences.get(d.user_id)
 
     with true <- Authority.current?(context, binding) and Authority.workflow_current?(d),
-         true <- Gates.sends_enabled?(d.user_id, d.provider),
+         true <- Gates.scope_enabled?(d, grant),
          true <- context.turn.status == "validated" and context.turn.prepared_action_id == nil,
          {:ok, _} <- Policy.validate(context, decision),
          true <- Policy.approved?(decision, context.turn.data["policy_review"]),
@@ -136,7 +136,7 @@ defmodule Maraithon.Delegations.Execution do
           not Authority.workflow_current?(context.delegation) ->
         {:error, :decision_no_longer_current}
 
-      not Gates.sends_enabled?(action.user_id, context.delegation.provider) ->
+      not Gates.scope_enabled?(context.delegation, context.grant) ->
         {:error, :sends_disabled}
 
       context.turn.status != "dispatched" or context.delegation.state != "sending" ->
