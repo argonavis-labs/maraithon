@@ -21,9 +21,11 @@ defmodule Maraithon.Delegations.Gates do
 
   defp controlled_scope?(d, scope) do
     pair = ~w(kent@runner.now kent.fenwick@gmail.com)
+    sender = get_in(scope, ["identity", "email"])
+    assistant? = scope["actor"] == "as_assistant" and sender == "october@ewakened.com"
 
     d.user_id == "kent@runner.now" and d.provider == "gmail" and
-      get_in(scope, ["identity", "email"]) in pair and
+      (sender in pair or assistant?) and
       is_binary(scope["subject"]) and String.starts_with?(scope["subject"], "[Maraithon eval]") and
       scope["to"] != [] and
       Enum.all?(Maraithon.Delegations.Scope.email_participants(scope), &(&1 in pair))

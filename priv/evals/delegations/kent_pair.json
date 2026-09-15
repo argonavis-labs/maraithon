@@ -2,6 +2,7 @@
   "version": 1,
   "owner": {"name": "Kent", "email": "kent@runner.now"},
   "counterparty": {"name": "Kent", "email": "kent.fenwick@gmail.com"},
+  "assistant": {"name": "October", "email": "october@ewakened.com"},
   "model": "meta/muse-spark-1.3-contributor",
   "timezone": "America/Toronto",
   "subject_prefix": "[Maraithon eval]",

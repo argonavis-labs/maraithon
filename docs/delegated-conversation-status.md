@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending. The signature review correction passed its live check. The conflict rerun exposed a separate booking approval bug, which is fixed locally and awaiting deployment. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict rerun exposed a booking approval bug. Its correction and rich mailbox signatures are deployed in revision `maraithon-00353-79v`; the new conflict eval is in progress. October is connected and configured as the assistant. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -43,7 +43,7 @@ Commit `bb66b0dd` excludes assistant accounts from personal chat context, user-m
 
 Commit `d453c00e` implements the saved first-message copy setting. The grant preview shows the source user's address; the first prepared email freezes that Cc, and later sends omit it unless the user explicitly added a permanent Cc. A manual reply from the source user pauses an assistant conversation and cannot prove the counterparty's outcome. The controlled eval gate also validates the extra recipient. The focused policy, gate, and ingress run passed 47 checks, the preview and isolation run passed nine checks, and the server build passed. Server deployment `35001963170` passed, serving revision `maraithon-00349-xpk`. The shared native preview in `2aa70f8e` passed signed Mac and iPhone builds. The signed Mac app is installed; iPhone release `35002441909` passed.
 
-This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes account-specific voice, native settings, and an audit of other direct provider read paths. No October account is connected in production yet.
+This completes the central isolation, signature, and first-message copy paths, not the full assistant slice. The remaining work includes account-specific voice and an audit of other direct provider read paths. October connected on September 15; live actor verification is still required.
 
 ## Conflict recovery and retention
 
@@ -69,7 +69,15 @@ The provider reader verified all five emails against the frozen mailbox signatur
 
 Commits `6e23e6aa` and `9eb9c2ac` give Mac and iPhone a shared assistant form using the same account choices, timezones, numeric limits, identity, and preferences as web. The server returns account labels without loading credentials. Both device authentication paths passed the settings contract check. Native account and delegation requests also remove a duplicate `/api/mobile` prefix that would have prevented the iPhone from reaching those endpoints.
 
-Signed Mac and iPhone simulator builds passed, with XcodeGen regeneration. The focused iPhone request test could not run because the dormant test target references the removed `TodayViewCopy` type. An earlier compile failure in the todo-count fixture was updated to include the current action, watching, and snoozed counts. The native test target remains unverified; no test was deleted, skipped in the project, or replaced with a passing stub. Deployment and live native settings verification are pending.
+Signed Mac and iPhone simulator builds passed, with XcodeGen regeneration. The focused iPhone request test could not run because the dormant test target references the removed `TodayViewCopy` type. An earlier compile failure in the todo-count fixture was updated to include the current action, watching, and snoozed counts. The native test target remains unverified; no test was deleted, skipped in the project, or replaced with a passing stub.
+
+Server workflow `35007994634` passed, serving revision `maraithon-00353-79v`. iPhone workflow `35007994545` built and uploaded to TestFlight successfully. The signed Mac app is installed. Its preferences saved through the shared API, and web showed the same values. After October was configured on web, Mac loaded its name, verified address, and disclosure setting. Simulator inspection was unavailable through the app-control connection, so the iPhone screen has not been visually verified.
+
+## October eval preparation
+
+Kent connected `october@ewakened.com`, account 9. Web verified its sending address and saved the assistant name October with the mailbox signature, AI disclosure enabled, and first-message Cc left off. Mac loaded the same identity.
+
+The eval extension supports the frozen actor and permits October only as the assistant sender on labelled Kent-pair conversations. Preflight checks its verified identity, sending scope, and exclusion from personal source accounts. The reply fixture resolves the latest executed send into the recipient's actual mailbox by RFC Message-ID, then replies in that mailbox's thread. It checks the sender address, display name, and frozen signature before replying. The server build and 12 focused gate, offer, and isolation tests passed. The leased fixture retry check also passed, confirming that replay does not send the initial email twice. This extension still needs deployment and a live assistant run.
 
 ## Personal and work accounts
 
@@ -81,8 +89,8 @@ The post-rollout sample at 18:13 to 18:14 UTC found all 64 partitions ready with
 
 ## Remaining work
 
-1. Deploy the booking approval correction and rerun the busy-slot scenario. Job `db7f29d4-3080-46bc-bf99-8f7ff026447b` offered replacement times and received acceptance, but stopped before booking. All failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
-2. Complete assistant identity isolation, signatures, voice, and settings across clients. The production account check found no assistant identity and no connected `october@ewakened.com` account. Connecting it alone does not establish the assistant-account slice.
+1. Finish the busy-slot rerun, job `582b343d-555c-4148-bedd-a9abf69cd998`, on the deployed booking correction. The earlier run stopped before booking. All failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
+2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured; the assistant eval is next. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.

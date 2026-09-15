@@ -33,6 +33,28 @@ defmodule Maraithon.Delegations.GatesTest do
     grant = %{data: %{"scope" => scope}}
     assert Gates.scope_enabled?(d, grant)
 
+    assistant_scope =
+      Map.merge(scope, %{
+        "actor" => "as_assistant",
+        "identity" => %{"email" => "october@ewakened.com"}
+      })
+
+    assert Gates.scope_enabled?(d, %{data: %{"scope" => assistant_scope}})
+
+    refute Gates.scope_enabled?(d, %{
+             data: %{"scope" => Map.put(assistant_scope, "actor", "as_user")}
+           })
+
+    refute Gates.scope_enabled?(d, %{
+             data: %{"scope" => Map.put(assistant_scope, "to", ["someone@example.invalid"])}
+           })
+
+    refute Gates.scope_enabled?(d, %{
+             data: %{
+               "scope" => Map.put(assistant_scope, "identity", %{"email" => "other@ewakened.com"})
+             }
+           })
+
     for changed <- [
           %{"to" => ["charlie@example.invalid"]},
           %{"cc" => ["other@example.invalid"]},

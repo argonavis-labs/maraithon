@@ -5,13 +5,14 @@ defmodule Maraithon.Delegations.Evaluation do
   alias Maraithon.Delegations.{Preferences, Scheduling}
 
   @doc "Check the actual recipient's offered dates and wording before the fixture accepts a time."
-  def verify_offer(scenario, slots, body, requested_at) do
+  def verify_offer(scenario, slots, body, requested_at, actor \\ "as_user") do
     valid =
       is_list(slots) and length(slots) == 3 and is_binary(body) and
-        not Regex.match?(
-          ~r/\b(?:I am|I'm|I’m|as)\s+(?:\w+[’']?s?\s+){0,3}(?:AI\s+)?assistant\b/iu,
-          body
-        ) and
+        (actor == "as_assistant" or
+           not Regex.match?(
+             ~r/\b(?:I am|I'm|I’m|as)\s+(?:\w+[’']?s?\s+){0,3}(?:AI\s+)?assistant\b/iu,
+             body
+           )) and
         Enum.all?(slots, fn slot ->
           {:ok, first, _} = DateTime.from_iso8601(slot["start_at"])
           {:ok, last, _} = DateTime.from_iso8601(slot["end_at"])
@@ -38,27 +39,54 @@ defmodule Maraithon.Delegations.Evaluation do
     |> Jason.decode!()
   end
 
-  def preflight do
+  def preflight(actor \\ "as_user") do
     spec = scenarios()
     user_id = spec["owner"]["email"]
     expected = [user_id, spec["counterparty"]["email"]]
     accounts = ConnectedAccounts.list_for_user(user_id)
     reports = Enum.map(expected, &account_report(user_id, &1, accounts))
     model = Accounts.assistant_model(user_id) || LLM.openrouter_model()
+    assistant = if actor == "as_assistant", do: assistant_report(user_id, accounts, spec)
 
     %{
       "phase" => "preflight",
+      "actor" => actor,
+      "assistant" => assistant,
       "model" => model,
       "expected_model" => spec["model"],
       "accounts" => reports,
       "model_calls" => 0,
       "messages_sent" => 0,
       "events_created" => 0,
-      "accounts_ready" => Enum.all?(reports, &(&1["status"] == "ready")),
+      "accounts_ready" =>
+        Enum.all?(reports, &(&1["status"] == "ready")) and
+          (actor == "as_user" or (actor == "as_assistant" and assistant["status"] == "ready")),
       "model_ready" => model == spec["model"],
       "execution_ready" => Maraithon.Delegations.Commands.execution_ready?(),
       "live_eval_passed" => false
     }
+  end
+
+  defp assistant_report(user_id, accounts, spec) do
+    with {:ok, identity} <- AssistantIdentities.gmail_snapshot(user_id, "as_assistant", nil),
+         true <- identity["email"] == spec["assistant"]["email"],
+         account when not is_nil(account) <-
+           Enum.find(accounts, &(&1.id == identity["account_id"])),
+         true <- send_scope?(account),
+         true <- AssistantIdentities.assistant_account?(account),
+         false <-
+           Enum.any?(ConnectedAccounts.list_personal_for_user(user_id), &(&1.id == account.id)) do
+      %{
+        "status" => "ready",
+        "email" => identity["email"],
+        "account_id" => account.id,
+        "display_name" => identity["display_name"],
+        "disclose_ai" => identity["disclose_ai"],
+        "isolated_from_personal_sources" => true
+      }
+    else
+      _ -> %{"status" => "assistant_setup_required"}
+    end
   end
 
   defp account_report(user_id, email, accounts) do
@@ -72,16 +100,7 @@ defmodule Maraithon.Delegations.Evaluation do
     with [account] <- matching,
          {:ok, identity} <- AssistantIdentities.gmail_snapshot(user_id, "as_user", account.id),
          true <- identity["email"] == email,
-         true <-
-           Enum.any?(
-             account.scopes,
-             &(&1 in [
-                 "https://mail.google.com/",
-                 "https://www.googleapis.com/auth/gmail.compose",
-                 "https://www.googleapis.com/auth/gmail.send",
-                 "https://www.googleapis.com/auth/gmail.modify"
-               ])
-           ),
+         true <- send_scope?(account),
          {:ok, _events} <-
            GoogleCalendar.events_in_window(
              user_id,
@@ -108,4 +127,16 @@ defmodule Maraithon.Delegations.Evaluation do
         }
     end
   end
+
+  defp send_scope?(account),
+    do:
+      Enum.any?(
+        account.scopes,
+        &(&1 in [
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/gmail.compose",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.modify"
+          ])
+      )
 end

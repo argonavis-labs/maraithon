@@ -29,7 +29,11 @@ defmodule Maraithon.Release do
 
   def delegation_eval_preflight do
     delegation_eval(
-      fn -> Maraithon.Delegations.Evaluation.preflight() end,
+      fn ->
+        Maraithon.Delegations.Evaluation.preflight(
+          System.get_env("DELEGATION_EVAL_ACTOR", "as_user")
+        )
+      end,
       "DELEGATION_EVAL_PREFLIGHT="
     )
   end
@@ -38,7 +42,8 @@ defmodule Maraithon.Release do
     delegation_eval(
       fn ->
         case Maraithon.Delegations.EvaluationRunner.start(
-               System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply")
+               System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply"),
+               System.get_env("DELEGATION_EVAL_ACTOR", "as_user")
              ) do
           {:ok, report} -> report
           {:error, reason} -> raise "Delegation eval could not start: #{reason}"

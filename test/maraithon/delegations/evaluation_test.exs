@@ -17,6 +17,15 @@ defmodule Maraithon.Delegations.EvaluationTest do
     body = Enum.map_join(slots, "\n", &Scheduling.slot_label/1)
     assert :ok = Evaluation.verify_offer(scenario, slots, body, requested)
 
+    assert :ok =
+             Evaluation.verify_offer(
+               scenario,
+               slots,
+               "I am Kent's assistant.\n" <> body,
+               requested,
+               "as_assistant"
+             )
+
     for bad_body <- ["I am Kent's assistant.\n" <> body, "2026-09-21T13:00:00Z America/Toronto"] do
       assert {:error, :received_offer_not_proven} =
                Evaluation.verify_offer(scenario, slots, bad_body, requested)

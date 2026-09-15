@@ -14,12 +14,16 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   @counterparty "kent.fenwick@gmail.com"
   @job_type "delegation_eval"
 
-  def start(scenario_id)
-      when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy) do
+  def start(scenario_id, actor \\ "as_user")
+
+  def start(scenario_id, actor)
+      when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy) and
+             actor in ~w(as_user as_assistant) do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
          %{} = scenario <-
            Enum.find(Evaluation.scenarios()["scenarios"], &(&1["id"] == scenario_id)),
-         %{"accounts_ready" => true, "model_ready" => true} = report <- Evaluation.preflight(),
+         %{"accounts_ready" => true, "model_ready" => true} = report <-
+           Evaluation.preflight(actor),
          %{"account_id" => sender_id} <-
            Enum.find(report["accounts"], &(&1["email"] == @counterparty)),
          {:ok, %{"email" => @counterparty} = sender_identity} <-
@@ -28,6 +32,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       id = Ecto.UUID.generate()
 
       payload = %{
+        "actor" => actor,
         "scenario" => scenario,
         "sender_account_id" => accounts[@counterparty],
         "sender_identity" => sender_identity,
@@ -57,7 +62,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
-  def start(_), do: {:error, :unsupported_eval_scenario}
+  def start(_, _), do: {:error, :unsupported_eval_scenario}
 
   def execute(%BackgroundJob{job_type: @job_type, user_id: @user} = job) do
     job = BackgroundJob.hydrate_payloads(job)
@@ -180,7 +185,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     case Delegations.for_todo(@user, todo.id) do
       nil ->
         attrs = %{
-          "actor" => "as_user",
+          "actor" => job.payload["actor"] || "as_user",
           "kind" => job.payload["scenario"]["kind"],
           "outcome" => job.payload["scenario"]["outcome"],
           "expected_revision" => Workflow.current(todo)["revision"],
@@ -214,29 +219,22 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   defp reply(job, state, d) do
     count = reply_count(state)
 
-    with {:ok, initial} <-
-           action(job, "initial", %{"body" => job.payload["scenario"]["initial_email"]}),
-         initial = PreparedAction.hydrate_payload(initial),
-         thread = initial.payload["_maraithon_execution_result"]["thread_id"],
-         {:ok, token} <- GoogleAccount.access_token(@user, job.payload["sender_account_id"]),
-         {:ok, messages} <- Gmail.fetch_thread_content(token, thread, access_token: true),
-         parent when not is_nil(parent) <-
-           Enum.find(Enum.reverse(messages), fn m ->
-             Enum.any?(
-               Gmail.message_participants(m),
-               &(&1["role"] == "from" and &1["identifier"]["email"] == @user)
-             ) and "DRAFT" not in m.labels
-           end),
+    with %PreparedAction{status: "executed", action_type: "gmail_send"} = latest <-
+           Repo.get_by(PreparedAction, id: d.last_action_id, delegation_id: d.id, user_id: @user)
+           |> PreparedAction.hydrate_payload(),
+         {:ok, parent} <- inbox_message(job, latest, job.payload["sender_account_id"]),
+         :ok <- verify_received_identity(d, parent),
          :ok <- verify_received_offer(job, d, parent),
          :ok <- maybe_make_busy(job, d, count),
          {:ok, action} <-
            action(job, reply_key(count), %{
              "body" => Enum.at(job.payload["scenario"]["counterparty_replies"], count),
-             "thread_id" => thread,
+             "to" => d.data["identity"]["email"],
+             "thread_id" => parent.thread_id,
              "reply_to_message_id" => parent.message_id
            }),
          {:ok, sent} <- deliver(action),
-         {:ok, message} <- inbox_message(job, sent),
+         {:ok, message} <- inbox_message(job, sent, d.connected_account_id),
          {:ok, :ok} <-
            JobAuthority.transaction(job, fn ->
              Ingress.gmail!(@user, d.connected_account_id, message)
@@ -249,6 +247,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
          "reply_action_id" => action.id,
          "reply_count" => count + 1,
          "reply_message_id" => message.message_id,
+         "sending_identity_verified" => true,
          "received_offer_verified" => d.kind == "scheduling"
        })}
     else
@@ -258,13 +257,36 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
+  defp verify_received_identity(d, message) do
+    identity = d.data["identity"]
+    signature = String.trim(identity["signature"] || "")
+
+    from? =
+      Enum.any?(
+        Gmail.message_participants(message),
+        &(&1["role"] == "from" and &1["identifier"]["email"] == identity["email"])
+      )
+
+    name = identity["display_name"]
+
+    name? =
+      not is_binary(name) or name == "" or String.contains?(message.from || "", name) or
+        String.contains?(message.from || "", Base.encode64(name))
+
+    if from? and name? and "DRAFT" not in message.labels and
+         String.ends_with?(String.trim(message.text_body || ""), signature),
+       do: :ok,
+       else: {:error, :received_identity_not_proven}
+  end
+
   defp verify_received_offer(job, %{kind: "scheduling"} = d, message),
     do:
       Evaluation.verify_offer(
         job.payload["scenario"],
         d.data["offered_slots"],
         message.text_body,
-        job.inserted_at
+        job.inserted_at,
+        d.actor
       )
 
   defp verify_received_offer(_, _, _), do: :ok
@@ -313,7 +335,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
               %{"identity" => job.payload["sender_identity"]},
               content["body"]
             ),
-          "to" => @user,
+          "to" => Map.get(content, "to", @user),
           "cc" => "",
           "subject" => job.payload["subject"]
         })
@@ -348,13 +370,17 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
-  defp inbox_message(job, sent) do
-    account = Repo.get!(Maraithon.Accounts.ConnectedAccount, job.payload["owner_account_id"])
+  defp inbox_message(job, sent, account_id \\ nil) do
+    account =
+      Repo.get!(
+        Maraithon.Accounts.ConnectedAccount,
+        account_id || job.payload["owner_account_id"]
+      )
 
     # A positive send receipt identifies the sender's exact message even when
     # Gmail replaces our RFC Message-ID. Never guess from subject or timestamp.
     with {:ok, sender_token} <-
-           GoogleAccount.access_token(@user, job.payload["sender_account_id"]),
+           GoogleAccount.access_token(@user, sent.payload["account_id"]),
          {:ok, delivered} <-
            Gmail.fetch_message_content(
              sender_token,
@@ -421,7 +447,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       |> PreparedAction.hydrate_payload()
 
     with %PreparedAction{status: "executed"} <- action,
-         {:ok, message} <- inbox_message(job, action) do
+         {:ok, message} <- inbox_message(job, action, d.connected_account_id) do
       next =
         Map.merge(state, %{
           "reply_count" => count,
