@@ -691,6 +691,170 @@ defmodule Maraithon.Delegations.IngressTest do
     assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 1
   end
 
+  for busy <- [false, true] do
+    @tag busy_slot: busy
+    test "a leased booking rechecks availability (busy=#{busy})", c do
+      alias Maraithon.Delegations.{Commands, Execution, Policy, Receipts, Turn}
+      alias Maraithon.TelegramAssistant.PreparedAction
+      enable_gmail(c.user_id)
+      {node, partitions} = exact_authority(c.user_id)
+      bypass = Bypass.open()
+      configure(:gmail, api_base_url: "http://localhost:#{bypass.port}")
+      configure(:google_calendar, api_base_url: "http://localhost:#{bypass.port}")
+
+      assert {:ok, _} =
+               Maraithon.OAuth.store_tokens(c.user_id, c.account.provider, %{
+                 access_token: "bound-calendar",
+                 refresh_token: "fixture",
+                 expires_in: 3600,
+                 scopes: [
+                   "https://www.googleapis.com/auth/gmail.compose",
+                   "https://www.googleapis.com/auth/calendar"
+                 ]
+               })
+
+      start_at = DateTime.new!(Date.add(Date.utc_today(), 2), ~T[15:00:00], "Etc/UTC")
+
+      slot = %{
+        "start_at" => DateTime.to_iso8601(start_at),
+        "end_at" => DateTime.to_iso8601(DateTime.add(start_at, 1800)),
+        "timezone" => "America/Toronto"
+      }
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/users/me/threads/aabbcc",
+        &json(&1, %{"messages" => [provider_message(c.message)]})
+      )
+
+      Bypass.expect_once(bypass, "GET", "/calendars/primary/events", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer bound-calendar"]
+
+        events =
+          if c.busy_slot,
+            do: [
+              %{
+                "id" => "busy",
+                "start" => %{"dateTime" => slot["start_at"]},
+                "end" => %{"dateTime" => slot["end_at"]}
+              }
+            ],
+            else: []
+
+        json(conn, %{"items" => events})
+      end)
+
+      unless c.busy_slot do
+        Bypass.expect_once(bypass, "POST", "/calendars/primary/events", fn conn ->
+          conn = Plug.Conn.fetch_query_params(conn)
+          assert conn.query_params["sendUpdates"] == "all"
+          {:ok, raw, conn} = Plug.Conn.read_body(conn)
+          event = Jason.decode!(raw)
+          assert event["attendees"] == [%{"email" => "kent.fenwick@gmail.com"}]
+          assert event["start"]["dateTime"] == slot["start_at"]
+          assert event["end"]["dateTime"] == slot["end_at"]
+          json(conn, Map.put(event, "status", "confirmed"))
+        end)
+      end
+
+      assert {:ok, action} =
+               Repo.transaction(fn ->
+                 Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+
+                 d =
+                   c.delegation
+                   |> Delegation.changeset(%{
+                     kind: "scheduling",
+                     data: %{
+                       "offered_slots" => [slot],
+                       "offered_calendar_account_ids" => [c.account.id]
+                     }
+                   })
+                   |> Repo.update!()
+
+                 {d, grant, event} = decision_turn(%{c | delegation: d})
+                 turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
+
+                 turn
+                 |> Turn.changeset(%{
+                   data:
+                     Map.merge(turn.data, %{
+                       "decision" => %{
+                         "kind" => "book",
+                         "accepted_slot_id" => Policy.slot_id(slot),
+                         "reason" => "Accepted offered time",
+                         "evidence" => [c.message.message_id]
+                       },
+                       "policy_review" => %{
+                         "allowed" => true,
+                         "outcome_proven" => true,
+                         "reason" => "Accepted offered time"
+                       }
+                     })
+                 })
+                 |> Repo.update!()
+
+                 now = Maraithon.Runtime.DatabaseClock.now!()
+                 next = Execution.prepare!(d, grant, event, now)
+                 assert next.state == "sending"
+                 d |> Delegation.changeset(%{state: next.state}) |> Repo.update!()
+                 turn = Repo.get!(Turn, turn.id) |> Turn.hydrate()
+                 turn |> Turn.changeset(%{available_at: DateTime.add(now, -1)}) |> Repo.update!()
+                 Repo.get!(PreparedAction, turn.prepared_action_id)
+               end)
+
+      run_leased_job(node, partitions, "delegation_send", fn job ->
+        expected = if c.busy_slot, do: "failed", else: "sent"
+        assert {:ok, %{state: ^expected}} = result = Execution.execute(job)
+        result
+      end)
+
+      assert {:ok, :checked} =
+               Repo.transaction(fn ->
+                 Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+                 d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+
+                 event =
+                   Repo.one!(
+                     from e in Event,
+                       where:
+                         e.event_key ==
+                           ^"action:#{action.id}:#{if(c.busy_slot, do: "failed", else: "executed")}"
+                   )
+                   |> Event.hydrate()
+
+                 assert Receipts.valid_event?(d, event)
+                 {next, commands} = StateMachine.apply(d, event)
+
+                 if c.busy_slot do
+                   assert next.state == "ready"
+                   assert next.data["slot_reoffers"] == 1
+                   assert next.data["offered_slots"] == nil
+                   assert commands == [:enqueue_sync]
+                 else
+                   result =
+                     Commands.apply(
+                       next,
+                       Maraithon.Delegations.current_grant(d),
+                       event,
+                       commands,
+                       DateTime.utc_now()
+                     )
+
+                   assert result.state == "completed"
+                   todo = Repo.get!(Maraithon.Todos.Todo, d.todo_id)
+                   assert Maraithon.Todos.Workflow.current(todo)["state"] == "waiting"
+
+                   assert Maraithon.Todos.Workflow.current(todo)["waiting_until"] ==
+                            slot["start_at"]
+                 end
+
+                 :checked
+               end)
+    end
+  end
+
   defp decision_turn(c) do
     alias Maraithon.Delegations.{Jobs, Sources, Turn}
     alias Maraithon.TelegramAssistant.Run
@@ -753,26 +917,7 @@ defmodule Maraithon.Delegations.IngressTest do
           scopes: ["https://www.googleapis.com/auth/gmail.compose"]
         })
 
-      message = %{
-        "id" => c.message.message_id,
-        "threadId" => "aabbcc",
-        "labelIds" => ["INBOX"],
-        "internalDate" => to_string(DateTime.to_unix(c.message.internal_date, :millisecond)),
-        "payload" => %{
-          "mimeType" => "text/plain",
-          "body" => %{"data" => Base.url_encode64(c.message.text_body, padding: false)},
-          "headers" =>
-            Enum.map(
-              [
-                {"From", c.message.from},
-                {"To", c.message.to},
-                {"Subject", c.message.subject},
-                {"Message-ID", c.message.internet_message_id}
-              ],
-              fn {k, v} -> %{"name" => k, "value" => v} end
-            )
-        }
-      }
+      message = provider_message(c.message)
 
       Bypass.expect_once(
         bypass,
@@ -1043,6 +1188,29 @@ defmodule Maraithon.Delegations.IngressTest do
     {:ok, _} = Authority.assign_partition(leader, node, id, ttl_ms: 300_000)
     {:ok, partition} = Authority.mark_partition_ready(node, id)
     {node, [partition]}
+  end
+
+  defp provider_message(message) do
+    %{
+      "id" => message.message_id,
+      "threadId" => "aabbcc",
+      "labelIds" => ["INBOX"],
+      "internalDate" => to_string(DateTime.to_unix(message.internal_date, :millisecond)),
+      "payload" => %{
+        "mimeType" => "text/plain",
+        "body" => %{"data" => Base.url_encode64(message.text_body, padding: false)},
+        "headers" =>
+          Enum.map(
+            [
+              {"From", message.from},
+              {"To", message.to},
+              {"Subject", message.subject},
+              {"Message-ID", message.internet_message_id}
+            ],
+            fn {k, v} -> %{"name" => k, "value" => v} end
+          )
+      }
+    }
   end
 
   defp json(conn, value),

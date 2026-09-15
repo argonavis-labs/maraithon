@@ -12,11 +12,17 @@ image="$(gcloud run revisions describe "${revision}" --project maraithon --regio
 [[ "${image}" == us-central1-docker.pkg.dev/maraithon/*@sha256:* ]] || exit 1
 
 eval_env='POOL_SIZE=2,DELEGATIONS_ENABLED=true,DELEGATION_EVAL_ONLY=true,DELEGATION_USER_ALLOWLIST=kent@runner.now,DELEGATION_GMAIL_SENDS_ENABLED=true,DELEGATION_SLACK_SENDS_ENABLED=false'
+scenario="${DELEGATION_EVAL_SCENARIO:-information_reply}"
+case "${scenario}" in
+  information_reply|schedule_and_book|accepted_slot_becomes_busy) ;;
+  *) echo "Unknown controlled eval scenario" >&2; exit 1 ;;
+esac
+eval_env+=",DELEGATION_EVAL_SCENARIO=${scenario}"
 if [[ "${task}" == delegation_eval_start ]]; then
   # This is the only enable operation. Code checks the labelled thread and both
   # addresses before sync, model entry, preparation and provider dispatch.
   gcloud run services update maraithon --project maraithon --region us-central1 \
-    --update-env-vars "${eval_env#POOL_SIZE=2,}" --quiet
+    --update-env-vars 'DELEGATIONS_ENABLED=true,DELEGATION_EVAL_ONLY=true,DELEGATION_USER_ALLOWLIST=kent@runner.now,DELEGATION_GMAIL_SENDS_ENABLED=true,DELEGATION_SLACK_SENDS_ENABLED=false' --quiet
 fi
 
 gcloud run jobs update maraithon-todo-validation --project maraithon --region us-central1 --image "${image}" --quiet

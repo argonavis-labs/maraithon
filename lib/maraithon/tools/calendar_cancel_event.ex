@@ -16,15 +16,18 @@ defmodule Maraithon.Tools.CalendarCancelEvent do
   alias Maraithon.Tools.CalendarUpdateEvent
 
   def execute(args) when is_map(args) do
+    opts = [account_id: args["account_id"], notify_attendees: args["notify_attendees"] == true]
+
     with {:ok, user_id} <- Shared.required_string(args, "user_id"),
          {:ok, event_id} <- Shared.required_string(args, "event_id") do
       case CalendarUpdateEvent.verify_ownership(
              user_id,
              event_id,
-             Shared.optional_string(args, "todo_id")
+             Shared.optional_string(args, "todo_id"),
+             opts
            ) do
         :ok ->
-          delete(user_id, event_id)
+          delete(user_id, event_id, opts)
 
         {:error, :event_gone} ->
           {:ok, already_gone(event_id)}
@@ -37,8 +40,8 @@ defmodule Maraithon.Tools.CalendarCancelEvent do
     end
   end
 
-  defp delete(user_id, event_id) do
-    case GoogleCalendar.delete_event(user_id, event_id) do
+  defp delete(user_id, event_id, opts) do
+    case GoogleCalendar.delete_event(user_id, event_id, opts) do
       {:ok, :deleted} ->
         {:ok, %{source: "google_calendar", event_id: event_id, cancelled: true}}
 

@@ -473,7 +473,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   """
   def update_event(user_id, event_id, event_attrs)
       when is_binary(event_id) and event_id != "" and is_map(event_attrs) do
-    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google"),
+    with {:ok, token} <- GoogleAccount.access_token(user_id, read_attr(event_attrs, :account_id)),
          {:ok, body} <- update_event_body(event_attrs) do
       url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}"
 
@@ -859,6 +859,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     Enum.map(items, fn item ->
       %{
         event_id: item["id"],
+        ical_uid: item["iCalUID"],
         summary: item["summary"],
         description: item["description"],
         location: item["location"],

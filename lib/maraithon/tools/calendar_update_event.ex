@@ -21,9 +21,17 @@ defmodule Maraithon.Tools.CalendarUpdateEvent do
   def execute(args) when is_map(args) do
     with {:ok, user_id} <- Shared.required_string(args, "user_id"),
          {:ok, event_id} <- Shared.required_string(args, "event_id"),
-         :ok <- verify_ownership(user_id, event_id, Shared.optional_string(args, "todo_id")),
+         :ok <-
+           verify_ownership(user_id, event_id, Shared.optional_string(args, "todo_id"),
+             account_id: args["account_id"]
+           ),
          {:ok, attrs} <- update_attrs(args),
-         {:ok, event} <- GoogleCalendar.update_event(user_id, event_id, attrs) do
+         {:ok, event} <-
+           GoogleCalendar.update_event(
+             user_id,
+             event_id,
+             Map.put(attrs, :account_id, args["account_id"])
+           ) do
       {:ok, %{source: "google_calendar", event: Shared.event_payload(event)}}
     else
       {:error, reason} -> {:error, Shared.translate_error(reason, "update the calendar block")}
@@ -35,8 +43,8 @@ defmodule Maraithon.Tools.CalendarUpdateEvent do
   (and a matching `maraithon_todo_id` when acting for a specific todo and
   the stored marker names one).
   """
-  def verify_ownership(user_id, event_id, todo_id) do
-    case GoogleCalendar.get_event(user_id, event_id) do
+  def verify_ownership(user_id, event_id, todo_id, opts \\ []) do
+    case GoogleCalendar.get_event(user_id, event_id, opts) do
       {:ok, event} ->
         private = Map.get(event, :private_properties) || %{}
 

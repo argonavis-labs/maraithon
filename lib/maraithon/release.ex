@@ -37,7 +37,9 @@ defmodule Maraithon.Release do
   def delegation_eval_start do
     delegation_eval(
       fn ->
-        case Maraithon.Delegations.EvaluationRunner.start("information_reply") do
+        case Maraithon.Delegations.EvaluationRunner.start(
+               System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply")
+             ) do
           {:ok, report} -> report
           {:error, reason} -> raise "Delegation eval could not start: #{reason}"
         end

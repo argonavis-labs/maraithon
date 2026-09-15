@@ -2801,8 +2801,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
-  defp ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id, _) do
-    case GoogleCalendar.events_in_window(user_id, start_at, end_at) do
+  defp ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id, action) do
+    case GoogleCalendar.events_in_window(
+           user_id,
+           (action.payload || %{})["account_id"],
+           start_at,
+           end_at
+         ) do
       {:ok, events} ->
         conflict? =
           Enum.any?(events, fn event ->

@@ -65,9 +65,13 @@ defmodule Maraithon.Delegations.Decision do
     end
   end
 
-  defp scheduling(%{delegation: %{kind: "scheduling", user_id: user_id}}) do
+  defp scheduling(%{delegation: %{kind: "scheduling"} = d}) do
     now = DateTime.utc_now()
-    Scheduling.propose_slots(user_id, %{window: {now, DateTime.add(now, 14, :day)}})
+
+    Scheduling.propose_slots(d.user_id, %{
+      window: {now, DateTime.add(now, 14, :day)},
+      default_account_id: if(d.actor == "as_user", do: d.connected_account_id)
+    })
   end
 
   defp scheduling(_), do: {:ok, %{}}

@@ -28,6 +28,63 @@ defmodule Maraithon.Delegations.CalendarTransportTest do
     %{bypass: bypass, user_id: user_id, account: ConnectedAccounts.get(user_id, "google:eval")}
   end
 
+  test "eval cleanup verifies and deletes only the bound calendar's managed event", c do
+    Bypass.expect_once(c.bypass, "GET", "/calendars/primary/events/ev123", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer bound-account"]
+
+      json(conn, %{
+        "id" => "ev123",
+        "extendedProperties" => %{
+          "private" => %{
+            "maraithon_managed" => "true",
+            "maraithon_todo_id" => "eval-todo"
+          }
+        }
+      })
+    end)
+
+    Bypass.expect_once(c.bypass, "DELETE", "/calendars/primary/events/ev123", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer bound-account"]
+      conn = Plug.Conn.fetch_query_params(conn)
+      assert conn.query_params["sendUpdates"] == "all"
+      Plug.Conn.resp(conn, 204, "")
+    end)
+
+    assert {:ok, %{cancelled: true}} =
+             Maraithon.Tools.CalendarCancelEvent.execute(%{
+               "user_id" => c.user_id,
+               "account_id" => c.account.id,
+               "event_id" => "ev123",
+               "todo_id" => "eval-todo",
+               "notify_attendees" => true
+             })
+  end
+
+  test "an offer defaults to the sending account, while explicit calendar preferences win", c do
+    alias Maraithon.Delegations.{Preferences, Scheduling}
+    first = DateTime.utc_now()
+    request = %{window: {first, DateTime.add(first, 7, :day)}, default_account_id: c.account.id}
+
+    Bypass.expect_once(c.bypass, "GET", "/calendars/primary/events", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer bound-account"]
+      json(conn, %{"items" => []})
+    end)
+
+    assert {:ok, offer} = Scheduling.propose_slots(c.user_id, request)
+    assert offer["coverage"]["account_ids"] == [c.account.id]
+
+    primary = ConnectedAccounts.get(c.user_id, "google")
+    assert {:ok, _} = Preferences.put(c.user_id, %{"calendar_account_ids" => [primary.id]})
+
+    Bypass.expect_once(c.bypass, "GET", "/calendars/primary/events", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer wrong-account"]
+      json(conn, %{"items" => []})
+    end)
+
+    assert {:ok, offer} = Scheduling.propose_slots(c.user_id, request)
+    assert offer["coverage"]["account_ids"] == [primary.id]
+  end
+
   test "a busy event on page two is included from the bound account", context do
     Bypass.expect(context.bypass, "GET", "/calendars/primary/events", fn conn ->
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer bound-account"]

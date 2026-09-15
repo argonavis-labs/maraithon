@@ -529,10 +529,10 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
     end
   end
 
-  defp calendar_get(%{user_id: user_id}, id) do
+  defp calendar_get(%{user_id: user_id} = action, id) do
     case config()[:calendar_get] do
       fun when is_function(fun, 2) -> fun.(user_id, id)
-      _ -> GoogleCalendar.get_event(user_id, id)
+      _ -> GoogleCalendar.get_event(user_id, id, account_id: action.payload["account_id"])
     end
   end
 

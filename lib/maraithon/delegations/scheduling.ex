@@ -12,7 +12,7 @@ defmodule Maraithon.Delegations.Scheduling do
     now = DateTime.utc_now()
 
     with :ok <- valid_window(first, last),
-         {:ok, ids} <- account_ids(user_id, prefs),
+         {:ok, ids} <- account_ids(user_id, prefs, request[:default_account_id]),
          {:ok, events} <- read_accounts(user_id, ids, first, last),
          {:ok, slots} <- slots(events, request, prefs, now) do
       {:ok,
@@ -100,7 +100,7 @@ defmodule Maraithon.Delegations.Scheduling do
     end
   end
 
-  defp account_ids(user_id, prefs) do
+  defp account_ids(user_id, prefs, default_id) do
     excluded = AssistantIdentities.assistant_account_ids(user_id)
 
     available =
@@ -113,7 +113,8 @@ defmodule Maraithon.Delegations.Scheduling do
       |> Enum.map(& &1.id)
 
     selected = prefs["calendar_account_ids"]
-    ids = if selected == [], do: Enum.take(available, 1), else: selected
+    default = if default_id in available, do: [default_id], else: Enum.take(available, 1)
+    ids = if selected == [], do: default, else: selected
 
     if ids != [] and Enum.all?(ids, &(&1 in available)),
       do: {:ok, ids},

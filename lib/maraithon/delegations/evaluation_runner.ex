@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   import Ecto.Query
   alias Maraithon.{Delegations, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
-  alias Maraithon.Connectors.{Gmail, GoogleAccount}
+  alias Maraithon.Connectors.{Gmail, GoogleAccount, GoogleCalendar}
   alias Maraithon.Delegations.{Evaluation, Gates, Ingress, Turn}
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.TelegramAssistant.{ActionReconciliation, PreparedAction, Run}
@@ -14,7 +14,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   @counterparty "kent.fenwick@gmail.com"
   @job_type "delegation_eval"
 
-  def start(scenario_id) when scenario_id == "information_reply" do
+  def start(scenario_id)
+      when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy) do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
          %{} = scenario <-
            Enum.find(Evaluation.scenarios()["scenarios"], &(&1["id"] == scenario_id)),
@@ -87,6 +88,21 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end)
   end
 
+  defp step(job, %{"phase" => "calendar_verified", "delegation_id" => id} = state) do
+    d = Delegations.get(@user, id)
+
+    action =
+      Repo.get!(PreparedAction, state["verified_booked_action_id"])
+      |> PreparedAction.hydrate_payload()
+
+    with :ok <- cleanup_calendar(job, d, action), :ok <- cleanup_busy(job, d) do
+      {:done, Map.merge(state, %{"phase" => "passed", "calendar_cleanup" => "completed"})}
+    else
+      :wait -> {:wait, state}
+      error -> error
+    end
+  end
+
   defp step(job, %{"delegation_id" => id} = state) do
     d = Delegations.get(@user, id)
 
@@ -100,7 +116,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       d.state in ~w(needs_user paused stopped expired waiting_capacity) ->
         {:error, {:conversation_held, d.state}}
 
-      d.state == "waiting_reply" and state["reply_action_id"] == nil ->
+      d.state == "waiting_reply" and reply_due?(job, state, d) ->
         reply(job, state, d)
 
       true ->
@@ -134,7 +150,11 @@ defmodule Maraithon.Delegations.EvaluationRunner do
                  source: "gmail",
                  source_account_id: job.payload["owner_account_id"],
                  source_item_id: message.message_id,
-                 next_action: "Ask Kent for the test project colour.",
+                 next_action:
+                   if(job.payload["scenario"]["kind"] == "scheduling",
+                     do: "Offer a few available meeting times.",
+                     else: "Ask Kent for the test project colour."
+                   ),
                  dedupe_key: key
                })
            end),
@@ -172,7 +192,20 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
+  defp reply_due?(job, state, d) do
+    count = reply_count(state)
+    count < length(job.payload["scenario"]["counterparty_replies"]) and d.lifetime_sends > count
+  end
+
+  defp reply_count(state),
+    do: state["reply_count"] || if(state["reply_action_id"], do: 1, else: 0)
+
+  defp reply_key(0), do: "reply"
+  defp reply_key(n), do: "reply#{n + 1}"
+
   defp reply(job, state, d) do
+    count = reply_count(state)
+
     with {:ok, initial} <-
            action(job, "initial", %{"body" => job.payload["scenario"]["initial_email"]}),
          initial = PreparedAction.hydrate_payload(initial),
@@ -181,11 +214,15 @@ defmodule Maraithon.Delegations.EvaluationRunner do
          {:ok, messages} <- Gmail.fetch_thread_content(token, thread, access_token: true),
          parent when not is_nil(parent) <-
            Enum.find(Enum.reverse(messages), fn m ->
-             String.contains?(String.downcase(m.from || ""), @user) and "DRAFT" not in m.labels
+             Enum.any?(
+               Gmail.message_participants(m),
+               &(&1["role"] == "from" and &1["identifier"]["email"] == @user)
+             ) and "DRAFT" not in m.labels
            end),
+         :ok <- maybe_make_busy(job, d, count),
          {:ok, action} <-
-           action(job, "reply", %{
-             "body" => hd(job.payload["scenario"]["counterparty_replies"]),
+           action(job, reply_key(count), %{
+             "body" => Enum.at(job.payload["scenario"]["counterparty_replies"], count),
              "thread_id" => thread,
              "reply_to_message_id" => parent.message_id
            }),
@@ -201,6 +238,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
        Map.merge(state, %{
          "phase" => "waiting_for_completion",
          "reply_action_id" => action.id,
+         "reply_count" => count + 1,
          "reply_message_id" => message.message_id
        })}
     else
@@ -210,16 +248,16 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
-  defp action(job, key, content) do
+  defp action(job, key, content, type \\ "gmail_send") do
     id = deterministic_id(job.id, key)
 
     JobAuthority.transaction(job, fn ->
       Repo.get(PreparedAction, id) |> PreparedAction.hydrate_payload() ||
-        create_action!(job, id, content)
+        create_action!(job, id, content, type)
     end)
   end
 
-  defp create_action!(job, id, content) do
+  defp create_action!(job, id, content, type) do
     run_id = deterministic_id(job.id, "run")
     chat = "delegation-eval:#{job.id}"
 
@@ -241,14 +279,20 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
 
     payload =
-      Map.merge(content, %{
-        "user_id" => @user,
-        "account_id" => job.payload["sender_account_id"],
-        "from" => @counterparty,
-        "to" => @user,
-        "cc" => "",
-        "subject" => job.payload["subject"]
-      })
+      if type == "gmail_send" do
+        Map.merge(content, %{
+          "user_id" => @user,
+          "account_id" => job.payload["sender_account_id"],
+          "from" => @counterparty,
+          "to" => @user,
+          "cc" => "",
+          "subject" => job.payload["subject"]
+        })
+      else
+        content
+        |> Map.put_new("account_id", job.payload["owner_account_id"])
+        |> Map.put("user_id", @user)
+      end
 
     %PreparedAction{id: id}
     |> PreparedAction.changeset(%{
@@ -256,8 +300,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       run_id: run_id,
       chat_id: chat,
       surface: "telegram",
-      action_type: "gmail_send",
-      target_type: "email",
+      action_type: type,
+      target_type: if(type == "gmail_send", do: "email", else: "calendar"),
       payload: payload,
       preview_text: "Kent's authorised controlled conversation eval.",
       expires_at: DateTime.add(DateTime.utc_now(), 1, :hour)
@@ -296,32 +340,209 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
-  defp verify(_job, state, d) do
+  defp maybe_make_busy(job, d, 0) do
+    if job.payload["scenario"]["id"] == "accepted_slot_becomes_busy" do
+      with [slot | _] <- d.data["offered_slots"],
+           [account_id | _] <- d.data["offered_calendar_account_ids"],
+           true <- account_id == job.payload["owner_account_id"],
+           {:ok, action} <-
+             action(
+               job,
+               "busy",
+               Map.merge(slot, %{
+                 "title" => "[Maraithon eval] Busy #{job.id}",
+                 "todo_id" => d.todo_id,
+                 "attendees" => [],
+                 "description" => "Temporary conflict for the controlled scheduling eval."
+               }),
+               "calendar_create_event"
+             ),
+           {:ok, _} <- deliver(action) do
+        :ok
+      else
+        :wait -> :wait
+        {:error, _} = error -> error
+        _ -> {:error, :eval_calendar_account_mismatch}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_make_busy(_, _, _), do: :ok
+
+  defp verify(job, state, d) do
+    # Gmail search can lag the webhook that completed the conversation. Recover
+    # the exact seeded reply identity before checking its source evidence.
+    count = length(job.payload["scenario"]["counterparty_replies"])
+
+    action =
+      Repo.get(PreparedAction, deterministic_id(job.id, reply_key(count - 1)))
+      |> PreparedAction.hydrate_payload()
+
+    with %PreparedAction{status: "executed"} <- action,
+         {:ok, message} <- inbox_message(job, action) do
+      next =
+        Map.merge(state, %{
+          "reply_count" => count,
+          "reply_message_id" => message.message_id,
+          "accepted_slot" =>
+            Enum.at(
+              d.data["offered_slots"] || [],
+              if(job.payload["scenario"]["id"] == "schedule_and_book", do: 1, else: 0)
+            ),
+          "offered_slots_count" => length(d.data["offered_slots"] || [])
+        })
+
+      verify_outcome(job, next, d)
+    else
+      :wait -> {:wait, Map.put(state, "phase", "waiting_for_reply_evidence")}
+      _ -> {:error, :eval_completion_without_reply}
+    end
+  end
+
+  defp verify_outcome(job, state, d) do
     todo = Repo.get!(Todo, d.todo_id)
     turns = Repo.all(from t in Turn, where: t.delegation_id == ^d.id)
     evidence_ids = Enum.map(d.data["evidence"] || [], & &1["id"])
 
-    passed =
-      todo.status == "done" and state["reply_message_id"] in evidence_ids and
-        String.contains?(
-          String.downcase(get_in(d.data, ["ledger", "latest_outcome"]) || ""),
-          "indigo"
-        ) and
-        d.lifetime_sends in 1..2 and d.lifetime_micro_usd <= 100_000
+    common = %{
+      "model_calls" => Enum.sum(Enum.map(turns, & &1.model_calls)),
+      "turns" => length(turns),
+      "cost_micro_usd" => d.lifetime_micro_usd,
+      "agent_messages" => d.lifetime_sends,
+      "todo_state" => Workflow.current(todo)["state"],
+      "completion_cites_reply" => state["reply_message_id"] in evidence_ids
+    }
 
-    {:done,
-     Map.merge(state, %{
-       "phase" => if(passed, do: "passed", else: "failed"),
-       "model_calls" => Enum.sum(Enum.map(turns, & &1.model_calls)),
-       "turns" => length(turns),
-       "cost_micro_usd" => d.lifetime_micro_usd,
-       "agent_messages" => d.lifetime_sends,
-       "todo_state" => Workflow.current(todo)["state"],
-       "completion_cites_reply" => state["reply_message_id"] in evidence_ids
-     })}
+    if d.kind == "scheduling" do
+      verify_calendar(job, Map.merge(state, common), d, todo)
+    else
+      passed =
+        todo.status == "done" and common["completion_cites_reply"] and
+          String.contains?(
+            String.downcase(get_in(d.data, ["ledger", "latest_outcome"]) || ""),
+            "indigo"
+          ) and
+          d.lifetime_sends in 1..2 and d.lifetime_micro_usd <= 100_000
+
+      {:done,
+       Map.merge(state, Map.put(common, "phase", if(passed, do: "passed", else: "failed")))}
+    end
   end
 
-  defp fail(_job, state, reason) do
+  defp verify_calendar(job, state, d, todo) do
+    action = Repo.get!(PreparedAction, d.last_action_id) |> PreparedAction.hydrate_payload()
+    id = ActionReconciliation.calendar_event_id(action.id)
+
+    bookings =
+      Repo.aggregate(
+        from(a in PreparedAction,
+          where:
+            a.delegation_id == ^d.id and a.action_type == "calendar_create_event" and
+              a.status == "executed"
+        ),
+        :count
+      )
+
+    with "calendar_create_event" <- action.action_type,
+         {:ok, event} <-
+           GoogleCalendar.get_event(@user, id, account_id: action.payload["account_id"]),
+         true <- is_binary(event.ical_uid),
+         {:ok, copies} <-
+           GoogleCalendar.events_in_window(
+             @user,
+             job.payload["sender_account_id"],
+             event.start,
+             event.end
+           ) do
+      copy = Enum.find(copies, &(&1.ical_uid == event.ical_uid and &1.status != "cancelled"))
+      conflict? = job.payload["scenario"]["id"] == "accepted_slot_becomes_busy"
+
+      proof =
+        action.payload["account_id"] == job.payload["owner_account_id"] and bookings == 1 and
+          state["offered_slots_count"] == 3 and is_map(state["accepted_slot"]) and
+          same_instant?(event.start, state["accepted_slot"]["start_at"]) and
+          same_instant?(event.end, state["accepted_slot"]["end_at"]) and
+          event.summary == action.payload["title"] and
+          same_instant?(event.start, action.payload["start_at"]) and
+          same_instant?(event.end, action.payload["end_at"]) and
+          Enum.any?(event.attendees, &(&1.email == @counterparty)) and
+          Workflow.current(todo)["state"] == "waiting" and state["completion_cites_reply"] and
+          d.lifetime_micro_usd <= 250_000 and
+          (not conflict? or (d.data["slot_reoffers"] == 1 and outside_busy?(job, event)))
+
+      cond do
+        not proof ->
+          {:error, :calendar_outcome_not_proven}
+
+        is_nil(copy) and (state["copy_checks"] || 0) < 12 ->
+          {:wait,
+           Map.merge(state, %{
+             "phase" => "waiting_for_calendar_copy",
+             "copy_checks" => (state["copy_checks"] || 0) + 1
+           })}
+
+        is_nil(copy) ->
+          {:error, :recipient_calendar_copy_missing}
+
+        true ->
+          {:wait,
+           Map.merge(state, %{
+             "phase" => "calendar_verified",
+             "event_id" => id,
+             "verified_booked_action_id" => action.id,
+             "recipient_calendar_copy" => true,
+             "booked_events" => bookings,
+             "reoffered" => conflict?
+           })}
+      end
+    else
+      error -> {:error, {:calendar_verification, error}}
+    end
+  end
+
+  defp cleanup_busy(job, d) do
+    case Repo.get(PreparedAction, deterministic_id(job.id, "busy"))
+         |> PreparedAction.hydrate_payload() do
+      %PreparedAction{status: "executed"} = action -> cleanup_calendar(job, d, action)
+      _ -> :ok
+    end
+  end
+
+  defp cleanup_calendar(job, d, created) do
+    with {:ok, action} <-
+           action(
+             job,
+             "cleanup:#{created.id}",
+             %{
+               "event_id" => ActionReconciliation.calendar_event_id(created.id),
+               "account_id" => created.payload["account_id"],
+               "todo_id" => d.todo_id,
+               "notify_attendees" => true
+             },
+             "calendar_cancel_event"
+           ),
+         {:ok, _} <- deliver(action),
+         do: :ok
+  end
+
+  defp same_instant?(actual, expected) do
+    with {:ok, expected, _} <- DateTime.from_iso8601(expected),
+         do: DateTime.compare(actual, expected) == :eq
+  end
+
+  defp outside_busy?(job, event) do
+    busy =
+      Repo.get!(PreparedAction, deterministic_id(job.id, "busy"))
+      |> PreparedAction.hydrate_payload()
+
+    {:ok, first, _} = DateTime.from_iso8601(busy.payload["start_at"])
+    {:ok, last, _} = DateTime.from_iso8601(busy.payload["end_at"])
+    DateTime.compare(event.end, first) != :gt or DateTime.compare(event.start, last) != :lt
+  end
+
+  defp fail(job, state, reason) do
     if id = state["delegation_id"] do
       if d = Delegations.get(@user, id) do
         if d.state not in ~w(completed stopped expired) do
@@ -333,9 +554,51 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       end
     end
 
-    {:ok,
-     Map.merge(state, %{"phase" => "failed", "reason" => Maraithon.Redaction.error_class(reason)})}
+    cleanup = cleanup_failed_eval(job, state)
+
+    next =
+      Map.merge(state, %{
+        "phase" => "failed",
+        "reason" => Maraithon.Redaction.error_class(reason),
+        "calendar_cleanup" => if(cleanup == :ok, do: "completed", else: "pending"),
+        "cleanup_checks" => (state["cleanup_checks"] || 0) + 1
+      })
+
+    if cleanup == :wait and next["cleanup_checks"] < 12,
+      do: {:ok, next, {:reschedule_in, 30_000}},
+      else: {:ok, next}
   end
+
+  defp cleanup_failed_eval(job, %{"delegation_id" => id}) do
+    d = Delegations.get(@user, id)
+
+    actions =
+      Repo.all(
+        from a in PreparedAction,
+          where:
+            a.user_id == @user and a.action_type == "calendar_create_event" and
+              (a.delegation_id == ^id or a.id == ^deterministic_id(job.id, "busy"))
+      )
+      |> Enum.map(&PreparedAction.hydrate_payload/1)
+
+    Enum.reduce_while(actions, :ok, fn action, :ok ->
+      case action.status do
+        "executed" ->
+          case cleanup_calendar(job, d, action) do
+            :ok -> {:cont, :ok}
+            result -> {:halt, result}
+          end
+
+        "execution_unknown" ->
+          {:halt, :wait}
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
+  end
+
+  defp cleanup_failed_eval(_, _), do: :ok
 
   defp deterministic_id(job_id, key) do
     <<id::binary-size(16), _::binary>> = :crypto.hash(:sha256, "#{job_id}:#{key}")
