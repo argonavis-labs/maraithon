@@ -396,12 +396,14 @@ defmodule Maraithon.Delegations.EvaluationRunner do
              access_token: true
            ),
          true <- "SENT" in delivered.labels and is_binary(delivered.internet_message_id),
-         {:ok, ids} <-
-           GmailApiHelpers.list_message_ids(
-             %{"user_id" => @user, "provider" => account.provider, "exact_account" => true},
-             "in:anywhere rfc822msgid:#{delivered.internet_message_id}",
-             2
-           ),
+         query =
+           URI.encode_query(%{
+             q: "in:anywhere rfc822msgid:#{delivered.internet_message_id}",
+             maxResults: 2
+           }),
+         {:ok, listing} <-
+           GmailApiHelpers.get_for_account(@user, account.id, "/users/me/messages?#{query}"),
+         ids = Enum.map(listing["messages"] || [], & &1["id"]),
          [id] <- ids,
          {:ok, token} <- GoogleAccount.access_token(@user, account.id),
          {:ok, message} <- Gmail.fetch_message_content(token, id, access_token: true) do

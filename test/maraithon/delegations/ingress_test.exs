@@ -886,7 +886,14 @@ defmodule Maraithon.Delegations.IngressTest do
     end
   end
 
-  for admission <- [:ready, :cooldown, :provider_cooldown, :repair, :repair_fails] do
+  for admission <- [
+        :ready,
+        :cooldown,
+        :provider_cooldown,
+        :repair,
+        :repair_fails,
+        :assistant_calendar
+      ] do
     @tag admission: admission
     test "a leased model turn with #{admission} admission charges only provider entries", c do
       alias Maraithon.Delegations.{Decision, Jobs, Turn}
@@ -913,6 +920,57 @@ defmodule Maraithon.Delegations.IngressTest do
       )
 
       ready_cost_monitor()
+
+      c =
+        if c.admission == :assistant_calendar do
+          configure(:google_calendar, api_base_url: "http://localhost:#{bypass.port}")
+          provider = "google:source-calendar@example.invalid"
+
+          {:ok, _} =
+            Maraithon.OAuth.store_tokens(c.user_id, provider, %{
+              access_token: "source-calendar",
+              expires_in: 3600,
+              scopes: ["https://www.googleapis.com/auth/calendar"]
+            })
+
+          source = Maraithon.ConnectedAccounts.get(c.user_id, provider)
+          grant = Maraithon.Delegations.current_grant(c.delegation)
+
+          scope =
+            Map.merge(grant.data["scope"], %{
+              "actor" => "as_assistant",
+              "source_account_id" => source.id
+            })
+
+          grant =
+            %Grant{user_id: c.user_id}
+            |> Grant.changeset(%{
+              delegation_id: c.delegation.id,
+              version: grant.version + 1,
+              origin_request_id: Ecto.UUID.generate(),
+              data: %{"scope" => scope, "scope_hash" => Scope.hash(scope)}
+            })
+            |> Repo.insert!()
+
+          Bypass.expect_once(bypass, "GET", "/calendars/primary/events", fn conn ->
+            assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer source-calendar"]
+            json(conn, %{"items" => []})
+          end)
+
+          d =
+            c.delegation
+            |> Delegation.changeset(%{
+              actor: "as_assistant",
+              kind: "scheduling",
+              current_grant_id: grant.id
+            })
+            |> Repo.update!()
+
+          %{c | delegation: d}
+        else
+          c
+        end
+
       calls = start_supervised!({Agent, fn -> 0 end})
 
       Bypass.expect(bypass, "GET", "/api/v1/models/#{model}/endpoints", fn conn ->
