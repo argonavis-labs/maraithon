@@ -18,7 +18,7 @@ Grant preview reads the thread and freezes its known counterparties. Source refr
 
 The server build and focused checks passed. Coverage includes real leased source and sender jobs for the member and assistant bot, a lost response with no repeated write, an edit before send, webhook persistence before acknowledgement, duplicate events, ambiguous DMs, and Gmail sender regression checks. The test runtime helpers are shared with the Gmail evals. These checks use local provider fixtures and make no paid model calls or live Slack sends. Commit `b14ecb92` deployed through workflow `35025526204`; revision `maraithon-00369-5ft` is ready.
 
-Slack autonomous sends remain disabled. The controlled live workspace and second test account are still needed. Slack-to-calendar scheduling, source pagination beyond the bounded snapshot, and the live round trip remain unfinished.
+Slack autonomous sends remain disabled. Kent deferred the controlled live Slack eval. Slack-to-calendar scheduling and source pagination beyond the bounded snapshot remain unfinished.
 
 ## Assistant Slack DMs
 
@@ -26,15 +26,15 @@ An assistant delegation now resolves a separate bot DM with the exact counterpar
 
 A changed original thread invalidates the first unsent decision. Messages in the bot DM before that first send cannot count as answers. Once a send is entered, a lost response stays uncertain without another write. Reconciliation requires the exact returned timestamp, actor, channel, thread, and content. Bot-only DM ingress saves delegated events without adding CRM observations or waking personal discovery. The committed Slack manifest now includes bot `message.im` events.
 
-The server build and focused transport, leased-worker, isolation, manifest, and connector checks passed. Local fixtures cover opening the DM, rejecting the wrong recipient or original channel, binding the first receipt, an unthreaded reply, switching reads to the bot, edits before sending, and lost responses. No live Slack message or model call was made. This does not complete the controlled Slack conversation eval.
+The server build and focused transport, leased-worker, isolation, manifest, and connector checks passed. Local fixtures cover opening the DM, rejecting the wrong recipient or original channel, binding the first receipt, an unthreaded reply, switching reads to the bot, edits before sending, and lost responses. No live Slack message or model call was made. Commit `e4b20456` deployed through workflow `35026566631`; revision `maraithon-00370-mvq` is ready. This does not complete the controlled Slack conversation eval, which Kent has deferred.
 
-A read-only production inventory on September 15 found one connected Runner member and its bot. The bot lacks `chat:write.customize`; the external Slack installation must also adopt the updated message subscription. A second controlled test member is still needed. Autonomous Slack sends remain disabled while these live prerequisites are outstanding.
+A read-only production inventory on September 15 found one connected Runner member and its bot. The bot lacks `chat:write.customize`; the external Slack installation must also adopt the updated message subscription. A second controlled test member would be needed to resume that eval. Kent asked to defer it for now; no additional Slack setup is requested. Autonomous Slack sends remain disabled.
 
 ## Personal provider reads
 
 The direct-read audit found that the legacy Gmail connector and Calendar's default account lookup could bypass the assistant exclusion already present in tool and discovery helpers. They now share a personal-account resolver. A named assistant provider is rejected for personal reads, and the generic Google fallback cannot select an assistant when no personal account remains. Explicit account reads used by delegation workers, signature setup, and delivery reconciliation remain available.
 
-The server build and all 14 assistant-isolation checks passed. The new cases cover direct Gmail lists, messages, threads and history, Calendar sync and upcoming events, an assistant-only connection, choosing the personal account when both exist, and retaining explicit assistant evidence reads. These were local provider fixtures with no live messages or model calls.
+The server build and all 14 assistant-isolation checks passed. The new cases cover direct Gmail lists, messages, threads and history, Calendar sync and upcoming events, an assistant-only connection, choosing the personal account when both exist, and retaining explicit assistant evidence reads. Four existing leased Gmail send-and-recovery regression cases also passed. These were local provider fixtures with no live messages or model calls. Commit `b30e9ee7` deployed through workflow `35027028412`; revision `maraithon-00371-lxr` is ready. Production still uses Muse Spark Contributor, the Gmail eval restriction, disabled Slack autonomous sends, and active development spending.
 
 ## Previously verified
 
@@ -199,7 +199,7 @@ The completed information task is visible on the authenticated web app as Comple
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
 2. Finish voice sample cleaning and bound-author checks, including quotes, forwards, signatures, boilerplate, automated messages, and Slack self-authorship. Assistant identity, signatures, and account isolation now have live Gmail evidence.
-3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
+3. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
 4. Add delegation proposals. Brief reporting is deployed and verified against production records.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 6. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
