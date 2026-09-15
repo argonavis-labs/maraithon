@@ -58,6 +58,12 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
         assert params["model"] == "qwen/qwen3.7-max"
         assert params["max_tokens"] == 2048
         assert params["temperature"] == 0.7
+
+        assert params["provider"] == %{
+                 "max_price" => %{"prompt" => "0.1", "completion" => "0.2"},
+                 "allow_fallbacks" => false
+               }
+
         assert params["reasoning"] == %{"effort" => "medium"}
 
         assert params["messages"] == [
@@ -96,6 +102,10 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
 
       {:ok, result} =
         OpenRouterProvider.complete(%{
+          "provider" => %{
+            "max_price" => %{"prompt" => "0.1", "completion" => "0.2"},
+            "allow_fallbacks" => false
+          },
           "messages" => [
             %{"role" => "system", "content" => "You are concise."},
             %{"role" => "user", "content" => "Hello"}

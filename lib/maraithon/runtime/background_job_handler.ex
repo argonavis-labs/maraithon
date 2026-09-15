@@ -42,6 +42,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   def execute(%BackgroundJob{job_type: "delegation_sync"} = job),
     do: Maraithon.Delegations.Sources.execute(job)
 
+  def execute(%BackgroundJob{job_type: "delegation_decide"} = job),
+    do: Maraithon.Delegations.Decision.execute(job)
+
   def execute(%BackgroundJob{
         job_type: "privacy_erasure",
         payload: %{"request_id" => request_id}

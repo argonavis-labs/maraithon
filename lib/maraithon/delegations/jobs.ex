@@ -100,6 +100,23 @@ defmodule Maraithon.Delegations.Jobs do
     end
   end
 
+  def start_decide!(d, event, now) do
+    turn =
+      Repo.get_by!(Turn, id: event.data["turn_id"], delegation_id: d.id, user_id: d.user_id)
+      |> Turn.hydrate()
+
+    run = Repo.get_by!(Run, id: turn.run_id, user_id: d.user_id) |> Run.hydrate_payloads()
+    binding = run.prompt_snapshot[Binding.key()]
+    context = Authority.lock_context!(binding, d.user_id)
+
+    if Authority.current?(context, binding) and is_map(run.prompt_snapshot["sources"]) do
+      enqueue!("delegation_decide", d, binding, now)
+      %{d | state: "deciding", next_wake_at: nil}
+    else
+      Repo.rollback(:delegation_source_not_current)
+    end
+  end
+
   def transaction(%BackgroundJob{} = job, fun) do
     JobAuthority.transaction(job, fn ->
       context = Authority.lock_context!(job.payload, job.user_id)

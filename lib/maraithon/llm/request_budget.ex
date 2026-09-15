@@ -12,7 +12,7 @@ defmodule Maraithon.LLM.RequestBudget do
   @allowed_keys ~w(
     messages model max_tokens max_output_tokens temperature reasoning_effort timeout_ms
     tools tool_choice response_format reasoning stream top_p seed presence_penalty frequency_penalty
-    parallel_tool_calls structured_outputs logprobs top_logprobs session_id
+    parallel_tool_calls structured_outputs logprobs top_logprobs session_id provider
   )
 
   def validate_body(body) when is_map(body) do

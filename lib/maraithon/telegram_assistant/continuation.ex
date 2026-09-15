@@ -24,7 +24,9 @@ defmodule Maraithon.TelegramAssistant.Continuation do
   @scopes ~w(connector_status source_hint_identity person_context linked_item_context
     quick_chat today_mode waiting_on meeting_prep commitment_audit continuity)a
 
-  def enabled?(attrs), do: attrs[:durable_processing] == true and attrs[:surface] == "mobile"
+  def enabled?(attrs),
+    do: attrs[:durable_processing] == true and attrs[:surface] in ~w(mobile delegation)
+
   def present?(%Run{} = run), do: is_map((run.result_summary || %{})[@key])
 
   def upgrade(run, checkpoint, profile, state, opts) do
@@ -114,11 +116,8 @@ defmodule Maraithon.TelegramAssistant.Continuation do
          true <- checkpoint["run_id"] == run.id and checkpoint["user_id"] == run.user_id,
          true <- checkpoint["conversation_id"] == run.conversation_id,
          true <- checkpoint["source_message_id"] == attrs[:source_message_id],
-         true <- is_map(attrs[:conversation]),
-         true <-
-           attrs[:user_id] == run.user_id and
-             Map.get(attrs[:conversation], :id) == run.conversation_id,
-         true <- run.status == "running" and run.surface == "mobile",
+         true <- request_binding?(run, attrs),
+         true <- run.status == "running",
          true <- checkpoint["phase"] in ["ready", "model_entered", "decision"],
          true <- valid_counters?(checkpoint["state"]),
          true <- is_integer(checkpoint["deadline_ms"]),
@@ -129,6 +128,21 @@ defmodule Maraithon.TelegramAssistant.Continuation do
       _ -> {:error, :invalid_execution_checkpoint}
     end
   end
+
+  defp request_binding?(%Run{surface: "delegation", conversation_id: nil} = run, attrs) do
+    key = Maraithon.Delegations.Binding.key()
+
+    attrs[:user_id] == run.user_id and is_nil(attrs[:conversation]) and
+      is_map(attrs[:delegation_binding]) and
+      attrs[:delegation_binding] == run.prompt_snapshot[key]
+  end
+
+  defp request_binding?(%Run{surface: "mobile"} = run, attrs) do
+    is_map(attrs[:conversation]) and attrs[:user_id] == run.user_id and
+      Map.get(attrs[:conversation], :id) == run.conversation_id
+  end
+
+  defp request_binding?(_, _), do: false
 
   # The deadline survives node changes. Queue time after a crash does not grant
   # a new execution budget. A saved final decision can still drain delivery.

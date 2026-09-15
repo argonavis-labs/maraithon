@@ -41,7 +41,8 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     {"structured_outputs", :structured_outputs},
     {"logprobs", :logprobs},
     {"top_logprobs", :top_logprobs},
-    {"session_id", :session_id}
+    {"session_id", :session_id},
+    {"provider", :provider}
   ]
 
   @impl true

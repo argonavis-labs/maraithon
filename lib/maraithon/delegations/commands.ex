@@ -6,9 +6,11 @@ defmodule Maraithon.Delegations.Commands do
 
   def apply(delegation, grant, event, commands, now) do
     Enum.reduce(commands, delegation, fn command, current ->
-      if command == :enqueue_sync and current.provider == "gmail" and
+      if command in [:enqueue_sync, :enqueue_decide] and current.provider == "gmail" and
            grant.control_state == "active" and Gates.sends_enabled?(current.user_id, "gmail") do
-        Jobs.start_sync!(current, grant, event, now)
+        if command == :enqueue_sync,
+          do: Jobs.start_sync!(current, grant, event, now),
+          else: Jobs.start_decide!(current, event, now)
       else
         execute(current, grant, command)
       end
@@ -31,6 +33,11 @@ defmodule Maraithon.Delegations.Commands do
   defp execute(d, grant, {:cancel_unentered, _}), do: execute(d, grant, :cancel_unentered)
   defp execute(d, _, :notify_user), do: d
   defp execute(d, _, :transition_todo), do: d
+
+  defp execute(d, _, {:schedule_capacity, _}) do
+    Actions.supersede_unentered!(d)
+    %{d | next_wake_at: DateTime.add(Maraithon.Runtime.DatabaseClock.now!(), 6, :hour)}
+  end
 
   # Enabled separately from identity/control. Until a provider's grant-aware
   # executor is installed, even an accidentally enabled send gate stays closed.

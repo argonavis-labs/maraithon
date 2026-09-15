@@ -54,6 +54,14 @@ defmodule Maraithon.LLM.UserModel do
     end
   end
 
+  @doc false
+  def verify_expected(%{"_expected_model" => expected, "model" => actual})
+      when is_binary(expected),
+      do: if(expected == actual, do: :ok, else: {:error, :model_changed})
+
+  def verify_expected(%{"_expected_model" => _}), do: {:error, :model_changed}
+  def verify_expected(_), do: :ok
+
   defp from_callers([]), do: nil
 
   defp from_callers([pid | rest]) when is_pid(pid) do

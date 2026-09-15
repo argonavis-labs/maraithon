@@ -58,7 +58,12 @@ defmodule Maraithon.LLM.RequestBudgetTest do
   test "rejects improper and over-cardinality message/tool lists" do
     improper = [%{"role" => "user", "content" => "ok"} | :improper]
     messages = List.duplicate(%{"role" => "user", "content" => "ok"}, 65)
-    tools = List.duplicate(%{"type" => "function", "name" => "safe"}, 65)
+    # The current catalogue allows 128 tools (64 actions plus response and
+    # escalation tools). Keep this at the actual boundary, not the old 64 cap.
+    tools = List.duplicate(%{"type" => "function", "name" => "safe"}, 129)
+
+    assert {:ok, _} =
+             RequestBudget.validate(%{"messages" => [], "tools" => Enum.take(tools, 128)})
 
     for params <- [
           %{"messages" => improper},

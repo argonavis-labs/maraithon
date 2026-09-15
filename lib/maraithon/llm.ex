@@ -194,7 +194,10 @@ defmodule Maraithon.LLM do
           "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
 
       module ->
-        with {:ok, bounded_params} <- RequestBudget.validate(UserModel.apply(params)) do
+        params = UserModel.apply(params)
+
+        with :ok <- UserModel.verify_expected(params),
+             {:ok, bounded_params} <- RequestBudget.validate(params) do
           run_provider_request(module, bounded_params, &module.complete/1, bucket)
         end
     end

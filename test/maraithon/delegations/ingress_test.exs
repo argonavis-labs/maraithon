@@ -239,6 +239,93 @@ defmodule Maraithon.Delegations.IngressTest do
     assert Repo.aggregate(Maraithon.Runtime.BackgroundJob, :count) == 0
   end
 
+  test "lost model responses remain reserved across turns and old budget windows", c do
+    alias Maraithon.Delegations.{Actions, Authority, Binding, Budget, Jobs, Turn}
+    alias Maraithon.LLM.CostMonitor
+    alias Maraithon.Runtime.BackgroundJobs
+    alias Maraithon.TelegramAssistant.Run
+    original = Application.get_env(:maraithon, CostMonitor)
+    Application.put_env(:maraithon, CostMonitor, enabled: true, projected_daily_usd: 3.0)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:maraithon, CostMonitor, original),
+        else: Application.delete_env(:maraithon, CostMonitor)
+    end)
+
+    assert {:ok, _} =
+             BackgroundJobs.enqueue("runtime_recurring:llm_cost_monitor", %{
+               result: %{
+                 "status" => "within_budget",
+                 "checked_at" => DateTime.to_iso8601(DateTime.utc_now()),
+                 "daily_cost_usd" => 0,
+                 "rolling_cost_usd" => 0,
+                 "threshold_usd" => 6,
+                 "key_fingerprint" =>
+                   :crypto.hash(:sha256, Maraithon.LLM.openrouter_api_key() || "")
+                   |> Base.encode16(case: :lower)
+               }
+             })
+
+    grant = Maraithon.Delegations.current_grant(c.delegation)
+    event = %{id: Ecto.UUID.generate(), kind: "user_action"}
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+               now = Maraithon.Runtime.DatabaseClock.now!()
+               d = Jobs.start_sync!(c.delegation, grant, event, now)
+               d = c.delegation |> Delegation.changeset(%{state: d.state}) |> Repo.update!()
+               run = Repo.one!(Run) |> Run.hydrate_payloads()
+               binding = run.prompt_snapshot[Binding.key()]
+
+               quote = %{
+                 "model" => run.model_name,
+                 "quoted_at" => DateTime.to_iso8601(now),
+                 "reserved_micro_usd" => 105_268
+               }
+
+               assert :ok =
+                        Budget.reserve!(
+                          Authority.lock_context!(binding, c.user_id),
+                          "compose",
+                          quote
+                        )
+
+               assert {:error, :model_already_entered} =
+                        Budget.reserve!(
+                          Authority.lock_context!(binding, c.user_id),
+                          "compose",
+                          quote
+                        )
+
+               assert :ok =
+                        Budget.reserve!(
+                          Authority.lock_context!(binding, c.user_id),
+                          "policy",
+                          quote
+                        )
+
+               turn = Repo.one!(Turn) |> Turn.hydrate()
+               assert turn.model_calls == 2
+               assert turn.reserved_micro_usd == 210_536
+               assert turn.cost_micro_usd == 0
+               refute Actions.supersede_unentered!(d)
+
+               Repo.get!(Turn, turn.id)
+               |> Ecto.Changeset.change(updated_at: DateTime.add(now, -60, :day))
+               |> Repo.update!()
+
+               Jobs.start_sync!(d, grant, %{event | id: Ecto.UUID.generate()}, now)
+               next_turn = Repo.get_by!(Turn, delegation_id: d.id, seq: 2)
+               next_run = Repo.get!(Run, next_turn.run_id) |> Run.hydrate_payloads()
+               next = Authority.lock_context!(next_run.prompt_snapshot[Binding.key()], c.user_id)
+               assert {:error, :delegation_cost_limit} = Budget.reserve!(next, "compose", quote)
+               assert Repo.get!(Turn, next_turn.id).model_calls == 0
+               :checked
+             end)
+  end
+
   defp route(c, message) do
     assert {:ok, :ok} =
              Repo.transaction(fn ->
