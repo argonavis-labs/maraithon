@@ -41,7 +41,10 @@ struct TodoRow: View {
                 }
 
                 if todo.isActive, let next = todo.workflow?.nextAction, !next.isEmpty {
-                    TodoLabeledLine(label: "Next:", text: next, lineLimit: 2)
+                    TodoLabeledLine(
+                        label: todo.isOwnedBySomeoneElse ? "Owner’s next step:" : "Next:",
+                        text: next, lineLimit: 2
+                    )
                 } else if let context = decisionContext.rowContext {
                     Text(context)
                         .font(Runner.Typography.small)
@@ -69,6 +72,12 @@ struct TodoRow: View {
                         }
                     }
                     .padding(.top, Runner.Spacing.xxsmall)
+                }
+
+                if todo.isTracking {
+                    Text("Tracking progress")
+                        .font(Runner.Typography.caption)
+                        .foregroundStyle(Runner.Palette.mutedForeground)
                 }
             }
             // Lines the title up with the checkbox's visible box, not its 44pt touch frame.
@@ -128,6 +137,10 @@ enum TodoBadges {
             badges.append(TodoBadge(id: "status", text: todo.status.title, tone: .zinc))
         }
 
+        if todo.isTracking {
+            badges.append(TodoBadge(id: "tracking", text: "Tracking", tone: .zinc))
+        }
+
         if let title = TodoDecisionSignals.signalPillTitle(for: todo) {
             badges.append(TodoBadge(id: "decision", text: title, tone: .indigo))
         }
@@ -159,9 +172,13 @@ struct TodoBadgeRow: View {
     }
 }
 
-/// Who has the ball, as one muted line: "Your move · You own the action".
+/// Names another person's ownership explicitly, while preserving user follow-up states.
 struct TodoOwnershipLine: View {
     let workflow: TodoWorkflow
+
+    private var ownerLabel: String {
+        workflow.owner.kind == "person" ? "Owned by \(workflow.owner.displayName)" : workflow.ballLabel
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Runner.Spacing.xsmall) {
@@ -169,13 +186,13 @@ struct TodoOwnershipLine: View {
                 .font(Runner.Typography.caption)
                 .foregroundStyle(Runner.Palette.mutedForeground)
                 .accessibilityHidden(true)
-            Text("\(workflow.ballLabel) · \(workflow.label)")
+            Text("\(Text(ownerLabel).foregroundStyle(workflow.owner.kind == "person" ? Runner.Palette.foreground : Runner.Palette.mutedForeground)) · \(workflow.label)")
                 .font(Runner.Typography.small)
                 .foregroundStyle(Runner.Palette.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(workflow.ballLabel). State: \(workflow.label)")
+        .accessibilityLabel("\(ownerLabel). State: \(workflow.label)")
     }
 }
 

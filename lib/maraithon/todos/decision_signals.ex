@@ -7,7 +7,7 @@ defmodule Maraithon.Todos.DecisionSignals do
   the operator, not merely that an item is open.
   """
 
-  alias Maraithon.Todos.{AttentionRanker, Todo}
+  alias Maraithon.Todos.{AttentionRanker, Todo, Workflow}
 
   @decision_terms ~w(
     approve approval approved
@@ -29,7 +29,7 @@ defmodule Maraithon.Todos.DecisionSignals do
                             ])
 
   def needs_decision?(%Todo{} = todo) do
-    todo.status in ["open", "snoozed"] and
+    todo.status in ["open", "snoozed"] and not Workflow.owned_by_someone_else?(todo) and
       (stale_keep_or_close?(todo) or explicit_direction?(todo) or decision_text?(text_blob(todo)))
   end
 

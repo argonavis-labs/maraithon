@@ -6,6 +6,8 @@ on:
     tags: ['v*']
     paths:
       - 'apps/mobile/**'
+      - 'apps/assistant-progress/**'
+      - 'apps/people-network/**'
       - 'scripts/ci/assign-testflight-group.mjs'
       - '.github/workflows/mobile-release.yml'
       - 'Makefile'
@@ -47,6 +49,8 @@ jobs:
           # We only build the iOS app; subtree only.
           sparse-checkout: |
             apps/mobile
+            apps/assistant-progress
+            apps/people-network
             scripts/ci
             Makefile
           fetch-depth: 1

@@ -79,7 +79,9 @@ struct TodosView: View {
                     eyebrow: "Your workspace",
                     title: "Tasks",
                     count: lists.filtered.count,
-                    subtitle: "A clear next step for everything on your plate."
+                    subtitle: filter == .tracking
+                        ? "Work that matters to you, owned by someone else."
+                        : "A clear next step for everything on your plate."
                 ) {
                     HStack(spacing: Runner.Spacing.small) {
                         AccountMenuButton()
@@ -97,7 +99,7 @@ struct TodosView: View {
 
                 RunnerTabs(items: filterTabs(counts: lists.counts), selection: $filter)
 
-                RunnerSearchField(placeholder: "Search todos", text: $searchText)
+                RunnerSearchField(placeholder: filter.searchPrompt, text: $searchText)
                     .padding(.horizontal, Runner.Layout.pageInset)
                     .padding(.vertical, Runner.Spacing.tight)
 
@@ -153,7 +155,7 @@ struct TodosView: View {
                                 }
                                 .tint(todo.isCompleted ? Runner.Palette.caution : Runner.Palette.success)
 
-                                if todo.attentionMode == .monitor, todo.isActive {
+                                if todo.attentionMode == .monitor, todo.isActive, !todo.isOwnedBySomeoneElse {
                                     Button {
                                         markNeedsAction(todo)
                                     } label: {

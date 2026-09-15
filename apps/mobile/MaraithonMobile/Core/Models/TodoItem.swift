@@ -83,8 +83,11 @@ final class TodoItem {
     }
 
     var needsActionNow: Bool {
-        status == .open && attentionMode == .actNow
+        status == .open && attentionMode == .actNow && !isOwnedBySomeoneElse
     }
+
+    var isOwnedBySomeoneElse: Bool { workflow?.owner.kind == "person" }
+    var isTracking: Bool { isActive && isOwnedBySomeoneElse }
 
     init(
         id: UUID = UUID(),

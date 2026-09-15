@@ -3,6 +3,7 @@ import Foundation
 enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
     case all
     case open
+    case tracking
     case needsAction
     case watching
     case decisions
@@ -15,13 +16,14 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
     var id: String { rawValue }
 
     static var allCases: [TodoFilter] {
-        [.needsAction, .watching, .decisions, .today, .overdue, .snoozed, .completed, .all]
+        [.tracking, .snoozed, .completed, .all, .needsAction, .watching, .decisions, .today, .overdue]
     }
 
     var title: String {
         switch self {
-        case .all: "All"
+        case .all: "All tasks"
         case .open: "Active"
+        case .tracking: "Tracking"
         case .needsAction: "Act now"
         case .watching: "Watching"
         case .decisions: "Decisions"
@@ -29,7 +31,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         case .overdue: "Past due"
         case .upcoming: "Upcoming"
         case .snoozed: "Snoozed"
-        case .completed: "Done"
+        case .completed: "Completed"
         }
     }
 
@@ -37,6 +39,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .all: "All Work"
         case .open: "Active Work"
+        case .tracking: "Tracking"
         case .needsAction: "Needs Action"
         case .watching: "Watching"
         case .decisions: "Decisions"
@@ -52,6 +55,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .all: "Search work"
         case .open: "Search active work"
+        case .tracking: "Search tracked work"
         case .needsAction: "Search work needing action"
         case .watching: "Search watched work"
         case .decisions: "Search decisions"
@@ -94,6 +98,12 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
                 title: "No active work",
                 systemImage: "checklist",
                 description: "Nothing is open or snoozed. Add a follow-up, or ask Maraithon to keep the next commitment visible."
+            )
+        case .tracking:
+            return TodoEmptyState(
+                title: "No work is being tracked",
+                systemImage: "person.2",
+                description: "Work owned by someone else will appear here so you can follow its progress."
             )
         case .needsAction:
             return TodoEmptyState(
@@ -150,6 +160,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .all: "work"
         case .open: "active work"
+        case .tracking: "tracked work"
         case .needsAction: "work needing action"
         case .watching: "watched work"
         case .decisions: "decisions"
@@ -171,6 +182,7 @@ struct TodoEmptyState: Equatable {
 struct TodoFilterCounts: Equatable {
     let all: Int
     let open: Int
+    var tracking: Int = 0
     let needsAction: Int
     let watching: Int
     let decisions: Int
@@ -184,6 +196,7 @@ struct TodoFilterCounts: Equatable {
         switch filter {
         case .all: all
         case .open: open
+        case .tracking: tracking
         case .needsAction: needsAction
         case .watching: watching
         case .decisions: decisions
@@ -208,6 +221,7 @@ enum TodoFiltering {
         let query = normalizedQuery(searchText)
         var all = 0
         var open = 0
+        var tracking = 0
         var needsAction = 0
         var watching = 0
         var decisions = 0
@@ -228,6 +242,10 @@ enum TodoFiltering {
 
             if todo.isActive {
                 open += 1
+            }
+
+            if todo.isTracking {
+                tracking += 1
             }
 
             if todo.needsActionNow {
@@ -260,6 +278,7 @@ enum TodoFiltering {
         return TodoFilterCounts(
             all: all,
             open: open,
+            tracking: tracking,
             needsAction: needsAction,
             watching: watching,
             decisions: decisions,
@@ -288,6 +307,8 @@ enum TodoFiltering {
                 return true
             case .open:
                 return todo.isActive
+            case .tracking:
+                return todo.isTracking
             case .needsAction:
                 return todo.needsActionNow
             case .watching:
@@ -407,6 +428,7 @@ enum TodoListSignature {
             hasher.combine(todo.evidenceExcerpt)
             hasher.combine(todo.rankReason)
             hasher.combine(todo.todoBriefData)
+            hasher.combine(todo.workflowData)
             hasher.combine(todo.sourceSystem)
         }
 

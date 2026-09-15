@@ -94,6 +94,32 @@ defmodule MaraithonWeb.CoreComponents do
     """
   end
 
+  @doc "Catalyst-style view links with a current-view underline and LiveView patches."
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :items, :list, required: true
+
+  def view_tabs(assigns) do
+    ~H"""
+    <nav id={@id} aria-label={@label} class="flex gap-6 overflow-x-auto border-b border-zinc-950/10">
+      <.link
+        :for={item <- @items}
+        patch={item.path}
+        aria-current={if(item.current?, do: "page")}
+        class={[
+          "shrink-0 border-b-2 px-1 pb-3 text-sm/6 font-medium focus-visible:outline-2 focus-visible:outline-offset-2",
+          if(item.current?,
+            do: "border-zinc-950 text-zinc-950",
+            else: "border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-950"
+          )
+        ]}
+      >
+        <%= item.label %>
+      </.link>
+    </nav>
+    """
+  end
+
   @doc """
   Catalyst-style divider.
   """

@@ -25,6 +25,7 @@ struct TodoFilterStrip: View {
         switch filter {
         case .all: .accentColor
         case .open: .blue
+        case .tracking: .secondary
         case .needsAction: .blue
         case .watching: .teal
         case .decisions: .purple

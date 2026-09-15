@@ -109,6 +109,13 @@ defmodule Maraithon.Todos.Workflow do
 
   def outcome_tracked?(todo), do: is_binary(get_in(Map.get(todo, :workflow) || %{}, ["outcome"]))
 
+  @doc "Whether another person owns this work, including legacy handoffs."
+  def owned_by_someone_else?(todo), do: get_in(current(todo), ["owner", "kind"]) == "person"
+
+  @doc "Active work the user follows while another person owns the next step."
+  def tracking?(todo),
+    do: Map.get(todo, :status) in ~w(open snoozed) and owned_by_someone_else?(todo)
+
   def user_owner(todo) do
     %{
       "kind" => "user",

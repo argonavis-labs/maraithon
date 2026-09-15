@@ -2621,6 +2621,7 @@ defmodule Maraithon.Todos do
     |> maybe_filter_kind(kind)
     |> maybe_filter_attention_mode(attention_mode)
     |> maybe_filter_owner_user_id(owner_user_id)
+    |> maybe_filter_tracking(Keyword.get(opts, :tracking_only?, false))
     |> maybe_filter_project_id(project_id)
     |> maybe_filter_agent_actionability(agent_actionability)
     |> maybe_filter_direction(direction)
@@ -2630,6 +2631,22 @@ defmodule Maraithon.Todos do
     |> maybe_filter_due_nil(due_nil?)
     |> maybe_filter_query(query_text)
   end
+
+  # Mirror Workflow.current/1 before pagination so counts and navigation agree.
+  # A stored owner takes precedence over the legacy counterparty handoff.
+  defp maybe_filter_tracking(query, true) do
+    where(
+      query,
+      [todo],
+      todo.status in ["open", "snoozed"] and
+        (fragment("?->'owner'->>'kind' = 'person'", todo.workflow) or
+           (fragment("COALESCE(?->'owner', 'null'::jsonb) = 'null'::jsonb", todo.workflow) and
+              todo.direction == "owed_to_me" and not is_nil(todo.counterparty_person_id) and
+              not is_nil(todo.counterparty_label)))
+    )
+  end
+
+  defp maybe_filter_tracking(query, _value), do: query
 
   defp maybe_filter_project_id(query, nil), do: query
   defp maybe_filter_project_id(query, ""), do: query

@@ -5,7 +5,7 @@ defmodule MaraithonWeb.TodosLive do
   alias Maraithon.{BriefingSchedules, Projects, Repo, SourceLabels, Timezones}
   alias Maraithon.AssistantChat.TodoThreadPrimer
   alias Maraithon.Todos
-  alias Maraithon.Todos.{Brief, BriefActions, DecisionSignals, SourceActions, Todo}
+  alias Maraithon.Todos.{Brief, BriefActions, DecisionSignals, SourceActions, Todo, Workflow}
   alias MaraithonWeb.TodoActionCopy
   alias MaraithonWeb.TodoWorkspace
   alias MaraithonWeb.TodoWorkspaceComponents
@@ -38,11 +38,12 @@ defmodule MaraithonWeb.TodosLive do
   @empty_state_filter_keys ~w(q status attention due source project agent)
   @status_options [
     {"Active", "active"},
+    {"Tracking", "tracking"},
     {"Open", "open"},
     {"Snoozed", "snoozed"},
-    {"Done", "done"},
+    {"Completed", "done"},
     {"Dismissed", "dismissed"},
-    {"All", "all"}
+    {"All tasks", "all"}
   ]
   @attention_options [
     {"Any attention", "all"},
@@ -925,11 +926,19 @@ defmodule MaraithonWeb.TodosLive do
             />
           <% else %>
             <div class="space-y-4">
-              <.page_header title="Todos">
+              <.page_header
+                title="Tasks"
+                eyebrow="Your workspace"
+                subtitle={if(@filters["status"] == "tracking",
+                  do: "Work that matters to you, owned by someone else.",
+                  else: "A clear next step for everything on your plate.")}
+              >
                 <:actions>
                   <.shortcut_help_button />
                 </:actions>
               </.page_header>
+
+              <.view_tabs id="todo-views" label="Task views" items={todo_view_tabs(@filters)} />
 
           <details class="group">
             <summary class="inline-flex cursor-pointer list-none items-center gap-6 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
@@ -1214,6 +1223,7 @@ defmodule MaraithonWeb.TodosLive do
                         <.badge :if={todo.status != "open"} color={status_color(todo.status)}>
                           <%= todo_status_label(todo.status) %>
                         </.badge>
+                        <.badge :if={Workflow.tracking?(todo)} color="zinc">Tracking</.badge>
                         <.badge :if={todo_decision_signal?(todo)} color="indigo">Decision</.badge>
                         <.badge :if={todo.priority >= 75} color={priority_color(todo.priority)}>
                           <%= priority_label(todo.priority) %>
@@ -1229,7 +1239,10 @@ defmodule MaraithonWeb.TodosLive do
                       <div class="text-sm/6 text-zinc-700"><%= todo_project_name(todo, @projects) %></div>
                       <div class="mt-1 flex flex-wrap items-center gap-1.5">
                         <span class="text-xs/5 text-zinc-500"><%= todo_source_label(todo.source) %></span>
-                        <.badge color={agent_actionability_color(todo.agent_actionability)}>
+                        <.badge
+                          :if={present?(agent_actionability_label(todo))}
+                          color={if(Workflow.owned_by_someone_else?(todo), do: "zinc", else: agent_actionability_color(todo.agent_actionability))}
+                        >
                           <%= agent_actionability_label(todo) %>
                         </.badge>
                       </div>
@@ -2840,7 +2853,13 @@ defmodule MaraithonWeb.TodosLive do
   attr :workflow, :map, required: true
 
   defp todo_ownership(assigns) do
-    assigns = assign(assigns, :ball_label, Maraithon.Todos.Workflow.ball_label(assigns.workflow))
+    workflow = assigns.workflow
+    owner_label =
+      if workflow["owner"]["kind"] == "person",
+        do: "Owned by #{workflow["owner"]["label"]}",
+        else: Workflow.ball_label(workflow)
+
+    assigns = assign(assigns, :ball_label, owner_label)
 
     ~H"""
     <div class="mt-1 flex flex-wrap items-center gap-2" aria-label={"#{@ball_label}. State: #{@workflow["label"]}"}>
@@ -3175,6 +3194,7 @@ defmodule MaraithonWeb.TodosLive do
     [
       query: normalize_text(filters["q"]),
       statuses: status_filter(filters["status"]),
+      tracking_only?: filters["status"] == "tracking",
       attention_mode: attention_filter(filters["attention"]),
       decision_only?: decision_filter?(filters["attention"]),
       source: source_filter(filters["source"]),
@@ -3192,7 +3212,7 @@ defmodule MaraithonWeb.TodosLive do
     end)
   end
 
-  defp status_filter("active"), do: ["open", "snoozed"]
+  defp status_filter(status) when status in ~w(active tracking), do: ["open", "snoozed"]
   defp status_filter("all"), do: nil
   defp status_filter(status) when status in ~w(open snoozed done dismissed), do: [status]
   defp status_filter(_status), do: ["open", "snoozed"]
@@ -3252,7 +3272,7 @@ defmodule MaraithonWeb.TodosLive do
       "status" =>
         normalize_choice(
           Map.get(params, "status"),
-          ~w(active open snoozed done dismissed all),
+          ~w(active tracking open snoozed done dismissed all),
           "active"
         ),
       "attention" =>
@@ -3324,6 +3344,19 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp normalize_source(_value), do: "all"
+
+  defp todo_view_tabs(filters) do
+    Enum.map(~w(active tracking snoozed done all), fn status ->
+      view_filters = Map.merge(@default_filters, %{
+        "status" => status,
+        "q" => filters["q"],
+        "sort" => if(status in ~w(done all), do: "updated", else: "rank")
+      })
+
+      %{label: option_label(@status_options, status), path: todos_path(view_filters),
+        current?: filters["status"] == status}
+    end)
+  end
 
   defp todos_path(filters, extra_params \\ %{}) do
     query =
@@ -3476,6 +3509,9 @@ defmodule MaraithonWeb.TodosLive do
       present?(query) ->
         "No work matches that search."
 
+      filters["status"] == "tracking" ->
+        "No work is being tracked. Work owned by someone else will appear here so you can follow its progress."
+
       filters["attention"] == "decision" ->
         "No decisions are waiting in this filter."
 
@@ -3561,17 +3597,23 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
-  defp agent_actionability_label(%Todo{agent_action_label: label})
+  defp agent_actionability_label(%Todo{} = todo) do
+    if Workflow.owned_by_someone_else?(todo),
+      do: if(Workflow.tracking?(todo), do: "Tracking progress"),
+      else: user_actionability_label(todo)
+  end
+
+  defp user_actionability_label(%Todo{agent_action_label: label})
        when is_binary(label) and label != "",
        do: label
 
-  defp agent_actionability_label(%Todo{agent_actionability: "can_prepare"}),
+  defp user_actionability_label(%Todo{agent_actionability: "can_prepare"}),
     do: "Maraithon can prepare"
 
-  defp agent_actionability_label(%Todo{agent_actionability: "can_execute"}),
+  defp user_actionability_label(%Todo{agent_actionability: "can_execute"}),
     do: "Maraithon can execute"
 
-  defp agent_actionability_label(_todo), do: "Needs you"
+  defp user_actionability_label(_todo), do: "Needs you"
 
   defp agent_actionability_color("can_prepare"), do: "blue"
   defp agent_actionability_color("can_execute"), do: "emerald"
@@ -3586,11 +3628,16 @@ defmodule MaraithonWeb.TodosLive do
   defp attention_mode_label("monitor"), do: "Watching"
   defp attention_mode_label(_attention), do: "Needs action"
 
-  defp todo_decision_signal?(%Todo{} = todo), do: DecisionSignals.needs_decision?(todo)
+  defp todo_decision_signal?(%Todo{} = todo),
+    do: not Workflow.owned_by_someone_else?(todo) and DecisionSignals.needs_decision?(todo)
   defp todo_decision_signal?(_todo), do: false
 
   defp todo_next_action_label(%Todo{} = todo) do
-    if todo_decision_signal?(todo), do: "Recommended", else: "Next"
+    cond do
+      Workflow.owned_by_someone_else?(todo) -> "Owner’s next step"
+      todo_decision_signal?(todo) -> "Recommended"
+      true -> "Next"
+    end
   end
 
   defp todo_source_label("gmail"), do: "Gmail"
