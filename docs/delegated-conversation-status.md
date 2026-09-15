@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending; the signature review correction is deploying. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending. The signature review correction is deployed, and a new conflict run is in progress. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -63,9 +63,11 @@ Commit `ced148f9` adds account categories and an All / Personal / Work filter. T
 
 Web, Mac, and iPhone use the same saved categories. The native apps share the account settings form and category enum; the iPhone stores the optional category through an additive SwiftData field and refreshes it on sync. The server migration registers the reviewed column and constraint in the durable and privacy catalogs and checks that all other proofs remain valid. The focused domain, signature, policy, eval, settings and API checks passed 29 tests. Server, signed Mac, and iPhone simulator builds passed. Server workflow `35003898249` passed, serving revision `maraithon-00350-qk8`; production migration `maraithon-migrate-tt86z` passed. The signed Mac app is installed. A temporary category change saved from Mac produced seven existing tasks in the web Personal filter, then was restored to Unassigned. Commit `07b95afa` replaces provider IDs with readable account labels and avoids loading OAuth credentials for category reads. Its three regression checks and server build passed. Follow-up deployment `35004585260` passed, serving revision `maraithon-00351-j2n`. Google email addresses and Agora / Runner account names are verified in production. iPhone release `35004585337` passed. [Category evidence](evidence/delegated-conversations/2026-09-15-account-categories.json).
 
+The post-rollout sample at 18:13 to 18:14 UTC found all 64 partitions ready with live leases, no termination requests, and advancing recurring work. Renewal and storage verification did not dominate query time. Recovery logs are present, but the sample contained no recent effect or checkpoint events, so it does not prove every runtime health criterion. [Recovery evidence](evidence/delegated-conversations/2026-09-15-category-runtime-recovery.json).
+
 ## Remaining work
 
-1. Resolve the new policy hold and rerun the busy-slot conflict scenario. All three failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
+1. Finish the busy-slot conflict rerun, job `db7f29d4-3080-46bc-bf99-8f7ff026447b`, on revision `maraithon-00351-j2n`. It passed the earlier signature policy hold and entered a second turn. The final calendar result and provider signature checks remain pending. All three failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. The production account check found no assistant identity and no connected `october@ewakened.com` account. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.

@@ -1,0 +1,247 @@
+{
+  "to": "2026-09-15T18:14:43.199766Z",
+  "from": "2026-09-15T18:13:41.354386Z",
+  "checkpoints": [],
+  "agents": [
+    [
+      "0e80687b-8c4d-47d8-9a86-664dbcacf1d0",
+      "delegation_coordinator",
+      "running",
+      "enabled",
+      1,
+      false,
+      false,
+      "unknown_error"
+    ],
+    [
+      "ebc6bc1a-98b1-4465-8e26-8cd8564450e8",
+      "prompt_agent",
+      "stopped",
+      "enabled",
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "bf2e8ff7-e57c-4ff4-ade8-45419d23ec79",
+      "prompt_agent",
+      "stopped",
+      "enabled",
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+      "manifest_agent",
+      "running",
+      "enabled",
+      1,
+      false,
+      false,
+      "unknown_error"
+    ]
+  ],
+  "evals": [
+    {
+      "error": null,
+      "status": "pending",
+      "result": {
+        "delegation_id": "95ca0b86-af83-4242-9acb-a4f128d20ecd",
+        "phase": "waiting_for_completion",
+        "received_offer_verified": true,
+        "reply_action_id": "c5ed0f6d-9569-e313-501b-33b2ceaf6193",
+        "reply_count": 1,
+        "reply_message_id": "1a0a64463a5b92d5",
+        "todo_id": "f71b8947-fc93-40cf-973f-960ff452bf46"
+      },
+      "job_id": "db7f29d4-3080-46bc-bf99-8f7ff026447b"
+    }
+  ],
+  "partitions": [
+    [
+      "ready",
+      64,
+      64
+    ]
+  ],
+  "termination_requested": [],
+  "recurring": [
+    {
+      "type": "runtime_recurring:briefing_cron",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:20.860607Z",
+      "updated_at": "2026-09-15T18:14:20.860607Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:assistant_run_recovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:22.643923Z",
+      "updated_at": "2026-09-15T18:14:22.643923Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:telegram_run_reaper",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:25.447278Z",
+      "updated_at": "2026-09-15T18:14:25.447278Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:brief_notifier",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:27.139707Z",
+      "updated_at": "2026-09-15T18:14:27.139707Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:insight_notifier",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:30.072808Z",
+      "updated_at": "2026-09-15T18:14:30.072808Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:privacy_erasure_discovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:31.358129Z",
+      "updated_at": "2026-09-15T18:14:31.358129Z",
+      "advanced": true
+    },
+    {
+      "type": "runtime_recurring:todo_completion_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:38.520261Z",
+      "updated_at": "2026-09-15T18:00:38.520261Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:todo_outcome_learning_recovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:15:54.725669Z",
+      "updated_at": "2026-09-15T18:10:54.725669Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:token_refresher",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:16:02.537475Z",
+      "updated_at": "2026-09-15T18:11:02.537475Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:critical_todo_push",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:16:16.960446Z",
+      "updated_at": "2026-09-15T18:11:16.960446Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:delegation_due_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:16:21.127510Z",
+      "updated_at": "2026-09-15T18:11:21.127510Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:people_network_discovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:18:34.659222Z",
+      "updated_at": "2026-09-15T18:08:34.659222Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:proactive_check_in",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:18:39.416169Z",
+      "updated_at": "2026-09-15T18:08:39.416169Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:source_account_discovery",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:22:28.239526Z",
+      "updated_at": "2026-09-15T18:07:28.239526Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:freshness_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:28:22.816382Z",
+      "updated_at": "2026-09-15T17:28:22.816382Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:nudge_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:28:36.973839Z",
+      "updated_at": "2026-09-15T17:58:36.973839Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:watch_renewer",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:29:09.939520Z",
+      "updated_at": "2026-09-15T17:59:09.939520Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:llm_cost_monitor",
+      "state": "pending",
+      "scheduled_at": "2026-09-15T18:45:16.455674Z",
+      "updated_at": "2026-09-15T12:45:16.455674Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:dogfood_digest",
+      "state": "pending",
+      "scheduled_at": "2026-09-16T11:30:00.000000Z",
+      "updated_at": "2026-09-15T11:30:00.810586Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:staleness_triage_sweep",
+      "state": "pending",
+      "scheduled_at": "2026-09-16T15:28:00.979564Z",
+      "updated_at": "2026-09-15T15:28:00.979564Z",
+      "advanced": false
+    },
+    {
+      "type": "runtime_recurring:privacy_retention",
+      "state": "running",
+      "scheduled_at": "2026-09-15T18:14:38.876895Z",
+      "updated_at": "2026-09-15T18:14:40.256516Z",
+      "advanced": true
+    }
+  ],
+  "query_deltas": {
+    "not_visible_to_job_role": {
+      "calls": 180,
+      "ms": 548.6998459994793
+    },
+    "other": {
+      "calls": 13916,
+      "ms": 36910.00191400945
+    },
+    "renewal": {
+      "calls": 184,
+      "ms": 25.89062400002149
+    },
+    "storage_verification": {
+      "calls": 2,
+      "ms": 625.2972739934921
+    }
+  },
+  "effect_proofs": [],
+  "revision": "maraithon-00351-j2n",
+  "execution": "maraithon-todo-validation-j42nx",
+  "scope": "Completed runtime sample; the subsequent mailbox reader failed because its HTTP task supervisor was missing.",
+  "limits": "No effect or checkpoint events in this sample. This does not establish all runtime health criteria.",
+  "recovery_logs_utc": [
+    "2026-09-15T18:05:18.065843Z",
+    "2026-09-15T18:05:18.171857Z"
+  ]
+}
