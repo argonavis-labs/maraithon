@@ -1,0 +1,150 @@
+{
+  "date": "2026-09-15",
+  "deployment": {
+    "commit": "218bc7365440f239b271ec73a0dc65bdae24e709",
+    "workflow": 35016276268,
+    "revision": "maraithon-00361-jwc"
+  },
+  "starter_execution": "maraithon-todo-validation-ncfgz",
+  "reader_execution": "maraithon-todo-validation-2n7f7",
+  "hold_reader_execution": "maraithon-todo-validation-8l4hf",
+  "permission": {
+    "connected": true,
+    "assistant": true,
+    "account_id": 9,
+    "gmail_send": true
+  },
+  "eval": {
+    "messages": [
+      {
+        "action_id": "dfdd939b-3a6f-5452-09c3-e5b8391ad5c2",
+        "fixture": true,
+        "provider_receipt_found": true,
+        "frozen_footer_configured": true,
+        "sender_name_configured": true,
+        "body_matches_frozen_action": true,
+        "html_body_matches_frozen_action": true,
+        "html_footer_configured": true,
+        "html_footer_present": true,
+        "plain_signature_has_no_link_annotations": true,
+        "frozen_footer_present": true,
+        "sender_name_frozen": true,
+        "sender_name_present": true
+      }
+    ],
+    "at": "2026-09-15T20:02:38.498805Z",
+    "state": "stopped",
+    "result": {
+      "calendar_cleanup": "completed",
+      "cleanup_checks": 1,
+      "delegation_id": "461d0d9c-ee9c-4ccd-9a11-996b3ae5743b",
+      "phase": "failed",
+      "reason": "conversation_held",
+      "todo_id": "f9fbf461-2907-452d-b32a-36d9b2a7cc49"
+    },
+    "job_id": "52d7c54f-adcd-4d8d-8035-d044590d023c",
+    "delegation_id": "461d0d9c-ee9c-4ccd-9a11-996b3ae5743b",
+    "turns": [
+      {
+        "id": "67de36fc-ffd5-45a1-a693-f0af436783e9",
+        "status": "superseded",
+        "calls": 0,
+        "cost_micro_usd": 0
+      }
+    ],
+    "cost_micro_usd": 0,
+    "assistant_isolation": {
+      "email": "october@ewakened.com",
+      "actor": "as_assistant",
+      "account_id": 9,
+      "bound_to_assistant": true,
+      "excluded_from_personal_accounts": true,
+      "default_google_excludes_assistant": true,
+      "excluded_from_user_handles": true
+    },
+    "job_status": "completed",
+    "lifetime_sends": 0
+  },
+  "hold_evidence": {
+    "data": {},
+    "state": "stopped",
+    "events": [
+      {
+        "data": {
+          "action": "start"
+        },
+        "kind": "user_action"
+      },
+      {
+        "data": {},
+        "kind": "timer_due"
+      },
+      {
+        "data": {
+          "turn_id": "67de36fc-ffd5-45a1-a693-f0af436783e9"
+        },
+        "kind": "sync_result"
+      },
+      {
+        "data": {
+          "reason": "account_cost_hold",
+          "turn_id": "67de36fc-ffd5-45a1-a693-f0af436783e9"
+        },
+        "kind": "capacity_hold"
+      },
+      {
+        "data": {
+          "action": "stop"
+        },
+        "kind": "user_action"
+      }
+    ],
+    "turns": [
+      {
+        "data": {},
+        "status": "superseded",
+        "calls": 0,
+        "data_keys": [
+          "_bound",
+          "event_id",
+          "reminder"
+        ]
+      }
+    ]
+  },
+  "cost_monitor": {
+    "checked_at": "2026-09-15T18:45:17.669150Z",
+    "daily_cost_usd": 4.423599794,
+    "last_alert_at": 1789497917,
+    "next_check_at": "2026-09-16T00:45:17.904960Z",
+    "projected_daily_usd": 3.0,
+    "rolling_cost_usd": 6.024170665999918,
+    "rolling_coverage_seconds": 86405,
+    "rolling_since": 1789411512,
+    "rolling_window": "upper_bound",
+    "status": "alert_sent",
+    "threshold_usd": 6.0
+  },
+  "alert_delivery": {
+    "verified_in": "kent.fenwick@gmail.com Gmail search",
+    "received_at": "2026-09-15T14:45:00-04:00",
+    "subject": "Maraithon LLM cost warning: US$6.02 exceeds US$6.00"
+  },
+  "limitations": [
+    "The assistant conversation did not pass. The account cost guard held the first turn before model entry and before any October email.",
+    "One initial fixture email was sent; its plain and HTML signature checks passed.",
+    "The cost monitor uses a conservative rolling upper bound from six-hour samples. It is not exact per-request 24-hour billing.",
+    "No threshold override or extra cost-monitor run was performed."
+  ],
+  "preflight_correction": {
+    "commit": "2aef1f3c2344677f6da55a7fa20cf801c2f2a44e",
+    "workflow": 35017699826,
+    "revision": "maraithon-00362-4hv",
+    "deployment": "success; latest ready equals latest created; 100 percent traffic",
+    "checks": {
+      "build": "make build passed",
+      "focused_tests": "3 passed in test/maraithon/delegations/eval_budget_test.exs"
+    },
+    "behaviour": "An existing account budget hold rejects eval start before provider preflight or fixture creation. Model entry still rechecks under its existing authority."
+  }
+}

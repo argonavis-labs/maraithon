@@ -1,0 +1,122 @@
+{
+  "date": "2026-09-15",
+  "deployment": {
+    "commit": "218bc7365440f239b271ec73a0dc65bdae24e709",
+    "workflow": 35016276268,
+    "revision": "maraithon-00361-jwc"
+  },
+  "checks": {
+    "build": "make build passed",
+    "focused_tests": "7 passed in test/maraithon/delegations/reports_test.exs"
+  },
+  "reader_execution": "maraithon-todo-validation-2n7f7",
+  "production_report": {
+    "as_of": "2026-09-15T20:02:38.549681Z",
+    "cost": {
+      "recorded_30d_micro_usd": 19560,
+      "unresolved_micro_usd": 210536
+    },
+    "has_section": true,
+    "item_count": 8,
+    "items": [
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 0,
+          "lifetime_micro_usd": 0,
+          "model_calls": 0,
+          "recorded_30d_micro_usd": 0,
+          "turns": 1,
+          "unresolved_micro_usd": 0
+        },
+        "state": "stopped"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 1494,
+          "lifetime_micro_usd": 4483,
+          "model_calls": 6,
+          "recorded_30d_micro_usd": 4483,
+          "turns": 3,
+          "unresolved_micro_usd": 0
+        },
+        "state": "completed"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 1506,
+          "lifetime_micro_usd": 4518,
+          "model_calls": 6,
+          "recorded_30d_micro_usd": 4518,
+          "turns": 3,
+          "unresolved_micro_usd": 0
+        },
+        "state": "stopped"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 1305,
+          "lifetime_micro_usd": 1305,
+          "model_calls": 2,
+          "recorded_30d_micro_usd": 1305,
+          "turns": 1,
+          "unresolved_micro_usd": 0
+        },
+        "state": "stopped"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 1051,
+          "lifetime_micro_usd": 2103,
+          "model_calls": 4,
+          "recorded_30d_micro_usd": 2103,
+          "turns": 2,
+          "unresolved_micro_usd": 105268
+        },
+        "state": "stopped"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 1058,
+          "lifetime_micro_usd": 2116,
+          "model_calls": 3,
+          "recorded_30d_micro_usd": 2116,
+          "turns": 2,
+          "unresolved_micro_usd": 0
+        },
+        "state": "stopped"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 1391,
+          "lifetime_micro_usd": 2783,
+          "model_calls": 4,
+          "recorded_30d_micro_usd": 2783,
+          "turns": 2,
+          "unresolved_micro_usd": 0
+        },
+        "state": "completed"
+      },
+      {
+        "cost": {
+          "average_per_turn_micro_usd": 415,
+          "lifetime_micro_usd": 831,
+          "model_calls": 3,
+          "recorded_30d_micro_usd": 831,
+          "turns": 2,
+          "unresolved_micro_usd": 105268
+        },
+        "state": "stopped"
+      }
+    ],
+    "model_calls": 0,
+    "more": true,
+    "provider_calls": 0,
+    "rendered_bytes": 1737,
+    "window_start": "2026-08-16T20:02:38.549681Z"
+  },
+  "limitations": [
+    "Read-only report generation was verified. No extra daily brief was generated or delivered.",
+    "The recorded 30-day window follows the existing conservative turn-update budget rule; unresolved reservations are separate and do not expire.",
+    "The shared brief body serves web, Mac and iPhone. No native UI change or native build was required."
+  ]
+}

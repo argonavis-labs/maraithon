@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information, regular calendar, and busy-slot recovery paths have passed controlled live evals. The booking approval correction and rich mailbox signatures are deployed in revision `maraithon-00353-79v` and verified live. October is connected and configured as the assistant. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information, regular calendar, and busy-slot recovery paths have passed controlled live evals as the user. The booking approval correction and rich mailbox signatures are deployed and verified live. October's sending permission is enabled; its first assistant eval was held by the account cost guard. Brief reporting and the budget preflight are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -121,14 +121,24 @@ The morning brief now includes a bounded report of conversations that changed re
 
 The report shows recorded lifetime cost and average cost per turn for each listed conversation, plus the user's recorded 30-day delegation spend. Unresolved reservations stay separate and remain visible beyond the window. The window follows the existing conservative budget rule: a turn's recorded spend is counted from its latest update, rather than claiming provider billing timestamps that are not stored. All totals are scoped to the user and include conversations beyond the eight displayed rows. The report adds three bounded-result database queries and no provider or model calls. It uses the existing shared brief body for web, Mac, iPhone, and delivery.
 
-The server build and seven focused checks passed, covering ownership, old decisions, quiet waiting, the 30-day boundary, unresolved charges, user isolation, bounded rows with complete totals, source-label escaping, model-claim replacement, fallback rendering, and paused work. Production deployment is pending. Proposals remain separate unfinished work.
+The server build and seven focused checks passed, covering ownership, old decisions, quiet waiting, the 30-day boundary, unresolved charges, user isolation, bounded rows with complete totals, source-label escaping, model-claim replacement, fallback rendering, and paused work. Commit `218bc736` deployed successfully through workflow `35016276268`, revision `maraithon-00361-jwc`. A read-only production check generated the section with eight rows, US$0.019560 in recorded delegation charges and US$0.210536 in unresolved reservations. It made no model or provider calls. No extra morning brief was sent. [Report evidence](evidence/delegated-conversations/2026-09-15-brief-reporting.json). Proposals remain separate unfinished work.
+
+## October sending enabled and budget hold
+
+October's Gmail sending permission is now enabled. The refreshed account page and production reader both confirm it. The assistant remains excluded from personal accounts, default Google access, and the user's own identity handles.
+
+The information eval on revision `maraithon-00361-jwc` stopped on `account_cost_hold`. Its durable event proves the cause. The first turn made zero model calls, incurred zero model charges, and sent no October message. One initial Kent fixture email was sent, with its plain and HTML signatures verified. The fixture then stopped the conversation and completed cleanup. The assistant exchange has not passed.
+
+The 18:45 UTC cost monitor recorded US$4.423600 billed that UTC day and a US$6.024171 rolling upper estimate, above the US$6 threshold. Its warning email was verified in `kent.fenwick@gmail.com` at 2:45 PM ET. The next scheduled check is September 15 at 8:45 PM ET. This account-wide amount is separate from the much smaller delegation-only charges in the brief report. The six-hour sample boundary makes the rolling estimate conservative. [Permission, hold, and alert evidence](evidence/delegated-conversations/2026-09-15-october-budget-hold.json).
+
+Commit `2aef1f3c` checks the same account budget before a live eval reads providers or creates a fixture. Preflight reports budget readiness, and all clients receive a clear LLM spending hold label. Future warning emails explain that delegated conversations pause new model work while the cost hold is active. The threshold and six-hour schedule are unchanged. The server build and three focused budget checks passed. Workflow `35017699826` deployed revision `maraithon-00362-4hv` successfully; it serves all traffic.
 
 ## Remaining work
 
-1. Finish Google's sending consent for October and run the assistant conversation. The extension is deployed; the Kent-pair information, regular scheduling, and busy-slot evals have passed.
+1. Run October's information and scheduling conversations once the account cost check permits model work. Sending consent is complete. The Kent-pair information, regular scheduling, and busy-slot evals have passed as the user.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
-4. Add delegation proposals. Brief reporting is implemented; production deployment is pending.
+4. Add delegation proposals. Brief reporting is deployed and verified against production records.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 6. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
