@@ -89,6 +89,39 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     refute UserIdentity.own_handle?(user, "cached-assistant@example.invalid")
   end
 
+  test "an assistant mailbox is not a personal source or a connector prerequisite", %{user: user} do
+    assistant = account(user, "assistant@example.invalid", true)
+
+    assert ConnectedAccounts.list_for_user(user) == [assistant]
+    assert ConnectedAccounts.list_personal_for_user(user) == []
+
+    context =
+      Maraithon.TelegramAssistant.Context.build(%{
+        user_id: user,
+        chat_id: "isolation-fixture",
+        request_focus: :connector_status
+      })
+
+    assert context.connected_accounts == []
+    refute "google" in context.defaults.providers
+
+    catalog =
+      Maraithon.AgentHarness.ConnectorCatalog.for_user(user, %{
+        required_connectors: %{assistant.provider => []}
+      })
+
+    assert catalog.connected_apps == []
+    assert [%{provider: provider}] = catalog.missing_required_connectors
+    assert provider == assistant.provider
+
+    own = account(user, user)
+    assert ConnectedAccounts.list_personal_for_user(user) == [own]
+
+    catalog = Maraithon.AgentHarness.ConnectorCatalog.for_user(user, %{})
+    assert [%{account_ids: [account_id]}] = catalog.connected_apps
+    assert account_id == own.id
+  end
+
   test "the user's primary address is not a separate assistant identity", %{user: user} do
     own = account(user, user)
     bypass = Bypass.open()

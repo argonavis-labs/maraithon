@@ -920,7 +920,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp serialize_connected_accounts(user_id) do
-    ConnectedAccounts.list_for_user(user_id)
+    ConnectedAccounts.list_personal_for_user(user_id)
     |> Enum.map(&serialize_connected_account/1)
   end
 
@@ -1212,7 +1212,12 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp tool_defaults(user_id) do
-    oauth_providers = OAuth.list_user_tokens(user_id) |> Enum.map(& &1.provider)
+    excluded = Maraithon.AssistantIdentities.assistant_providers(user_id)
+
+    oauth_providers =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.map(& &1.provider)
+      |> Enum.reject(&(&1 in excluded))
 
     public_providers =
       oauth_providers

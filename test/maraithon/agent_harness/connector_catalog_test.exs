@@ -27,7 +27,7 @@ defmodule Maraithon.AgentHarness.ConnectorCatalogTest do
         "telegram" => [%{"label" => "Telegram"}],
         "slack" => [%{"label" => "Slack"}]
       },
-      tool_allowlist: ["gmail.search", "telegram.send", "unknown.tool"],
+      tool_allowlist: ["gmail_search", "write_memory", "unknown.tool"],
       mcp_allowlist: ["google", "telegram"]
     }
 
@@ -46,8 +46,8 @@ defmodule Maraithon.AgentHarness.ConnectorCatalogTest do
              %{provider: "slack", requirements: [%{"label" => "Slack"}]}
            ]
 
-    assert Enum.map(catalog.tools, & &1.name) == ["gmail.search", "telegram.send", "unknown.tool"]
-    assert Enum.find(catalog.tools, &(&1.name == "telegram.send")).side_effect == "write"
+    assert Enum.map(catalog.tools, & &1.name) == ["gmail_search", "write_memory", "unknown.tool"]
+    assert Enum.find(catalog.tools, &(&1.name == "write_memory")).side_effect == "write"
     assert Enum.find(catalog.tools, &(&1.name == "unknown.tool")).side_effect == "unknown"
   end
 
@@ -55,13 +55,13 @@ defmodule Maraithon.AgentHarness.ConnectorCatalogTest do
     catalog =
       ConnectorCatalog.for_user(nil, %{
         required_connectors: %{"google" => [%{"label" => "Google"}]},
-        tool_allowlist: ["llm.complete"],
+        tool_allowlist: ["gmail_get_message"],
         mcp_allowlist: ["google"]
       })
 
     assert catalog.connected_apps == []
     assert catalog.missing_required_connectors == []
     assert catalog.required_connectors == %{"google" => [%{"label" => "Google"}]}
-    assert [%{name: "llm.complete", side_effect: "generate"}] = catalog.tools
+    assert [%{name: "gmail_get_message", side_effect: "read"}] = catalog.tools
   end
 end

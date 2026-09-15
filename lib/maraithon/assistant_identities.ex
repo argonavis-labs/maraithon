@@ -21,7 +21,8 @@ defmodule Maraithon.AssistantIdentities do
   @doc "Exclude dedicated assistant accounts, including previous identities and pending setup."
   def user_accounts(query \\ ConnectedAccount) do
     excluded = assistant_filter()
-    from a in query, where: not (^excluded)
+    included = dynamic([a], not (^excluded))
+    from a in query, where: ^included
   end
 
   defp assistant_filter do

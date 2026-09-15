@@ -16,8 +16,14 @@ defmodule Maraithon.ConnectedAccounts do
 
   require Logger
 
-  def list_for_user(user_id) when is_binary(user_id) do
-    ConnectedAccount
+  def list_for_user(user_id) when is_binary(user_id), do: list_accounts(user_id, ConnectedAccount)
+
+  @doc "Accounts available as the user's own sources, excluding dedicated assistants."
+  def list_personal_for_user(user_id) when is_binary(user_id),
+    do: list_accounts(user_id, Maraithon.AssistantIdentities.user_accounts())
+
+  defp list_accounts(user_id, query) do
+    query
     |> where([account], account.user_id == ^user_id)
     |> order_by([account], asc: account.provider)
     |> Repo.all()

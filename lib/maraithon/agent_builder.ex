@@ -1683,13 +1683,17 @@ defmodule Maraithon.AgentBuilder do
   end
 
   defp validate_personal_assistant_prereqs(user_id) when is_binary(user_id) do
+    excluded = Maraithon.AssistantIdentities.assistant_providers(user_id)
+
     required_google_scopes =
       Google.scopes_for(["gmail", "calendar"])
       |> MapSet.new()
 
     google_ready? =
       OAuth.list_user_tokens(user_id)
-      |> Enum.filter(fn token -> google_provider?(token.provider) end)
+      |> Enum.filter(fn token ->
+        google_provider?(token.provider) and token.provider not in excluded
+      end)
       |> Enum.any?(fn token ->
         granted = MapSet.new(token.scopes || [])
         MapSet.subset?(required_google_scopes, granted)

@@ -10,7 +10,7 @@ defmodule Maraithon.AgentHarness.ConnectorCatalog do
   def for_user(user_id, manifest) when is_binary(user_id) and is_map(manifest) do
     connected =
       user_id
-      |> ConnectedAccounts.list_for_user()
+      |> ConnectedAccounts.list_personal_for_user()
       |> Enum.group_by(& &1.provider)
 
     required = Manifest.get(manifest, :required_connectors, %{})

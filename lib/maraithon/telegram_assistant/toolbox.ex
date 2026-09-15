@@ -4804,7 +4804,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp source_health_summary(user_id, open_insights)
        when is_binary(user_id) and is_list(open_insights) do
     gmail_accounts =
-      ConnectedAccounts.list_for_user(user_id)
+      ConnectedAccounts.list_personal_for_user(user_id)
       |> Enum.filter(&gmail_account?/1)
       |> Enum.map(&gmail_account_health(user_id, &1))
 

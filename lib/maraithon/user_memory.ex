@@ -193,7 +193,7 @@ defmodule Maraithon.UserMemory do
   end
 
   defp connected_accounts(user_id) do
-    ConnectedAccounts.list_for_user(user_id)
+    ConnectedAccounts.list_personal_for_user(user_id)
     |> Enum.map(fn account ->
       %{
         provider: public_provider(account.provider),
