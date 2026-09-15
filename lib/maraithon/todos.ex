@@ -648,12 +648,21 @@ defmodule Maraithon.Todos do
     end
   end
 
-  @doc "Return due waiting work to its user for review, without claiming completion."
+  @doc "Review due waiting work without changing its owner or racing a live delegation."
   def review_waiting_workflows(user_id, now) do
-    Todo
+    from(t in Todo, as: :waiting_todo)
     |> where([t], t.user_id == ^user_id and t.status in ["open", "snoozed"])
     |> where([t], fragment("?->>'state' = 'waiting'", t.workflow))
     |> where([t], fragment("(?->>'waiting_until')::timestamptz <= ?", t.workflow, ^now))
+    |> where(
+      not exists(
+        from d in Maraithon.Delegations.Delegation,
+          where:
+            d.todo_id == parent_as(:waiting_todo).id and
+              d.state not in ["completed", "stopped", "expired"],
+          select: 1
+      )
+    )
     |> order_by([t], asc: t.updated_at)
     |> limit(20)
     |> Repo.all()
@@ -664,8 +673,8 @@ defmodule Maraithon.Todos do
         user_id,
         todo.id,
         %{
-          "state" => "you_own",
-          "owner" => %{"kind" => "user"},
+          "state" => if(workflow["owner"]["kind"] == "person", do: "they_own", else: "you_own"),
+          "owner" => workflow["owner"],
           "expected_revision" => workflow["revision"],
           "request_id" => "waiting-review:#{todo.id}:#{workflow["revision"]}",
           "next_action" =>

@@ -21,6 +21,11 @@ defmodule Maraithon.Delegations.Decision do
 
   defp resume(_job, :superseded), do: {:ok, :superseded}
 
+  # The validated turn and decision event were committed with the completed Run.
+  # A retry only republishes its pending wake; it cannot reopen the model phase.
+  defp resume(_job, %{turn: %{status: "validated"}, run: %{status: "completed"} = run}),
+    do: {:ok, %{state: "decided", run_id: run.id}}
+
   defp resume(job, context) do
     with {:ok, %{run: _} = context} <- prepare(job, context),
          {:ok, checkpoint, _profile, state} <- Continuation.load(context.run, attrs(context)) do

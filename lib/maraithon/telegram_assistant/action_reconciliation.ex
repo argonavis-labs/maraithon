@@ -56,7 +56,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
     end
   end
 
-  def enqueue(action) do
+  def enqueue(action, opts \\ []) do
     if supported?(action) do
       BackgroundJobs.enqueue(@job_type, %{
         user_id: action.user_id,
@@ -64,7 +64,10 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
         partition_key: "prepared-action:#{action.id}",
         rate_limit_key: "action-reconciliation:#{action.user_id}",
         dedupe_key: "action-reconciliation:#{action.id}",
-        scheduled_at: DateTime.add(DateTime.utc_now(), 60, :second),
+        scheduled_at:
+          Keyword.get_lazy(opts, :scheduled_at, fn ->
+            DateTime.add(DateTime.utc_now(), 60, :second)
+          end),
         max_attempts: 3,
         payload: %{
           "action_id" => action.id,
@@ -92,7 +95,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
            checks when is_integer(checks) and checks in 0..@max_checks <-
              (job.result || %{})["checks"] || 0 do
         if checks == @max_checks do
-          {:ok, %{state: "needs_review", checks: checks}}
+          finish_check(action, {:ok, %{state: "needs_review", checks: checks}})
         else
           reconcile_check(action, checks)
         end
@@ -111,10 +114,19 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
         {:error, reason} -> pending(checks, reason)
       end
 
+    finish_check(action, result)
+  end
+
+  defp finish_check(action, result) do
+    persisted =
+      if match?({:ok, %{state: "needs_review"}}, result),
+        do: Maraithon.Delegations.Receipts.needs_review(action),
+        else: :ok
+
     if action.authorization_kind == "delegation_grant",
       do: Maraithon.Delegations.Outbox.publish_pending(action.user_id)
 
-    result
+    if persisted == :ok, do: result, else: persisted
   end
 
   defp pending(checks, reason) when checks + 1 < @max_checks do

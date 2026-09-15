@@ -43,6 +43,7 @@ defmodule Maraithon.Delegations.Authority do
                binding = action.payload[Binding.key()]
 
                with true <- matches_job?(job, binding) and current?(context, binding),
+                    true <- workflow_current?(context.delegation),
                     true <- Gates.sends_enabled?(action.user_id, context.delegation.provider),
                     true <-
                       current.status == "confirmed" and context.turn.status == "dispatched" and
@@ -147,6 +148,16 @@ defmodule Maraithon.Delegations.Authority do
       d.state in ~w(ready syncing deciding sending) and
       d.source_revision == binding["source_revision"] and
       d.workflow_revision == binding["workflow_revision"]
+  end
+
+  def workflow_current?(d) do
+    case Repo.get_by(Maraithon.Todos.Todo, id: d.todo_id, user_id: d.user_id) do
+      %{status: status} = todo when status in ~w(open snoozed) ->
+        Maraithon.Todos.Workflow.current(todo)["revision"] == d.workflow_revision
+
+      _ ->
+        false
+    end
   end
 
   defp require_job!(%BackgroundJob{user_id: user_id} = job, user_id) do

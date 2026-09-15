@@ -9,6 +9,31 @@ defmodule Maraithon.Delegations.Sources do
   @max_messages 100
   @max_bytes 240_000
 
+  def verify_before_send(_job, %{delegation: %{provider_thread_id: nil}}), do: :ok
+
+  def verify_before_send(job, context) do
+    d = context.delegation
+
+    with {:ok, token} <- GoogleAccount.access_token(d.user_id, d.connected_account_id),
+         {:ok, messages} <-
+           Gmail.fetch_thread_content(token, d.provider_thread_id, access_token: true),
+         {:ok, fresh} <- snapshot(messages, d.connected_account_id, d.provider_thread_id) do
+      previous = context.run.prompt_snapshot["sources"]
+      ids = fn source -> MapSet.new(source["messages"], & &1["message_id"]) end
+
+      if ids.(fresh) == ids.(previous) do
+        :ok
+      else
+        case Jobs.transaction(job, fn _ ->
+               Enum.each(messages, &Ingress.gmail!(job.user_id, d.connected_account_id, &1))
+             end) do
+          {:ok, _} -> {:error, :source_changed}
+          error -> error
+        end
+      end
+    end
+  end
+
   def execute(%BackgroundJob{job_type: "delegation_sync"} = job) do
     job = BackgroundJob.hydrate_payloads(job)
 

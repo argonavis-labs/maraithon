@@ -38,7 +38,10 @@ defmodule Maraithon.Delegations.Jobs do
           source_revision: d.source_revision,
           wake_reason: event.kind,
           model: model,
-          data: %{"event_id" => event.id}
+          data: %{
+            "event_id" => event.id,
+            "reminder" => event.kind == "timer_due" and not is_nil(d.follow_up_at)
+          }
         })
         |> Repo.insert!()
 
@@ -101,15 +104,10 @@ defmodule Maraithon.Delegations.Jobs do
   end
 
   def start_decide!(d, event, now) do
-    turn =
-      Repo.get_by!(Turn, id: event.data["turn_id"], delegation_id: d.id, user_id: d.user_id)
-      |> Turn.hydrate()
+    context = context!(d, event)
+    binding = context.run.prompt_snapshot[Binding.key()]
 
-    run = Repo.get_by!(Run, id: turn.run_id, user_id: d.user_id) |> Run.hydrate_payloads()
-    binding = run.prompt_snapshot[Binding.key()]
-    context = Authority.lock_context!(binding, d.user_id)
-
-    if Authority.current?(context, binding) and is_map(run.prompt_snapshot["sources"]) do
+    if Authority.current?(context, binding) and is_map(context.run.prompt_snapshot["sources"]) do
       enqueue!("delegation_decide", d, binding, now)
       %{d | state: "deciding", next_wake_at: nil}
     else
@@ -117,9 +115,19 @@ defmodule Maraithon.Delegations.Jobs do
     end
   end
 
+  def context!(d, event) do
+    turn =
+      Repo.get_by!(Turn, id: event.data["turn_id"], delegation_id: d.id, user_id: d.user_id)
+      |> Turn.hydrate()
+
+    run = Repo.get_by!(Run, id: turn.run_id, user_id: d.user_id) |> Run.hydrate_payloads()
+    binding = run.prompt_snapshot[Binding.key()]
+    Authority.lock_context!(binding, d.user_id)
+  end
+
   def transaction(%BackgroundJob{} = job, fun) do
     JobAuthority.transaction(job, fn ->
-      context = Authority.lock_context!(job.payload, job.user_id)
+      context = Authority.lock_context!(Map.delete(job.payload, "action_id"), job.user_id)
 
       unless Authority.matches_job?(job, context.run.prompt_snapshot[Binding.key()]),
         do: Repo.rollback(:delegation_job_mismatch)
@@ -150,7 +158,7 @@ defmodule Maraithon.Delegations.Jobs do
     })
   end
 
-  def finish({:ok, :superseded}, _job), do: {:ok, %{state: "superseded"}}
+  def finish({:ok, :superseded}, job), do: finish({:ok, %{state: "superseded"}}, job)
 
   def finish({:ok, result}, job) do
     Outbox.publish_pending(job.user_id)

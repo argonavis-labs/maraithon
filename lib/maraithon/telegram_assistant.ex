@@ -1654,6 +1654,37 @@ defmodule Maraithon.TelegramAssistant do
   def confirm_and_execute(%PreparedAction{} = prepared_action),
     do: confirm_and_execute(prepared_action, [])
 
+  @doc false
+  def execute_granted_action(%PreparedAction{authorization_kind: "delegation_grant"} = action) do
+    case Execution.capture_authority() do
+      %Maraithon.Runtime.BackgroundJob{
+        job_type: "delegation_send",
+        user_id: user_id,
+        payload: payload
+      }
+      when user_id == action.user_id ->
+        if payload["action_id"] == action.id,
+          do: execute_confirmed_prepared_action(action, durable: false),
+          else: {:error, action, :delegation_job_mismatch}
+
+      _ ->
+        {:error, action, :delegation_job_required}
+    end
+  end
+
+  @doc false
+  def freeze_granted_payload(%PreparedAction{authorization_kind: "delegation_grant"} = action) do
+    if Repo.in_transaction?() and
+         Maraithon.Delegations.Binding.matches?(:action, action, action.payload) do
+      payload = ActionReconciliation.freeze_identity(action, action.payload)
+
+      with {:ok, hash} <- prepared_payload_hash(payload),
+           do: {:ok, Map.put(payload, @prepared_confirmed_payload_hash_key, hash)}
+    else
+      {:error, :delegation_binding_required}
+    end
+  end
+
   def confirm_and_execute(%PreparedAction{} = prepared_action, opts) when is_list(opts) do
     # The confirmation decision is committed before any provider call. Mobile
     # payload edits run while this row is locked and are frozen by the same
@@ -2026,8 +2057,36 @@ defmodule Maraithon.TelegramAssistant do
 
   defp claim_prepared_action_execution(%PreparedAction{} = prepared_action) do
     with_locked_prepared_action(prepared_action, fn
-      %PreparedAction{authorization_kind: "delegation_grant"} = action ->
-        {:error, action, :delegation_admission_required}
+      %PreparedAction{authorization_kind: "delegation_grant", status: "confirmed"} = action ->
+        now = database_now!()
+
+        cond do
+          prepared_execution_claim_active?(action.payload, now) ->
+            {:error, action, :prepared_action_execution_in_progress}
+
+          not Maraithon.Delegations.Actions.unentered?(action) ->
+            # Any earlier entry is observation-only, even if its lease or grant
+            # changed. A lost token cannot turn it back into an unentered send.
+            case checkpoint_prepared_action_unknown_locked(
+                   action,
+                   action.payload,
+                   :prepared_action_execution_owner_lost
+                 ) do
+              {:unknown, unknown} ->
+                {:error, unknown, :prepared_action_execution_unknown, :manual_reconciliation}
+
+              other ->
+                other
+            end
+
+          true ->
+            with :ok <- validate_prepared_payload_integrity(action.payload),
+                 :ok <- Maraithon.Delegations.Execution.admit_entry(action, now) do
+              claim_valid_prepared_action_execution(action, action.payload, now)
+            else
+              {:error, reason} -> {:error, action, reason}
+            end
+        end
 
       %PreparedAction{status: "confirmed"} = action ->
         payload = action.payload || %{}

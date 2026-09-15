@@ -38,6 +38,9 @@ defmodule Maraithon.Delegations.StateMachine do
 
   def apply(%{state: "paused"} = d, _event), do: {%{d | next_wake_at: nil}, []}
 
+  def apply(%{state: "needs_user"} = d, %{kind: kind}) when kind in ~w(send_receipt send_unknown),
+    do: {d, []}
+
   def apply(d, %{kind: "inbound_message", data: %{"classification" => classification}} = event) do
     case classification do
       "human_send" ->
@@ -135,12 +138,44 @@ defmodule Maraithon.Delegations.StateMachine do
 
   def apply(d, %{kind: "send_unknown"}), do: {%{d | state: "reconciling"}, [:observe_action]}
 
+  def apply(d, %{kind: "reconciliation_exhausted"}),
+    do:
+      hold(
+        d,
+        "I couldn't confirm delivery. Please check the conversation before sending anything again."
+      )
+
   def apply(d, %{kind: "capacity_hold", data: data}) do
     {%{d | state: "waiting_capacity", data: Map.put(d.data, "hold_reason", data["reason"])},
      [{:schedule_capacity, data}]}
   end
 
   def apply(d, %{kind: "source_gap"}), do: hold(d, "The conversation isn't fully synced yet.")
+
+  def apply(%{state: state} = d, %{
+        kind: "failure",
+        data: %{"failure_code" => "slot_no_longer_free"}
+      })
+      when state in ~w(sending reconciling) do
+    if (d.data["slot_reoffers"] || 0) < 1 do
+      data =
+        d.data
+        |> Map.drop(~w(offered_slots offered_calendar_account_ids))
+        |> Map.put("slot_reoffers", 1)
+        |> Map.put(
+          "ledger",
+          Map.put(
+            d.data["ledger"] || %{},
+            "booking_conflict",
+            "The accepted slot became busy. Offer fresh available times."
+          )
+        )
+
+      {%{d | state: "ready", data: data, next_wake_at: nil}, [:enqueue_sync]}
+    else
+      hold(d, "The meeting time changed again. Please choose a time before I continue.")
+    end
+  end
 
   def apply(d, %{kind: "failure", data: data}),
     do: hold(d, data["question"] || "This conversation needs your attention.")

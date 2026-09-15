@@ -9,10 +9,12 @@ defmodule Maraithon.Delegations.Budget do
 
   def quote(model) do
     if is_binary(model) and Regex.match?(~r/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:-]+$/, model) do
+      base_url =
+        Application.get_env(:maraithon, :openrouter, [])
+        |> Keyword.get(:models_base_url, "https://openrouter.ai/api/v1/models")
+
       with {:ok, %{"data" => %{"id" => ^model, "endpoints" => endpoints}}} <-
-             HTTP.get("https://openrouter.ai/api/v1/models/#{model}/endpoints", [],
-               max_response_body_bytes: 128_000
-             ),
+             HTTP.get("#{base_url}/#{model}/endpoints", [], max_response_body_bytes: 128_000),
            {:ok, quote} <- price(endpoints) do
         {:ok,
          Map.merge(quote, %{
@@ -88,6 +90,9 @@ defmodule Maraithon.Delegations.Budget do
 
       not Authority.current?(context, context.run.prompt_snapshot[Binding.key()]) ->
         {:error, :delegation_superseded}
+
+      not Authority.workflow_current?(context.delegation) ->
+        {:error, :workflow_changed}
 
       Map.has_key?(entries, key) ->
         {:error, :model_already_entered}

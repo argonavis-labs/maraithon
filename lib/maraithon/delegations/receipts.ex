@@ -1,5 +1,6 @@
 defmodule Maraithon.Delegations.Receipts do
   @moduledoc "Atomic prepared-action outcomes, turn settlement and conversation wake intents."
+  import Ecto.Query
   alias Maraithon.Repo
   alias Maraithon.Delegations.{Authority, Binding, Delegation, Event, Outbox, Turn}
   alias Maraithon.TelegramAssistant.PreparedAction
@@ -15,7 +16,7 @@ defmodule Maraithon.Delegations.Receipts do
   # This remains writable after revocation: a receipt is evidence, not new authority.
   def record!(%PreparedAction{authorization_kind: "delegation_grant", status: status} = action)
       when status in ~w(executed execution_unknown failed) do
-    %{delegation: d, turn: turn} = Authority.lock_action_scope!(action)
+    %{delegation: d, turn: turn, run: run} = Authority.lock_action_scope!(action)
     key = "action:#{action.id}:#{status}"
 
     unless Repo.get_by(Event, delegation_id: d.id, event_key: key) do
@@ -35,6 +36,25 @@ defmodule Maraithon.Delegations.Receipts do
       data = Map.put(d.data, "last_send_status", status)
 
       data =
+        if status == "executed" and get_in(turn.data, ["decision", "kind"]) == "propose_times" do
+          scheduling = run.prompt_snapshot["scheduling"]
+          selected = turn.data["decision"]["slot_ids"]
+
+          slots =
+            Enum.filter(
+              scheduling["slots"],
+              &(Maraithon.Delegations.Policy.slot_id(&1) in selected)
+            )
+
+          Map.merge(data, %{
+            "offered_slots" => slots,
+            "offered_calendar_account_ids" => scheduling["coverage"]["account_ids"]
+          })
+        else
+          data
+        end
+
+      data =
         if status != "execution_unknown" and data["hold_reason"] == "send_may_be_in_flight",
           do: Map.delete(data, "hold_reason"),
           else: data
@@ -42,6 +62,9 @@ defmodule Maraithon.Delegations.Receipts do
       changes = %{
         last_action_id: action.id,
         revision: d.revision + 1,
+        reminder_count_cycle:
+          d.reminder_count_cycle +
+            if(status == "executed" and turn.data["reminder"] == true, do: 1, else: 0),
         lifetime_sends:
           d.lifetime_sends +
             if(status == "executed" and action.action_type in ~w(gmail_send slack_post),
@@ -71,6 +94,11 @@ defmodule Maraithon.Delegations.Receipts do
       }
 
       payload =
+        if status == "failed" and action.error == "slot_no_longer_free",
+          do: Map.put(payload, "failure_code", "slot_no_longer_free"),
+          else: payload
+
+      payload =
         if status == "failed",
           do:
             Map.put(
@@ -87,6 +115,30 @@ defmodule Maraithon.Delegations.Receipts do
   end
 
   def record!(action), do: action
+
+  def needs_review(%PreparedAction{authorization_kind: "delegation_grant"} = action) do
+    Maraithon.AssistantChat.Execution.write(fn ->
+      %{delegation: d, turn: turn} = Authority.lock_action_scope!(action)
+
+      current =
+        Repo.one!(from a in PreparedAction, where: a.id == ^action.id, lock: "FOR UPDATE")
+        |> PreparedAction.hydrate_payload()
+
+      if current.status in ~w(confirmed execution_unknown) do
+        Outbox.append!(d, "reconciliation_exhausted", "review:#{action.id}", %{
+          "turn_id" => turn.id,
+          "grant_version" => turn.grant_version,
+          "action_id" => action.id,
+          "action_type" => action.action_type,
+          "confirmed_payload_hash" => current.payload[@hash]
+        })
+      end
+
+      :ok
+    end)
+  end
+
+  def needs_review(_), do: :ok
 
   def valid_event?(d, event) do
     with {:ok, id} <- Ecto.UUID.cast(event.data["action_id"]),
@@ -109,6 +161,9 @@ defmodule Maraithon.Delegations.Receipts do
 
         "failure" ->
           action.status == "failed"
+
+        "reconciliation_exhausted" ->
+          action.status in ~w(confirmed execution_unknown)
 
         _ ->
           false

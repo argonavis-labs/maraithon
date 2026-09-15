@@ -134,7 +134,7 @@ defmodule Maraithon.Delegations.Coordinator do
       event.kind == "user_action" ->
         event.data["grant_version"] == grant.version
 
-      event.kind in ~w(send_receipt send_unknown) or
+      event.kind in ~w(send_receipt send_unknown reconciliation_exhausted) or
           (event.kind == "failure" and is_binary(event.data["action_id"])) ->
         Maraithon.Delegations.Receipts.valid_event?(d, event) and current_turn?(d, event)
 
@@ -156,7 +156,7 @@ defmodule Maraithon.Delegations.Coordinator do
 
           turn ->
             event.data["grant_version"] == turn.grant_version and
-              ((event.kind in ~w(send_receipt send_unknown failure) and
+              ((event.kind in ~w(send_receipt send_unknown failure reconciliation_exhausted) and
                   is_binary(turn.prepared_action_id) and
                   turn.prepared_action_id == event.data["action_id"]) or
                  (turn.status in ~w(deciding validated dispatched) and

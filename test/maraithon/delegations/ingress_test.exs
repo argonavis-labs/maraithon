@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.IngressTest do
   alias Maraithon.{Accounts, Repo}
   alias Maraithon.Delegations.{Delegation, Event, Grant, Ingress, Scope, StateMachine}
 
-  setup do
+  setup tags do
     user_id = "delegation-ingress-#{Ecto.UUID.generate()}@example.invalid"
     {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -26,10 +26,21 @@ defmodule Maraithon.Delegations.IngressTest do
         dedupe_key: Ecto.UUID.generate()
       })
 
+    owner =
+      if tags[:tracked_owner] do
+        person = Repo.insert!(%Maraithon.Crm.Person{user_id: user_id, display_name: "Charlie"})
+        %{"kind" => "person", "id" => person.id, "label" => "Charlie"}
+      else
+        Maraithon.Todos.Workflow.user_owner(todo)
+      end
+
     scope = %{
-      "identity" => %{"email" => "kent@runner.now"},
+      "identity" => %{"email" => "kent@runner.now", "account_id" => account.id},
       "to" => ["kent.fenwick@gmail.com"],
-      "cc" => []
+      "cc" => [],
+      "subject" => "[Maraithon eval] A question",
+      "task_owner" => owner,
+      "outcome" => "Get the test colour"
     }
 
     d =
@@ -61,7 +72,7 @@ defmodule Maraithon.Delegations.IngressTest do
       thread_id: "aabbcc",
       from: "Kent <kent.fenwick@gmail.com>",
       to: "Kent <kent@runner.now>",
-      subject: "Eval",
+      subject: "[Maraithon eval] A question",
       text_body: "The colour is indigo.",
       labels: ["INBOX"],
       internal_date: DateTime.add(d.inserted_at, 1),
@@ -241,31 +252,8 @@ defmodule Maraithon.Delegations.IngressTest do
 
   test "lost model responses remain reserved across turns and old budget windows", c do
     alias Maraithon.Delegations.{Actions, Authority, Binding, Budget, Jobs, Turn}
-    alias Maraithon.LLM.CostMonitor
-    alias Maraithon.Runtime.BackgroundJobs
     alias Maraithon.TelegramAssistant.Run
-    original = Application.get_env(:maraithon, CostMonitor)
-    Application.put_env(:maraithon, CostMonitor, enabled: true, projected_daily_usd: 3.0)
-
-    on_exit(fn ->
-      if original,
-        do: Application.put_env(:maraithon, CostMonitor, original),
-        else: Application.delete_env(:maraithon, CostMonitor)
-    end)
-
-    assert {:ok, _} =
-             BackgroundJobs.enqueue("runtime_recurring:llm_cost_monitor", %{
-               result: %{
-                 "status" => "within_budget",
-                 "checked_at" => DateTime.to_iso8601(DateTime.utc_now()),
-                 "daily_cost_usd" => 0,
-                 "rolling_cost_usd" => 0,
-                 "threshold_usd" => 6,
-                 "key_fingerprint" =>
-                   :crypto.hash(:sha256, Maraithon.LLM.openrouter_api_key() || "")
-                   |> Base.encode16(case: :lower)
-               }
-             })
+    ready_cost_monitor()
 
     grant = Maraithon.Delegations.current_grant(c.delegation)
     event = %{id: Ecto.UUID.generate(), kind: "user_action"}
@@ -324,6 +312,681 @@ defmodule Maraithon.Delegations.IngressTest do
                assert Repo.get!(Turn, next_turn.id).model_calls == 0
                :checked
              end)
+  end
+
+  test "a verified turn freezes the exact mailbox, recipients, body and reply parent before the undo window",
+       c do
+    enable_gmail(c.user_id)
+    alias Maraithon.Delegations.{Binding, Execution, Turn}
+    alias Maraithon.Runtime.BackgroundJob
+    alias Maraithon.TelegramAssistant.PreparedAction
+
+    assert {:ok, action} =
+             Repo.transaction(fn ->
+               {d, grant, event} = decision_turn(c)
+               now = Maraithon.Runtime.DatabaseClock.now!()
+               next = Execution.prepare!(d, grant, event, now)
+               assert next.state == "sending"
+               [action] = Repo.all(PreparedAction) |> Enum.map(&PreparedAction.hydrate_payload/1)
+               assert action.authorization_kind == "delegation_grant"
+               assert action.status == "confirmed"
+               assert action.payload["account_id"] == c.account.id
+               assert action.payload["to"] == "kent.fenwick@gmail.com"
+               assert action.payload["from"] == "kent@runner.now"
+               assert action.payload["thread_id"] == "aabbcc"
+               assert action.payload["reply_to_message_id"] == c.message.message_id
+               assert is_binary(action.payload["_maraithon_confirmed_payload_sha256"])
+               assert action.payload[Binding.key()]["delegation_id"] == d.id
+               turn = Repo.get!(Turn, action.delegation_turn_id)
+               assert turn.status == "dispatched"
+               assert DateTime.diff(turn.available_at, now) >= 120
+               jobs = Repo.all(BackgroundJob) |> Enum.map(&BackgroundJob.hydrate_payloads/1)
+               [send_job] = Enum.filter(jobs, &(&1.job_type == "delegation_send"))
+               [reconcile] = Enum.filter(jobs, &(&1.job_type == "assistant_action_reconcile"))
+               assert send_job.payload["action_id"] == action.id
+               assert send_job.scheduled_at == turn.available_at
+               assert DateTime.compare(reconcile.scheduled_at, turn.available_at) == :gt
+               assert Execution.prepare!(next, grant, event, now).state == "sending"
+               assert Repo.aggregate(PreparedAction, :count) == 1
+               assert Repo.get!(PreparedAction, action.id).status == "confirmed"
+               action
+             end)
+
+    assert {:error, ^action, :delegation_job_required} =
+             Maraithon.TelegramAssistant.execute_granted_action(action)
+
+    assert Repo.get!(PreparedAction, action.id).status == "confirmed"
+  end
+
+  test "a changed todo prevents even a reviewed model decision from becoming a send", c do
+    enable_gmail(c.user_id)
+
+    assert {:ok, :held} =
+             Repo.transaction(fn ->
+               {d, grant, event} = decision_turn(c)
+
+               assert {:ok, _} =
+                        Maraithon.Todos.transition_workflow(c.user_id, d.todo_id, %{
+                          "state" => "working",
+                          "owner" => %{"kind" => "user"},
+                          "expected_revision" => d.workflow_revision,
+                          "next_action" => "Review the changed task.",
+                          "reason" => "The user changed the next move.",
+                          "request_id" => Ecto.UUID.generate()
+                        })
+
+               next =
+                 Maraithon.Delegations.Execution.prepare!(d, grant, event, DateTime.utc_now())
+
+               assert next.state == "needs_user"
+               assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
+               :held
+             end)
+  end
+
+  @tag tracked_owner: true
+  test "waiting and clarification preserve Charlie as the owner", c do
+    alias Maraithon.Delegations.Outcomes
+    alias Maraithon.Todos.{Todo, Workflow}
+    owner = c.scope["task_owner"]
+    grant = Maraithon.Delegations.current_grant(c.delegation)
+    event = %{id: Ecto.UUID.generate(), data: %{}}
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+               waiting = Outcomes.follow_up(c.delegation, grant, DateTime.utc_now())
+               waiting = Outcomes.apply(waiting, grant, event, :progress)
+               assert waiting.state == "waiting_reply"
+               todo = Repo.get!(Todo, waiting.todo_id)
+               assert Workflow.current(todo)["state"] == "waiting"
+               assert Workflow.current(todo)["owner"] == owner
+
+               Maraithon.Todos.review_waiting_workflows(
+                 c.user_id,
+                 DateTime.add(waiting.follow_up_at, 1)
+               )
+
+               assert Workflow.current(Repo.get!(Todo, waiting.todo_id))["revision"] ==
+                        waiting.workflow_revision
+
+               review =
+                 Outcomes.apply(
+                   %{waiting | state: "needs_user", data: %{"question" => "Which date?"}},
+                   grant,
+                   %{event | id: Ecto.UUID.generate()},
+                   :progress
+                 )
+
+               assert review.state == "needs_user"
+               todo = Repo.get!(Todo, waiting.todo_id)
+               assert Workflow.current(todo)["state"] == "they_own"
+               assert Workflow.current(todo)["owner"] == owner
+               :checked
+             end)
+  end
+
+  @tag tracked_owner: true
+  test "a due waiting review preserves another person's ownership after delegation ends", c do
+    alias Maraithon.Delegations.Outcomes
+    alias Maraithon.Todos.{Todo, Workflow}
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+               grant = Maraithon.Delegations.current_grant(c.delegation)
+               waiting = Outcomes.follow_up(c.delegation, grant, DateTime.utc_now())
+               Outcomes.apply(waiting, grant, %{id: Ecto.UUID.generate(), data: %{}}, :progress)
+               c.delegation |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
+
+               Maraithon.Todos.review_waiting_workflows(
+                 c.user_id,
+                 DateTime.add(waiting.follow_up_at, 1)
+               )
+
+               workflow = Workflow.current(Repo.get!(Todo, waiting.todo_id))
+               assert workflow["state"] == "they_own"
+               assert workflow["owner"] == c.scope["task_owner"]
+               :checked
+             end)
+  end
+
+  for proven <- [true, false] do
+    @tag outcome_proven: proven
+    test "completion requires independent outcome proof (#{proven})", c do
+      alias Maraithon.Delegations.{Outcomes, Turn}
+      alias Maraithon.Todos.{Todo, Workflow}
+
+      assert {:ok, :checked} =
+               Repo.transaction(fn ->
+                 {d, grant, event} = decision_turn(c)
+                 turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
+
+                 turn
+                 |> Turn.changeset(%{
+                   data:
+                     Map.merge(turn.data, %{
+                       "decision" => %{
+                         "kind" => "complete",
+                         "reason" => "The colour is indigo.",
+                         "evidence" => [c.message.message_id]
+                       },
+                       "policy_review" => %{
+                         "allowed" => true,
+                         "outcome_proven" => c.outcome_proven,
+                         "reason" => "Checked against the reply"
+                       }
+                     })
+                 })
+                 |> Repo.update!()
+
+                 result = Outcomes.apply(%{d | state: "completed"}, grant, event, :complete)
+                 todo = Repo.get!(Todo, d.todo_id)
+
+                 if c.outcome_proven do
+                   assert result.state == "completed"
+                   assert Workflow.current(todo)["state"] == "done"
+                   assert Repo.get!(Turn, turn.id).status == "settled"
+                 else
+                   assert result.state == "needs_user"
+                   assert todo.status == "open"
+                 end
+
+                 :checked
+               end)
+    end
+  end
+
+  test "a leased model turn checkpoints decisions and actual cost before dispatch", c do
+    alias Maraithon.Delegations.{Decision, Jobs, Turn}
+    alias Maraithon.LLM.OpenRouterProvider
+    enable_gmail(c.user_id)
+    {node, partitions} = exact_authority(c.user_id)
+    bypass = Bypass.open()
+    model = "meta/muse-spark-1.3-contributor"
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    configure(
+      Maraithon.Runtime,
+      Keyword.merge(runtime,
+        llm_provider: OpenRouterProvider,
+        llm_provider_name: "openrouter",
+        openrouter_model: model,
+        openrouter_api_key: "local-eval-only"
+      )
+    )
+
+    configure(:openrouter,
+      base_url: "http://localhost:#{bypass.port}/api/v1/chat/completions",
+      models_base_url: "http://localhost:#{bypass.port}/api/v1/models"
+    )
+
+    ready_cost_monitor()
+    calls = start_supervised!({Agent, fn -> 0 end})
+
+    Bypass.expect(bypass, "GET", "/api/v1/models/#{model}/endpoints", fn conn ->
+      json(conn, %{
+        "data" => %{
+          "id" => model,
+          "endpoints" => [
+            %{
+              "tag" => "meta",
+              "context_length" => 1_048_576,
+              "supported_parameters" => ["max_tokens"],
+              "pricing" => %{"prompt" => "0.0000001", "completion" => "0.0000002"}
+            }
+          ]
+        }
+      })
+    end)
+
+    Bypass.expect(bypass, "POST", "/api/v1/chat/completions", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      request = Jason.decode!(raw)
+      assert request["model"] == model
+      assert request["provider"]["only"] == ["meta"]
+
+      assert Decimal.equal?(
+               Decimal.new(request["provider"]["max_price"]["prompt"]),
+               Decimal.new("0.1")
+             )
+
+      n = Agent.get_and_update(calls, &{&1 + 1, &1 + 1})
+      assert n in [1, 2]
+
+      content =
+        if n == 1,
+          do: %{
+            "kind" => "send",
+            "body" => "Got it. Indigo.",
+            "reason" => "Confirm the answer",
+            "evidence" => [c.message.message_id]
+          },
+          else: %{"allowed" => true, "outcome_proven" => true, "reason" => "Matches the source"}
+
+      json(conn, %{
+        "id" => "gen-#{n}",
+        "model" => model,
+        "choices" => [
+          %{
+            "finish_reason" => "stop",
+            "message" => %{"role" => "assistant", "content" => Jason.encode!(content)}
+          }
+        ],
+        "usage" => %{
+          "prompt_tokens" => 500,
+          "completion_tokens" => 100,
+          "total_tokens" => 600,
+          "cost" => 0.0001
+        }
+      })
+    end)
+
+    assert {:ok, _} =
+             Repo.transaction(fn ->
+               {d, _grant, event} = decision_turn(c)
+               turn = Repo.get!(Turn, event.data["turn_id"]) |> Turn.hydrate()
+
+               turn
+               |> Turn.changeset(%{
+                 status: "deciding",
+                 data: Map.drop(turn.data, ~w(decision policy_review))
+               })
+               |> Repo.update!()
+
+               Jobs.start_decide!(d, event, DateTime.utc_now())
+             end)
+
+    run_leased_job(node, partitions, "delegation_decide", fn job ->
+      assert {:ok, %{state: "decided"}} = Decision.execute(job)
+      assert {:ok, %{state: "decided"}} = result = Decision.execute(job)
+      result
+    end)
+
+    assert Agent.get(calls, & &1) == 2
+    turn = Repo.one!(Turn) |> Turn.hydrate()
+    assert turn.status == "validated"
+    assert turn.model_calls == 2
+    assert turn.reserved_micro_usd == 0
+    assert turn.cost_micro_usd == 200
+    assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == 200
+    assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) == 1
+    assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
+  end
+
+  defp decision_turn(c) do
+    alias Maraithon.Delegations.{Jobs, Sources, Turn}
+    alias Maraithon.TelegramAssistant.Run
+    Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+    grant = Maraithon.Delegations.current_grant(c.delegation)
+    event = %{id: Ecto.UUID.generate(), kind: "user_action"}
+    Jobs.start_sync!(c.delegation, grant, event, DateTime.utc_now())
+    d = c.delegation |> Delegation.changeset(%{state: "deciding"}) |> Repo.update!()
+    turn = Repo.one!(Turn) |> Turn.hydrate()
+    run = Repo.get!(Run, turn.run_id) |> Run.hydrate_payloads()
+    {:ok, sources} = Sources.snapshot([c.message], c.account.id, "aabbcc")
+
+    run
+    |> Run.changeset(%{
+      status: "completed",
+      prompt_snapshot: Map.put(run.prompt_snapshot, "sources", sources)
+    })
+    |> Repo.update!()
+
+    decision = %{
+      "kind" => "send",
+      "body" => "Got it. Indigo.",
+      "reason" => "Confirm the answer",
+      "evidence" => [c.message.message_id]
+    }
+
+    turn
+    |> Turn.changeset(%{
+      status: "validated",
+      data:
+        Map.merge(turn.data, %{
+          "decision" => decision,
+          "policy_review" => %{"allowed" => true, "reason" => "Matches the source"}
+        })
+    })
+    |> Repo.update!()
+
+    {d, grant, %{id: Ecto.UUID.generate(), kind: "decision", data: %{"turn_id" => turn.id}}}
+  end
+
+  for response <- [:accepted, :lost_response, :unproven] do
+    @tag timeout: 30_000, send_response: response
+    test "leased sender #{response} never replays an entered send", c do
+      alias Maraithon.Delegations.{Execution, Turn}
+      alias Maraithon.Runtime.BackgroundJob
+      alias Maraithon.TelegramAssistant.PreparedAction
+      enable_gmail(c.user_id)
+      {node, partitions} = exact_authority(c.user_id)
+      bypass = Bypass.open()
+      accepted = start_supervised!({Agent, fn -> nil end})
+      original = Application.get_env(:maraithon, :gmail, [])
+      Application.put_env(:maraithon, :gmail, api_base_url: "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.put_env(:maraithon, :gmail, original) end)
+
+      {:ok, _} =
+        Maraithon.OAuth.store_tokens(c.user_id, "google:eval", %{
+          access_token: "local-eval-only",
+          refresh_token: "fixture",
+          expires_in: 3600,
+          scopes: ["https://www.googleapis.com/auth/gmail.compose"]
+        })
+
+      message = %{
+        "id" => c.message.message_id,
+        "threadId" => "aabbcc",
+        "labelIds" => ["INBOX"],
+        "internalDate" => to_string(DateTime.to_unix(c.message.internal_date, :millisecond)),
+        "payload" => %{
+          "mimeType" => "text/plain",
+          "body" => %{"data" => Base.url_encode64(c.message.text_body, padding: false)},
+          "headers" =>
+            Enum.map(
+              [
+                {"From", c.message.from},
+                {"To", c.message.to},
+                {"Subject", c.message.subject},
+                {"Message-ID", c.message.internet_message_id}
+              ],
+              fn {k, v} -> %{"name" => k, "value" => v} end
+            )
+        }
+      }
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/users/me/threads/aabbcc",
+        &json(&1, %{"messages" => [message]})
+      )
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/users/me/messages/#{c.message.message_id}",
+        &json(&1, message)
+      )
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/users/me/settings/sendAs",
+        &json(&1, %{"sendAs" => [%{"isPrimary" => true, "sendAsEmail" => "kent@runner.now"}]})
+      )
+
+      Bypass.expect_once(bypass, "POST", "/users/me/messages/send", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        sent = raw |> Jason.decode!() |> Map.fetch!("raw") |> Base.url_decode64!(padding: false)
+        assert sent =~ "To: kent.fenwick@gmail.com\r\n"
+        assert sent =~ "From: kent@runner.now\r\n"
+        assert sent =~ "Got it. Indigo."
+        Agent.update(accepted, fn _ -> sent end)
+
+        if c.send_response == :accepted,
+          do: json(conn, %{"id" => "445566", "threadId" => "aabbcc"}),
+          else: Plug.Conn.resp(conn, 503, "Lost response after accepting the message")
+      end)
+
+      assert {:ok, action} =
+               Repo.transaction(fn ->
+                 {d, grant, event} = decision_turn(c)
+                 now = Maraithon.Runtime.DatabaseClock.now!()
+                 next = Execution.prepare!(d, grant, event, now)
+                 assert next.state == "sending"
+                 d |> Delegation.changeset(%{state: next.state}) |> Repo.update!()
+                 action = Repo.one!(PreparedAction) |> PreparedAction.hydrate_payload()
+                 # Advance the fixture past undo without sleeping or changing the payload.
+                 turn = Repo.get!(Turn, action.delegation_turn_id) |> Turn.hydrate()
+                 turn |> Turn.changeset(%{available_at: DateTime.add(now, -1)}) |> Repo.update!()
+
+                 job =
+                   Repo.get_by!(BackgroundJob, job_type: "delegation_send")
+                   |> BackgroundJob.hydrate_payloads()
+
+                 job
+                 |> BackgroundJob.changeset(%{
+                   queue: "delegation_eval_send",
+                   scheduled_at: DateTime.add(now, -1)
+                 })
+                 |> Repo.update!()
+
+                 action
+               end)
+
+      run_leased_job(node, partitions, "delegation_send", fn job ->
+        result = Execution.execute(job)
+
+        if c.send_response == :accepted do
+          assert {:ok, %{state: "sent"}} = result
+          assert {:ok, %{state: "superseded"}} = Execution.execute(job)
+        else
+          assert {:ok, %{state: "reconciling"}} = result
+          assert {:ok, %{state: "reconciling"}} = Execution.execute(job)
+        end
+
+        result
+      end)
+
+      if c.send_response != :accepted do
+        alias Maraithon.TelegramAssistant.ActionReconciliation
+        assert Repo.get!(PreparedAction, action.id).status == "execution_unknown"
+        assert Repo.get!(Delegation, c.delegation.id).lifetime_sends == 0
+
+        Bypass.expect_once(bypass, "GET", "/users/me/messages", fn conn ->
+          json(conn, %{
+            "messages" =>
+              if(c.send_response == :lost_response, do: [%{"id" => "445566"}], else: [])
+          })
+        end)
+
+        if c.send_response == :lost_response do
+          Bypass.expect_once(bypass, "GET", "/users/me/messages/445566", fn conn ->
+            [headers, body] = String.split(Agent.get(accepted, & &1), "\r\n\r\n", parts: 2)
+
+            headers =
+              Enum.map(String.split(headers, "\r\n"), fn line ->
+                [name, value] = String.split(line, ":", parts: 2)
+                %{"name" => name, "value" => String.trim(value)}
+              end)
+
+            json(conn, %{
+              "id" => "445566",
+              "threadId" => "aabbcc",
+              "labelIds" => ["SENT"],
+              "payload" => %{
+                "headers" => headers,
+                "body" => %{"data" => Base.url_encode64(body, padding: false)}
+              }
+            })
+          end)
+        else
+          observer =
+            Repo.get_by!(BackgroundJob, job_type: "assistant_action_reconcile")
+            |> BackgroundJob.hydrate_payloads()
+
+          observer |> BackgroundJob.changeset(%{result: %{"checks" => 11}}) |> Repo.update!()
+        end
+
+        run_leased_job(node, partitions, "assistant_action_reconcile", fn job ->
+          result = ActionReconciliation.execute(job)
+          expected = if c.send_response == :lost_response, do: "executed", else: "needs_review"
+          assert {:ok, %{state: ^expected}} = result
+          result
+        end)
+      end
+
+      if c.send_response == :unproven do
+        assert Repo.get!(PreparedAction, action.id).status == "execution_unknown"
+
+        [review] =
+          Repo.all(from e in Event, where: e.kind == "reconciliation_exhausted")
+          |> Enum.map(&Event.hydrate/1)
+
+        d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+        assert Maraithon.Delegations.Receipts.valid_event?(d, review)
+        {next, _} = StateMachine.apply(%{d | state: "reconciling"}, review)
+        assert next.state == "needs_user"
+        assert Repo.aggregate(from(e in Event, where: e.kind == "send_receipt"), :count) == 0
+      else
+        assert Repo.get!(PreparedAction, action.id).status == "executed"
+        assert Repo.get!(Turn, action.delegation_turn_id).status == "settled"
+        assert Repo.get!(Delegation, c.delegation.id).lifetime_sends == 1
+        assert Repo.aggregate(from(e in Event, where: e.kind == "send_receipt"), :count) == 1
+      end
+    end
+  end
+
+  defp run_leased_job(node, partitions, type, fun) do
+    alias Maraithon.Runtime.{BackgroundJob, JobAuthority}
+    alias Maraithon.Runtime.Coordination.{FairScheduler, TaskClaims, TaskSupervisor}
+    job = Repo.get_by!(BackgroundJob, job_type: type) |> BackgroundJob.hydrate_payloads()
+    queue = "delegation-eval:#{job.id}"
+
+    job
+    |> BackgroundJob.changeset(%{queue: queue, scheduled_at: DateTime.add(DateTime.utc_now(), -1)})
+    |> Repo.update!()
+
+    assert {:ok, {reserved, assignment, identity}} =
+             FairScheduler.reserve_next(node, partitions, queues: [queue])
+
+    gate = make_ref()
+
+    task =
+      Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
+        receive do: ({:bound, ^gate} -> :ok)
+        :ok = TaskSupervisor.register_current!(identity)
+        {:ok, {job, assignment}} = FairScheduler.activate_job(reserved, assignment)
+        {:ok, assignment} = TaskClaims.mark_provider_entered(assignment)
+        result = fun.(job)
+
+        assert {:ok, _} =
+                 JobAuthority.transaction(job, fn ->
+                   TaskClaims.settle_in_transaction(assignment, "completed")
+
+                   job
+                   |> BackgroundJob.changeset(%{status: "completed", result: elem(result, 1)})
+                   |> Repo.update!()
+                 end)
+
+        result
+      end)
+
+    assert :ok = TaskSupervisor.bind_task(identity, task.pid)
+    send(task.pid, {:bound, gate})
+    Task.await(task, 10_000)
+  end
+
+  defp configure(key, value) do
+    original = Application.get_env(:maraithon, key)
+    Application.put_env(:maraithon, key, value)
+
+    on_exit(fn ->
+      if original == nil,
+        do: Application.delete_env(:maraithon, key),
+        else: Application.put_env(:maraithon, key, original)
+    end)
+  end
+
+  defp ready_cost_monitor do
+    alias Maraithon.LLM.CostMonitor
+    alias Maraithon.Runtime.BackgroundJobs
+    original = Application.get_env(:maraithon, CostMonitor)
+    Application.put_env(:maraithon, CostMonitor, enabled: true, projected_daily_usd: 3.0)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:maraithon, CostMonitor, original),
+        else: Application.delete_env(:maraithon, CostMonitor)
+    end)
+
+    assert {:ok, _} =
+             BackgroundJobs.enqueue("runtime_recurring:llm_cost_monitor", %{
+               result: %{
+                 "status" => "within_budget",
+                 "checked_at" => DateTime.to_iso8601(DateTime.utc_now()),
+                 "daily_cost_usd" => 0,
+                 "rolling_cost_usd" => 0,
+                 "threshold_usd" => 6,
+                 "key_fingerprint" =>
+                   :crypto.hash(:sha256, Maraithon.LLM.openrouter_api_key() || "")
+                   |> Base.encode16(case: :lower)
+               }
+             })
+  end
+
+  defp exact_authority(user_id) do
+    alias Maraithon.Runtime.Coordination.{Authority, Partitioning, Protocol}
+    alias Maraithon.Effects.ProtocolCutover
+    system = Maraithon.Runtime.TaskSystemSupervisor
+    :ok = Supervisor.terminate_child(Maraithon.Runtime.Supervisor, system)
+    start_supervised!(system)
+    on_exit(fn -> Supervisor.restart_child(Maraithon.Runtime.Supervisor, system) end)
+
+    evidence = [
+      evidence_id: "local-eval:empty-runtime",
+      evidence_digest: :crypto.hash(:sha256, "isolated SQL sandbox with no running tasks"),
+      activated_by: "local-eval@example.invalid",
+      revision: String.duplicate("a", 40)
+    ]
+
+    for table <- ~w(delegations delegation_grants) do
+      assert {:ok, %{failures: []}} = Maraithon.DurablePayloadVerification.verify_batch(table)
+    end
+
+    Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+    assert {:ok, _} = Protocol.attest_effect_activation_evidence(evidence)
+
+    assert {:ok, _} =
+             ProtocolCutover.activate(
+               [confirmation: ProtocolCutover.activation_confirmation()] ++ evidence
+             )
+
+    assert {:ok, _} =
+             Protocol.activate([confirmation: Protocol.activation_confirmation()] ++ evidence)
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+    {:ok, node} =
+      Authority.register_node(
+        revision: String.duplicate("a", 40),
+        node_name: "delegation-eval",
+        ttl_ms: 300_000
+      )
+
+    {:ok, node} = Authority.mark_node_ready(node)
+    {:ok, leader} = Authority.acquire_leader(node, 300_000)
+    {:ok, leader} = Authority.mark_leader_ready(leader)
+    id = Partitioning.partition_for("user:" <> user_id)
+    {:ok, _} = Authority.assign_partition(leader, node, id, ttl_ms: 300_000)
+    {:ok, partition} = Authority.mark_partition_ready(node, id)
+    {node, [partition]}
+  end
+
+  defp json(conn, value),
+    do:
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(value))
+
+  defp enable_gmail(user_id) do
+    for {key, value} <- [
+          delegations_enabled: true,
+          delegation_user_allowlist: [user_id],
+          delegation_sends_enabled: %{gmail: true}
+        ] do
+      original = Application.get_env(:maraithon, key)
+      Application.put_env(:maraithon, key, value)
+
+      on_exit(fn ->
+        if original == nil,
+          do: Application.delete_env(:maraithon, key),
+          else: Application.put_env(:maraithon, key, original)
+      end)
+    end
   end
 
   defp route(c, message) do
