@@ -98,12 +98,249 @@ defmodule Maraithon.Delegations.IngressTest do
     d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
     assert d.source_revision == 1
     assert d.state == "waiting_reply"
-    [event] = Repo.all(Event) |> Enum.map(&Event.hydrate/1)
+
+    [event] =
+      Repo.all(from e in Event, where: e.kind == "inbound_message") |> Enum.map(&Event.hydrate/1)
+
     assert event.data["classification"] == "reply"
     assert event.data["source_revision"] == 1
     {next, [:enqueue_sync]} = StateMachine.apply(d, event)
     assert next.source_revision == 1
     assert next.state == "ready"
+  end
+
+  @tag thread_rollover: true
+  test "verified reply ancestry follows two thread changes months later, without replaying arrivals",
+       c do
+    route(c, c.message)
+    grant = c.delegation.current_grant_id
+    next = rollover(c.message)
+    route(c, next)
+    route(c, next)
+    route(c, c.message)
+    d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+    assert d.provider_thread_id == "ddeeff"
+    assert d.data["gmail_threads"] == ["aabbcc", "ddeeff"]
+    assert d.source_revision == 2
+    assert d.current_grant_id == grant
+
+    last =
+      rollover(next)
+      |> Map.merge(%{
+        message_id: "334455",
+        thread_id: "abcabc",
+        internet_message_id: "<last@example.invalid>"
+      })
+
+    route(c, last)
+    d = Repo.get!(Delegation, d.id) |> Delegation.hydrate()
+    assert d.provider_thread_id == "abcabc"
+    assert d.data["gmail_threads"] == ["aabbcc", "ddeeff", "abcabc"]
+    assert d.source_revision == 3
+    assert Repo.aggregate(from(e in Event, where: e.kind == "inbound_message"), :count) == 3
+
+    assert Repo.aggregate(
+             from(e in Event, where: e.kind == "gmail_reference" and e.wake_state == "consumed"),
+             :count
+           ) == 3
+  end
+
+  @tag thread_rollover: true
+  test "matching subjects, another mailbox and contradictory parent headers cannot establish a thread",
+       c do
+    route(c, c.message)
+    next = rollover(c.message)
+
+    for message <- [
+          Map.drop(next, [:in_reply_to, :references]),
+          %{next | references: "<unrelated@example.invalid>"}
+        ] do
+      route(c, message)
+    end
+
+    assert {:ok, :ok} =
+             Repo.transaction(fn -> Ingress.gmail!(c.user_id, c.account.id + 100_000, next) end)
+
+    assert {:ok, :ok} =
+             Repo.transaction(fn ->
+               Ingress.gmail!("foreign@example.invalid", c.account.id, next)
+             end)
+
+    d = Repo.get!(Delegation, c.delegation.id)
+    assert d.provider_thread_id == "aabbcc"
+    assert d.source_revision == 1
+    assert Repo.aggregate(from(e in Event, where: e.kind == "inbound_message"), :count) == 1
+  end
+
+  @tag thread_rollover: true
+  test "a changed subject or participant holds without adopting the new thread", c do
+    route(c, c.message)
+    next = rollover(c.message)
+    route(c, %{next | subject: "A different project"})
+
+    event =
+      Repo.get_by!(Event, kind: "inbound_message", source_ref: next.message_id) |> Event.hydrate()
+
+    assert event.data["classification"] == "thread_changed"
+    assert {%{state: "needs_user"}, _} = StateMachine.apply(c.delegation, event)
+
+    changed =
+      next
+      |> Map.merge(%{
+        message_id: "334455",
+        internet_message_id: "<cc@example.invalid>",
+        cc: "other@example.invalid"
+      })
+
+    route(c, changed)
+
+    event =
+      Repo.get_by!(Event, kind: "inbound_message", source_ref: changed.message_id)
+      |> Event.hydrate()
+
+    assert event.data["classification"] == "scope_change"
+    d = Repo.get!(Delegation, c.delegation.id)
+    assert d.provider_thread_id == "aabbcc"
+    assert d.source_revision == 3
+    # The held message's ID is not authority for a later thread.
+    route(c, rollover(changed) |> Map.merge(%{message_id: "445566", cc: nil}))
+    assert Repo.get!(Delegation, d.id).source_revision == 3
+  end
+
+  @tag thread_rollover: true
+  test "a late reply on a new thread stays recorded after stop without reactivation", c do
+    route(c, c.message)
+    d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+    d = d |> Delegation.changeset(%{state: "stopped"}) |> Repo.update!()
+    next = rollover(c.message)
+    route(c, next)
+    assert Repo.get!(Delegation, d.id).updated_at == d.updated_at
+    assert Repo.get!(Delegation, d.id).state == "stopped"
+
+    event =
+      Repo.get_by!(Event, kind: "inbound_message", source_ref: next.message_id) |> Event.hydrate()
+
+    assert event.wake_state == "consumed"
+    assert event.data["thread_id"] == "ddeeff"
+  end
+
+  @tag thread_rollover: true
+  test "legacy authenticated headers still prove a parent after upgrading", c do
+    assert {:ok, _} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+
+               Maraithon.Delegations.Outbox.append!(
+                 c.delegation,
+                 "inbound_message",
+                 "gmail:#{c.account.id}:#{c.message.message_id}",
+                 %{
+                   "classification" => "historical",
+                   "internet_message_id" => c.message.internet_message_id
+                 },
+                 %{source_ref: c.message.message_id, occurred_at: c.message.internal_date}
+               )
+             end)
+
+    route(c, rollover(c.message))
+    assert Repo.get!(Delegation, c.delegation.id).provider_thread_id == "ddeeff"
+    assert Repo.aggregate(from(e in Event, where: e.kind == "gmail_reference"), :count) == 2
+  end
+
+  @tag thread_rollover: true
+  test "references to indexed and legacy live delegations hold both instead of guessing ownership",
+       c do
+    todo =
+      Repo.insert!(%Maraithon.Todos.Todo{
+        user_id: c.user_id,
+        owner_user_id: c.user_id,
+        title: "Another conversation",
+        summary: "Get a different answer",
+        source: "manual",
+        next_action: "Ask",
+        dedupe_key: Ecto.UUID.generate()
+      })
+
+    other =
+      %Delegation{user_id: c.user_id}
+      |> Delegation.changeset(%{
+        todo_id: todo.id,
+        connected_account_id: c.account.id,
+        provider: "gmail",
+        provider_thread_id: "aaccee",
+        state: "waiting_reply",
+        data: %{}
+      })
+      |> Repo.insert!()
+
+    grant =
+      %Grant{user_id: c.user_id}
+      |> Grant.changeset(%{
+        delegation_id: other.id,
+        version: 1,
+        origin_request_id: Ecto.UUID.generate(),
+        data: %{"scope" => c.scope, "scope_hash" => Scope.hash(c.scope)}
+      })
+      |> Repo.insert!()
+
+    other |> Delegation.changeset(%{current_grant_id: grant.id}) |> Repo.update!()
+    route(c, c.message)
+
+    second = %{
+      c.message
+      | thread_id: "aaccee",
+        message_id: "abcdef",
+        internet_message_id: "<other@example.invalid>"
+    }
+
+    assert {:ok, _} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)
+
+               Maraithon.Delegations.Outbox.append!(
+                 other,
+                 "inbound_message",
+                 "gmail:#{c.account.id}:#{second.message_id}",
+                 %{
+                   "classification" => "reply",
+                   "internet_message_id" => second.internet_message_id
+                 },
+                 %{source_ref: second.message_id, occurred_at: second.internal_date}
+               )
+             end)
+
+    next =
+      rollover(second)
+      |> Map.put(:references, "#{c.message.internet_message_id} #{second.internet_message_id}")
+
+    route(c, next)
+
+    for {id, thread} <- [{c.delegation.id, "aabbcc"}, {other.id, "aaccee"}] do
+      d = Repo.get!(Delegation, id)
+      assert d.provider_thread_id == thread
+
+      event =
+        Repo.get_by!(Event,
+          delegation_id: id,
+          kind: "inbound_message",
+          source_ref: next.message_id
+        )
+        |> Event.hydrate()
+
+      assert event.data["classification"] == "source_gap"
+      assert {%{state: "needs_user"}, _} = StateMachine.apply(d, event)
+    end
+  end
+
+  defp rollover(message) do
+    Map.merge(message, %{
+      message_id: "223344",
+      thread_id: "ddeeff",
+      internet_message_id: "<next@example.invalid>",
+      in_reply_to: message.internet_message_id,
+      references: message.internet_message_id,
+      internal_date: DateTime.add(message.internal_date, 180, :day)
+    })
   end
 
   test "opening a delegated todo does not run a second brief or fabricate a draft", c do
@@ -462,7 +699,17 @@ defmodule Maraithon.Delegations.IngressTest do
                         )
 
                assert Repo.aggregate(Maraithon.Crm.Observation, :count) == 1
-               assert Repo.aggregate(Event, :count) == 1
+
+               assert Repo.aggregate(from(e in Event, where: e.kind == "inbound_message"), :count) ==
+                        1
+
+               assert Repo.aggregate(
+                        from(e in Event,
+                          where: e.kind == "gmail_reference" and e.wake_state == "consumed"
+                        ),
+                        :count
+                      ) == 1
+
                Repo.rollback(:interrupted)
              end)
 
@@ -522,7 +769,7 @@ defmodule Maraithon.Delegations.IngressTest do
     assert current.state == "stopped"
     assert current.source_revision == stopped.source_revision
     assert current.updated_at == stopped.updated_at
-    [event] = Repo.all(Event)
+    [event] = Repo.all(from e in Event, where: e.kind == "inbound_message")
     assert event.wake_state == "consumed"
   end
 
@@ -713,6 +960,44 @@ defmodule Maraithon.Delegations.IngressTest do
              Maraithon.TelegramAssistant.execute_granted_action(action)
 
     assert Repo.get!(PreparedAction, action.id).status == "confirmed"
+  end
+
+  @tag thread_rollover: true
+  test "a new turn replies within the verified segment even when cached history is newer", c do
+    enable_gmail(c.user_id)
+    route(c, c.message)
+    next = rollover(c.message)
+    route(c, next)
+    d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               alias Maraithon.Delegations.Execution
+               alias Maraithon.TelegramAssistant.{PreparedAction, Run}
+               {d, grant, event} = decision_turn(%{c | delegation: d, message: next})
+               run = Repo.one!(Run) |> Run.hydrate_payloads()
+               sources = run.prompt_snapshot["sources"]
+
+               previous =
+                 c.message
+                 |> Map.put(:internal_date, DateTime.add(next.internal_date, 1))
+                 |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+
+               sources = Map.update!(sources, "messages", &(&1 ++ [previous]))
+
+               run
+               |> Run.changeset(%{
+                 prompt_snapshot: Map.put(run.prompt_snapshot, "sources", sources)
+               })
+               |> Repo.update!()
+
+               assert Execution.prepare!(d, grant, event, DateTime.utc_now()).state == "sending"
+               action = Repo.one!(PreparedAction) |> PreparedAction.hydrate_payload()
+               assert action.payload["thread_id"] == next.thread_id
+               assert action.payload["reply_to_message_id"] == next.message_id
+               assert d.current_grant_id == c.delegation.current_grant_id
+               :checked
+             end)
   end
 
   for previous_sends <- [0, 1] do
@@ -1428,7 +1713,7 @@ defmodule Maraithon.Delegations.IngressTest do
     d = c.delegation |> Delegation.changeset(%{state: "deciding"}) |> Repo.update!()
     turn = Repo.one!(Turn) |> Turn.hydrate()
     run = Repo.get!(Run, turn.run_id) |> Run.hydrate_payloads()
-    {:ok, sources} = Sources.snapshot([c.message], c.account.id, "aabbcc")
+    {:ok, sources} = Sources.snapshot([c.message], c.account.id, c.delegation.provider_thread_id)
 
     run
     |> Run.changeset(%{

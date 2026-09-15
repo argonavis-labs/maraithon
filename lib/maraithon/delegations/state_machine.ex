@@ -60,6 +60,12 @@ defmodule Maraithon.Delegations.StateMachine do
       "source_gap" ->
         hold(d, "I couldn't verify who sent the latest message.")
 
+      "thread_changed" ->
+        hold(
+          d,
+          "I couldn't verify that this new email thread is the same conversation. Please review it before I continue."
+        )
+
       classification when classification in ~w(reply source_changed) and d.state in @busy ->
         {%{
            d

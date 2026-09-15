@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.Ingress do
   import Ecto.Query
   alias Maraithon.{Delegations, Repo}
   alias Maraithon.Connectors.Gmail
-  alias Maraithon.Delegations.{Delegation, Event, Outbox, Scope}
+  alias Maraithon.Delegations.{Delegation, Event, GmailThreads, Outbox, Scope}
   alias Maraithon.TelegramAssistant.PreparedAction
 
   def active?(user_id), do: Repo.exists?(from d in Delegation, where: d.user_id == ^user_id)
@@ -14,16 +14,28 @@ defmodule Maraithon.Delegations.Ingress do
     message_id = field(message, :message_id)
 
     if is_binary(thread_id) and is_binary(message_id) do
-      Repo.all(
-        from d in Delegation,
-          where:
-            d.user_id == ^user_id and d.connected_account_id == ^account_id and
-              d.provider == "gmail" and d.provider_thread_id == ^thread_id,
-          order_by: [desc: d.inserted_at],
-          limit: 10,
-          lock: "FOR UPDATE"
-      )
-      |> Enum.each(&accept!(Delegation.hydrate(&1), message, account_id))
+      bound =
+        Repo.all(
+          from d in Delegation,
+            where:
+              d.user_id == ^user_id and d.connected_account_id == ^account_id and
+                d.provider == "gmail" and d.provider_thread_id == ^thread_id,
+            order_by: [desc: d.inserted_at],
+            limit: 10,
+            lock: "FOR UPDATE"
+        )
+        |> Enum.map(&Delegation.hydrate/1)
+
+      candidates =
+        if bound == [], do: GmailThreads.candidates(user_id, account_id, message), else: bound
+
+      live = Enum.filter(candidates, &Delegation.live?/1)
+      candidates = if bound != [] or live == [], do: candidates, else: live
+
+      Enum.each(candidates, fn d ->
+        override = if length(live) > 1, do: "source_gap"
+        accept!(d, message, account_id, override)
+      end)
     end
 
     :ok
@@ -38,11 +50,17 @@ defmodule Maraithon.Delegations.Ingress do
     if is_nil(d.provider_thread_id) and field(message, :thread_id) == scope["source_thread_id"] and
          is_integer(scope["source_account_id"]) do
       d = Repo.get!(Delegation, d.id) |> Delegation.hydrate()
-      accept!(d, message, scope["source_account_id"])
+
+      source_scope =
+        if is_binary(scope["source_user_email"]),
+          do: Map.update!(scope, "identity", &Map.put(&1, "email", scope["source_user_email"])),
+          else: scope
+
+      accept!(d, message, scope["source_account_id"], nil, source_scope)
     end
   end
 
-  defp accept!(d, message, account_id) do
+  defp accept!(d, message, account_id, override, source_scope \\ nil) do
     id = field(message, :message_id)
     key = "gmail:#{account_id}:#{id}"
 
@@ -51,15 +69,25 @@ defmodule Maraithon.Delegations.Ingress do
       occurred_at = field(message, :internal_date) || Maraithon.Runtime.DatabaseClock.now!()
 
       classification =
-        if DateTime.compare(occurred_at, d.inserted_at) == :lt,
-          do: "historical",
-          else: classify(message, grant.data["scope"], own_action?(d, message))
+        override ||
+          if DateTime.compare(occurred_at, d.inserted_at) == :lt,
+            do: "historical",
+            else: classify(message, source_scope || grant.data["scope"], own_action?(d, message))
+
+      {d, classification} = follow_thread(d, message, account_id, classification)
+
+      GmailThreads.remember!(
+        d,
+        account_id,
+        message,
+        classification in ~w(historical reply own_send human_send stop)
+      )
 
       # Arrival invalidates unsent decisions before a cursor can advance. The
       # coordinator may be asleep or on another node; its mailbox isn't authority.
       d =
         if Delegation.live?(d) and
-             classification in ~w(reply human_send stop bounce scope_change source_gap) do
+             classification in ~w(reply human_send stop bounce scope_change source_gap thread_changed) do
           d |> Delegation.changeset(%{source_revision: d.source_revision + 1}) |> Repo.update!()
         else
           d
@@ -74,11 +102,37 @@ defmodule Maraithon.Delegations.Ingress do
           "source_revision" => d.source_revision,
           "message_id" => id,
           "internet_message_id" => bounded(field(message, :internet_message_id)),
+          "original_internet_message_id" =>
+            bounded(field(message, :original_internet_message_id)),
+          "thread_id" => field(message, :thread_id),
           "in_reply_to" => bounded(field(message, :in_reply_to)),
           "references" => bounded(field(message, :references))
         },
         %{source_ref: id, occurred_at: occurred_at}
       )
+    end
+  end
+
+  defp follow_thread(d, message, account, classification) do
+    thread = field(message, :thread_id)
+
+    changed? =
+      account == d.connected_account_id and not is_nil(d.provider_thread_id) and
+        thread != d.provider_thread_id
+
+    if changed? and Delegation.live?(d) and classification in ~w(reply human_send stop) do
+      case GmailThreads.rollover(d, message) do
+        {:ok, threads} ->
+          data = Map.put(d.data, "gmail_threads", threads)
+
+          {d |> Delegation.changeset(%{provider_thread_id: thread, data: data}) |> Repo.update!(),
+           classification}
+
+        {:error, _} ->
+          {d, "thread_changed"}
+      end
+    else
+      {d, classification}
     end
   end
 

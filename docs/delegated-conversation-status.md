@@ -60,13 +60,23 @@ Before sending, the worker compares the full thread fingerprint. A late reply in
 
 The server build and 35 focused checks passed. The long-thread fixture covers 180 messages across 180 days and 23 separately leased workers. It fetched six bodies; the next unchanged turn fetched none. It also covered a late reply, old-message removal, a mismatched body, source-account isolation, and durable deduplication. The existing Gmail delivery and local Slack sender checks passed. The accelerated fixture raises only its local admission rate so one-second retries can run immediately. It does not prove whole-app crash recovery or a six-month production run.
 
-This removes the reader's history-size failure. Google also documents that Gmail conversations split after more than 100 emails or a subject change. The 180-message fixture is synthetic; it does not prove continuity when Gmail assigns a different thread ID. Routing that continuation through verified RFC message ancestry remains necessary. [Gmail conversation grouping](https://support.google.com/mail/answer/5900?hl=en), [Gmail API threading rules](https://developers.google.com/workspace/gmail/api/guides/threads).
+This removes the reader's history-size failure. Google also documents that Gmail conversations split after more than 100 emails or a subject change. The 180-message fixture is synthetic; it does not prove continuity when Gmail assigns a different thread ID. The continuation work below handles that separate boundary. [Gmail conversation grouping](https://support.google.com/mail/answer/5900?hl=en), [Gmail API threading rules](https://developers.google.com/workspace/gmail/api/guides/threads).
 
 Commit `de752a8d` deployed through workflow `35031069439` to revision `maraithon-00374-r5k`. Read-only production job `maraithon-todo-validation-4lk4w` then verified an existing conversation for Kent and one for October on that image. All seven messages had usable dates, metadata without bodies, and matching full-read fingerprints. Both snapshots were complete, with no pending ingress messages. The check made no model calls, sent no emails, and wrote no conversation state. It verifies the real API shape on small threads, not a live 180-message conversation.
 
 Commit `7a820edf` reuses the connector's existing metadata reader instead of adding another entry point. Its build and five source checks passed; workflow `35031427439` deployed revision `maraithon-00375-2s5`, which is ready. Muse, controlled Gmail evals, disabled Slack sends, and active development spending remain configured. [Long Gmail source evidence](evidence/delegated-conversations/2026-09-15-gmail-source-history.json).
 
-The compact fact ledger, retrieval of older cited evidence, Gmail thread rollover, Slack pagination, and the real longevity canary remain unfinished.
+### Following verified Gmail thread changes
+
+Gmail ingress now records RFC Message-IDs in authenticated, consumed event rows. A reply in a new thread can continue the same delegation only through a recorded parent in the same mailbox, with the granted participants and subject unchanged. Matching subjects alone do not connect conversations. The original grant remains in force. The transaction records the new thread segment and advances the source revision before an older decision can send.
+
+Ambiguous ancestry, changed participants, or a changed subject holds for review. Replies after stop remain recorded without restarting the conversation. Older releases' authenticated inbound events can supply parent evidence through a bounded compatibility read. Indexed and legacy matches are checked together, so an upgrade cannot hide conflicting ownership. This uses the existing event ledger and indexes, with no new process, table, model call, or provider scan.
+
+Turn context carries at most six recent messages across verified segments and always includes the current reply parent. Prepared messages target that segment even when a later-dated message from an earlier segment is cached. Before October's first send, source classification uses Kent's source mailbox identity while preserving October's sending identity and grant.
+
+The server build passed, and 60 focused ingress and source checks pass. The fixtures cover two thread changes months apart, duplicates, foreign users and accounts, contradictory headers, changed participants and subjects, mixed legacy/indexed ambiguity, stopped conversations, and current-thread reply preparation. One fixture called the wrong helper; that call was corrected and the failing case passed on rerun. No live email or paid model call was used for these checks. Gmail's automatic split after 100 messages has not been reproduced with a live provider conversation.
+
+The compact fact ledger, retrieval of older cited evidence, Slack pagination, and the real longevity canary remain unfinished. Automatic Gmail rollover still needs live provider evidence.
 
 ## Previously verified
 

@@ -191,6 +191,8 @@ defmodule Maraithon.Delegations.GmailSourceTest do
 
     assert context(c).delegation.source_revision == 1
     assert Repo.exists?(from e in Event, where: e.event_key == ^"gmail:#{c.source.id}:2")
+    event = Repo.get_by!(Event, event_key: "gmail:#{c.source.id}:2") |> Event.hydrate()
+    assert event.data["classification"] == "reply"
   end
 
   test "a mismatched body cannot become durable progress or a complete source", c do
@@ -230,6 +232,45 @@ defmodule Maraithon.Delegations.GmailSourceTest do
 
     assert {:error, :invalid_google_account} =
              GmailSource.index(c.delegation, Map.put(c.scope, "source_account_id", foreign.id))
+  end
+
+  test "a new Gmail thread keeps five recent earlier messages and reads only the new body", c do
+    messages = for n <- 1..6, do: message(n, DateTime.add(c.delegation.inserted_at, n - 7, :day))
+    provider = provider(c, messages)
+    assert {:ok, %{state: "synced"}} = run(c, start_turn(c), &Sources.execute/1)
+
+    reply =
+      message(7, DateTime.add(c.delegation.inserted_at, 1))
+      |> Map.put("threadId", "ddeeff")
+      |> update_in(
+        ["payload", "headers"],
+        &(&1 ++
+            [
+              %{"name" => "In-Reply-To", "value" => "<message-6@example.invalid>"},
+              %{"name" => "References", "value" => "<message-6@example.invalid>"}
+            ])
+      )
+
+    Agent.update(provider, &%{&1 | messages: messages ++ [reply]})
+
+    {:ok, parsed} =
+      Maraithon.Connectors.Gmail.fetch_message_content("google:source", "7", access_token: true)
+
+    assert {:ok, :ok} =
+             Repo.transaction(fn ->
+               Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user)
+               Maraithon.Delegations.Ingress.gmail!(c.user, c.source.id, parsed)
+             end)
+
+    assert Repo.get!(Delegation, c.delegation.id).provider_thread_id == "ddeeff"
+    prior_body_reads = reads(provider) |> elem(1) |> length()
+    assert {:ok, %{state: "synced"}} = run(c, start_turn(c), &Sources.execute/1)
+    snapshot = context(c).run.prompt_snapshot["sources"]
+    assert snapshot["thread_id"] == "ddeeff"
+    assert Enum.map(snapshot["messages"], & &1["message_id"]) == ~w(2 3 4 5 6 7)
+    assert length(elem(reads(provider), 1)) == prior_body_reads + 1
+    assert context(c).delegation.source_revision == 1
+    assert context(c).turn.model_calls == 0
   end
 
   defp account(user, provider, email) do
@@ -320,12 +361,13 @@ defmodule Maraithon.Delegations.GmailSourceTest do
          fn -> %{messages: messages, replacements: %{}, metadata_reads: 0, body_reads: []} end}
       )
 
-    Bypass.stub(c.bypass, "GET", "/users/me/threads/aabbcc", fn conn ->
+    Bypass.stub(c.bypass, "GET", "/users/me/threads/:thread", fn conn ->
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer google:source"]
       assert Plug.Conn.fetch_query_params(conn).query_params["format"] == "metadata"
 
       messages =
         Agent.get_and_update(state, &{&1.messages, %{&1 | metadata_reads: &1.metadata_reads + 1}})
+        |> Enum.filter(&(&1["threadId"] == List.last(conn.path_info)))
 
       json(conn, %{
         "messages" =>

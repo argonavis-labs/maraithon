@@ -46,7 +46,7 @@ defmodule Maraithon.Delegations.GmailSource do
     cache = if needed == [], do: %{}, else: cached_messages(context, index)
 
     with {:ok, bodies} <- bodies(index, Enum.uniq_by(needed, & &1["message_id"]), cache),
-         {:ok, snapshot} <- maybe_snapshot(done?, index, bodies) do
+         {:ok, snapshot} <- maybe_snapshot(done?, index, bodies, cache) do
       messages = Enum.map(batch, &for_ingress(Map.get(bodies, &1["message_id"], &1)))
       {:ok, messages, snapshot}
     end
@@ -71,7 +71,7 @@ defmodule Maraithon.Delegations.GmailSource do
           {message["message_id"], message}
         end)
 
-      maybe_snapshot(true, %{messages: index, account: account, thread: thread}, bodies)
+      maybe_snapshot(true, %{messages: index, account: account, thread: thread}, bodies, %{})
     end
   end
 
@@ -107,6 +107,8 @@ defmodule Maraithon.Delegations.GmailSource do
   end
 
   defp cached_messages(context, index) do
+    threads = [index.thread | context.delegation.data["gmail_threads"] || []]
+
     Repo.all(
       from t in Turn,
         join: r in Run,
@@ -121,7 +123,7 @@ defmodule Maraithon.Delegations.GmailSource do
     |> Enum.reduce(%{}, fn row, cache ->
       source = Run.hydrate_payloads(row).prompt_snapshot["sources"] || %{}
 
-      if source["account_id"] == index.account and source["thread_id"] == index.thread and
+      if source["account_id"] == index.account and source["thread_id"] in threads and
            source["complete"] == true do
         Enum.reduce(source["messages"] || [], cache, fn message, acc ->
           Map.put_new(acc, message["message_id"], normalize(message))
@@ -153,10 +155,30 @@ defmodule Maraithon.Delegations.GmailSource do
     end)
   end
 
-  defp maybe_snapshot(false, _, _), do: {:ok, nil}
+  defp maybe_snapshot(false, _, _, _), do: {:ok, nil}
 
-  defp maybe_snapshot(true, index, bodies) do
-    recent = Enum.map(Enum.take(index.messages, -6), &Map.get(bodies, &1["message_id"]))
+  defp maybe_snapshot(true, index, bodies, cache) do
+    current = Enum.map(Enum.take(index.messages, -6), &Map.get(bodies, &1["message_id"]))
+    parent = List.last(current)
+    historical = Map.values(cache) |> Enum.filter(&(&1["thread_id"] != index.thread))
+
+    # A Gmail rollover keeps five recent messages from the earlier segment.
+    # Always include the current reply parent, even for an out-of-order arrival.
+    recent =
+      if is_map(parent) do
+        (current ++ historical)
+        |> Enum.filter(&(is_map(&1) and &1["message_id"] != parent["message_id"]))
+        |> Enum.uniq_by(& &1["message_id"])
+        |> Enum.sort_by(&DateTime.to_unix(date(&1), :microsecond))
+        |> Enum.take(-5)
+        |> then(
+          &Enum.sort_by([parent | &1], fn message ->
+            DateTime.to_unix(date(message), :microsecond)
+          end)
+        )
+      else
+        current
+      end
 
     if Enum.all?(recent, &(is_map(&1) and is_binary(&1["text_body"]))) do
       case DurablePayload.prepare_map(

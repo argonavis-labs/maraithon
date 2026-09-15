@@ -235,7 +235,11 @@ defmodule Maraithon.Delegations.Execution do
   defp payload(context, %{"kind" => kind} = decision) when kind in ~w(send propose_times) do
     d = context.delegation
     scope = context.grant.data["scope"]
-    parent = List.last(context.run.prompt_snapshot["sources"]["messages"])
+
+    parent =
+      context.run.prompt_snapshot["sources"]["messages"]
+      |> Enum.filter(&(&1["thread_id"] == d.provider_thread_id))
+      |> List.last()
 
     if d.provider == "gmail" and (d.provider_thread_id == nil or is_map(parent)) do
       {:ok, "gmail_send",
