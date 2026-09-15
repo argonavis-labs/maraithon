@@ -96,36 +96,33 @@ final class DeviceAuth {
     /// session. Invalid/revoked tokens get cleared and the user is shown
     /// `.signedOut`.
     private func hydrateFromKeychain() {
-        guard let token = currentToken, !token.isEmpty else { return }
-        eventLog.info(
-            "device_auth.hydrating",
-            source: .auth,
-            payload: ["device_id": deviceId.uuidString]
-        )
-        Task { @MainActor in
-            do {
-                let client = clientFactory(self)
-                let account = try await client.whoami()
-                state = .signedIn(account: account)
-                eventLog.info(
-                    "device_auth.hydrated",
-                    source: .auth,
-                    payload: ["email": account.email]
-                )
-            } catch MaraithonClientError.unauthorized {
-                try? keychain.delete()
-                state = .signedOut
-                eventLog.info("device_auth.hydrate_unauthorized", source: .auth)
-            } catch {
-                eventLog.warning(
-                    "device_auth.hydrate_failed",
-                    source: .auth,
-                    payload: ["error": String(describing: error)]
-                )
-                // Transient failure — leave Keychain intact, stay signed-out
-                // until the user retries. We don't drop the token on
-                // network errors so offline launches don't force re-pair.
-            }
+        guard hasStoredSession else { return }
+        Task { @MainActor in await restoreSession() }
+    }
+
+    var hasStoredSession: Bool { currentToken?.isEmpty == false }
+
+    /// Reuses the existing pairing after a temporary server or network failure.
+    func restoreSession() async {
+        guard let token = currentToken, !token.isEmpty, state != .connecting else { return }
+        state = .connecting
+        eventLog.info("device_auth.hydrating", source: .auth,
+                      payload: ["device_id": deviceId.uuidString])
+        do {
+            let account = try await clientFactory(self).whoami()
+            guard currentToken == token else { return }
+            state = .signedIn(account: account)
+            eventLog.info("device_auth.hydrated", source: .auth, payload: ["email": account.email])
+        } catch MaraithonClientError.unauthorized {
+            guard currentToken == token else { return }
+            try? keychain.delete()
+            state = .signedOut
+            eventLog.info("device_auth.hydrate_unauthorized", source: .auth)
+        } catch {
+            guard currentToken == token else { return }
+            state = .error(message: "Could not reconnect. Your Mac is still paired. Try again when the service is available.")
+            eventLog.warning("device_auth.hydrate_failed", source: .auth,
+                             payload: ["error": String(describing: error)])
         }
     }
 
@@ -154,6 +151,10 @@ final class DeviceAuth {
 
     /// Triggered by the Connect button on first-run.
     func beginPairing() {
+        if hasStoredSession {
+            hydrateFromKeychain()
+            return
+        }
         state = .connecting
         eventLog.info(
             "device_auth.pair_started",

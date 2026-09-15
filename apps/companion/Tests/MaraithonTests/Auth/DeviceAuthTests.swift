@@ -67,6 +67,33 @@ final class DeviceAuthTests: XCTestCase {
         XCTAssertEqual(b.deviceId, firstId)
     }
 
+    func testTemporaryLaunchFailureKeepsPairingAndReconnects() async throws {
+        let keychain = InMemoryKeychain()
+        let attempted = SendCounter()
+        let account = DeviceAuth.Account(email: "kent@example.com", deviceName: "Test")
+        let body = try JSONEncoder().encode(account)
+        let client = MaraithonClient(tokenProvider: { try? keychain.get() }, transport: { request in
+            let retry = await attempted.value
+            await attempted.mark()
+            let response = HTTPURLResponse(url: request.url!, statusCode: retry ? 200 : 429,
+                                           httpVersion: nil, headerFields: nil)!
+            return (retry ? body : Data("Rate exceeded.".utf8), response)
+        })
+        let auth = DeviceAuth(eventLog: EventLog(capacity: 16), keychain: keychain,
+                              defaults: defaults, clientFactory: { _ in client },
+                              urlOpener: { _ in XCTFail("An existing pairing must not open browser approval") })
+        try keychain.set("stored-pairing")
+
+        await auth.restoreSession()
+        guard case .error(let message) = auth.state else { return XCTFail("Expected reconnect feedback") }
+        XCTAssertTrue(message.contains("still paired"))
+        XCTAssertEqual(try keychain.get(), "stored-pairing")
+
+        await auth.restoreSession()
+        XCTAssertEqual(auth.state, .signedIn(account: account))
+        XCTAssertEqual(try keychain.get(), "stored-pairing")
+    }
+
     func testHandleIncomingURLStoresTokenAndSignsIn() async {
         let log = EventLog(capacity: 64)
         let keychain = InMemoryKeychain()

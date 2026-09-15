@@ -8,6 +8,7 @@ import SwiftUI
 /// button + `.keyboardShortcut(.defaultAction)`.
 struct ConnectView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: Tokens.Spacing.large) {
@@ -16,13 +17,13 @@ struct ConnectView: View {
             appGlyph
 
             VStack(spacing: Tokens.Spacing.small) {
-                Text(ConnectCopy.title)
+                Text(env.deviceAuth.hasStoredSession ? "Reconnect to Maraithon" : ConnectCopy.title)
                     .font(Tokens.Typography.pageTitle)
                     .tracking(Tokens.Typography.pageTitleTracking)
                     .foregroundStyle(Tokens.Palette.foreground)
                     .multilineTextAlignment(.center)
 
-                Text(ConnectCopy.body)
+                Text(env.deviceAuth.hasStoredSession ? "This Mac is already paired. Reconnect to continue." : ConnectCopy.body)
                     .font(Tokens.Typography.body)
                     .foregroundStyle(Tokens.Palette.mutedForeground)
                     .multilineTextAlignment(.center)
@@ -33,12 +34,15 @@ struct ConnectView: View {
                 Button {
                     env.deviceAuth.beginPairing()
                 } label: {
-                    Text(ConnectCopy.connectButton)
+                    Text(env.deviceAuth.hasStoredSession ? "Reconnect" : ConnectCopy.connectButton)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(RunnerButtonStyle(.primary))
                 .keyboardShortcut(.defaultAction)
-                .accessibilityLabel(ConnectCopy.title)
+                .disabled(env.deviceAuth.state == .connecting)
+                .accessibilityLabel(env.deviceAuth.hasStoredSession ? "Reconnect to Maraithon" : ConnectCopy.title)
+
+                if env.deviceAuth.state == .connecting { ProgressView("Reconnecting") }
 
                 if case .awaitingApproval = env.deviceAuth.state {
                     Text("Sign-in opens in your browser.")
@@ -68,6 +72,11 @@ struct ConnectView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Tokens.Palette.background)
         .animation(.default, value: env.deviceAuth.state)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, case .error = env.deviceAuth.state {
+                Task { await env.deviceAuth.restoreSession() }
+            }
+        }
         .onChange(of: env.deviceAuth.state) { _, newState in
             if case .signedIn = newState, env.onboarding.current == .connect {
                 env.onboarding.advance()
