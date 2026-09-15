@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict rerun exposed a booking approval bug. Its correction and rich mailbox signatures are deployed in revision `maraithon-00353-79v`; the new conflict eval is in progress. October is connected and configured as the assistant. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information, regular calendar, and busy-slot recovery paths have passed controlled live evals. The booking approval correction and rich mailbox signatures are deployed in revision `maraithon-00353-79v` and verified live. October is connected and configured as the assistant. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -61,7 +61,9 @@ Commit `3aff247f` also carries the frozen mailbox display name into the From hea
 
 The conflict rerun on revision `maraithon-00351-j2n` sent two offers and received acceptance of the replacement time. The independent reviewer returned `allowed=true`, with a reason confirming explicit counterparty acceptance and current availability. It correctly returned `outcome_proven=false` because no calendar event existed yet. `Policy.approved?/2` incorrectly required that flag for booking as well as completion. No invite was sent. The fixture stopped and cleaned up its temporary calendar entries. Six calls cost US$0.004518. [Evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-booking-approval.json).
 
-Commit `0bbf7c4a` requires semantic approval before booking and reserves outcome proof for a complete decision. Counterparty evidence, the offered slot, fresh availability, and the provider receipt remain required by their existing checks. The two leased-booking cases passed with outcome proof false before creation, including refusal when the slot becomes busy. The 32 policy, calendar transport, and scheduling checks passed, and the server build passed. A new live rerun is still required.
+Commit `0bbf7c4a` requires semantic approval before booking and reserves outcome proof for a complete decision. Counterparty evidence, the offered slot, fresh availability, and the provider receipt remain required by their existing checks. The two leased-booking cases passed with outcome proof false before creation, including refusal when the slot becomes busy. The 32 policy, calendar transport, and scheduling checks passed, and the server build passed.
+
+The new conflict run passed on revision `maraithon-00353-79v`. It offered three times, detected the first accepted slot becoming busy, offered replacements, and booked exactly one meeting in the accepted replacement slot. The recipient calendar copy was verified before cleanup completed. Three turns used six model calls and cost US$0.004483. All five sent emails matched their frozen plain-text and HTML bodies, included the original mailbox signature, had no plain-text link annotations, and preserved the sender display name. The initial delivered email was also visually verified in Mimestream. [Live conflict evidence](evidence/delegated-conversations/2026-09-15-live-calendar-conflict.json).
 
 The provider reader verified all five emails against the frozen mailbox signatures. Kent's screenshots revealed that the evidence renderer had exposed link annotations in outgoing signatures. Commit `c98b50ee` preserves the mailbox HTML signature in a multipart email and supplies a clean plain-text alternative. Model evidence still retains its link annotations. It also falls back to the account's saved display name when send-as omits one. The email formatter escapes the composed body and appends the frozen footer once. The 36 focused identity, policy, transport, settings, and category checks passed; the follow-up identity and native contract run passed 11 checks.
 
@@ -89,8 +91,8 @@ The post-rollout sample at 18:13 to 18:14 UTC found all 64 partitions ready with
 
 ## Remaining work
 
-1. Finish the busy-slot rerun, job `582b343d-555c-4148-bedd-a9abf69cd998`, on the deployed booking correction. The earlier run stopped before booking. All failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
-2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured; the assistant eval is next. Connecting it alone does not establish the assistant-account slice.
+1. Deploy the October eval extension and run the assistant conversation. The Kent-pair information, regular scheduling, and busy-slot evals have passed.
+2. Complete assistant identity isolation, signatures, voice, and settings across clients. October is connected and configured. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.
 5. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.

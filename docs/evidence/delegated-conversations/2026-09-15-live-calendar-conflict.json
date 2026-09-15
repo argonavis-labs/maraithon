@@ -1,0 +1,137 @@
+{
+  "messages": [
+    {
+      "action_id": "558ee158-7496-5c81-8d22-01a31f89af71",
+      "fixture": true,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": true,
+      "body_matches_frozen_action": true,
+      "html_body_matches_frozen_action": true,
+      "html_signature_configured": true,
+      "html_signature_present": true,
+      "plain_signature_has_no_link_annotations": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "aede18ca-a6a2-45e6-8b62-28174f7ce236",
+      "fixture": false,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": true,
+      "body_matches_frozen_action": true,
+      "html_body_matches_frozen_action": true,
+      "html_signature_configured": true,
+      "html_signature_present": true,
+      "plain_signature_has_no_link_annotations": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "deae3eb5-6ae2-bbfd-74f9-28cfd911701c",
+      "fixture": true,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": true,
+      "body_matches_frozen_action": true,
+      "html_body_matches_frozen_action": true,
+      "html_signature_configured": true,
+      "html_signature_present": true,
+      "plain_signature_has_no_link_annotations": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "3186fca6-6a0d-4b36-a378-1708dc1be287",
+      "fixture": false,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": true,
+      "body_matches_frozen_action": true,
+      "html_body_matches_frozen_action": true,
+      "html_signature_configured": true,
+      "html_signature_present": true,
+      "plain_signature_has_no_link_annotations": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "41269a19-f918-6a40-82b0-c9fd91b51065",
+      "fixture": true,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": true,
+      "body_matches_frozen_action": true,
+      "html_body_matches_frozen_action": true,
+      "html_signature_configured": true,
+      "html_signature_present": true,
+      "plain_signature_has_no_link_annotations": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    }
+  ],
+  "at": "2026-09-15T18:47:45.903122Z",
+  "state": "completed",
+  "result": {
+    "accepted_slot": {
+      "end_at": "2026-09-16T20:30:00Z",
+      "start_at": "2026-09-16T20:00:00Z",
+      "timezone": "America/Toronto"
+    },
+    "agent_messages": 2,
+    "booked_events": 1,
+    "calendar_cleanup": "completed",
+    "completion_cites_reply": true,
+    "cost_micro_usd": 4483,
+    "delegation_id": "9304a220-2dce-4870-8d6a-60fdc02b5124",
+    "event_id": "g303ju9616dm42b1dccdfhmvc1erl84lcp1q0mjf8h2q49upsk80",
+    "model_calls": 6,
+    "offered_slots_count": 3,
+    "phase": "passed",
+    "received_offer_verified": true,
+    "recipient_calendar_copy": true,
+    "reoffered": true,
+    "reply_action_id": "deae3eb5-6ae2-bbfd-74f9-28cfd911701c",
+    "reply_count": 2,
+    "reply_message_id": "1a0a6621f049363a",
+    "todo_id": "9e11c7e9-1749-4d81-9df1-d6e0a98ff916",
+    "todo_state": "waiting",
+    "turns": 3,
+    "verified_booked_action_id": "610bb1c8-a65c-49e4-820d-7ace7aee8daf"
+  },
+  "job_id": "582b343d-555c-4148-bedd-a9abf69cd998",
+  "delegation_id": "9304a220-2dce-4870-8d6a-60fdc02b5124",
+  "turns": [
+    {
+      "id": "b32c32b3-ea1f-4f91-895a-482ab18b022c",
+      "status": "settled",
+      "calls": 2,
+      "cost_micro_usd": 1266
+    },
+    {
+      "id": "0070bf5c-33aa-41b9-ad95-cf89dee36ba6",
+      "status": "settled",
+      "calls": 2,
+      "cost_micro_usd": 1578
+    },
+    {
+      "id": "92e7976c-d13a-4ac2-bd2f-9e0990437142",
+      "status": "settled",
+      "calls": 2,
+      "cost_micro_usd": 1639
+    }
+  ],
+  "cost_micro_usd": 4483,
+  "job_status": "completed",
+  "lifetime_sends": 2,
+  "revision": "maraithon-00353-79v",
+  "commit": "4c46fa903ee99366e25affd85adf068e5a9dcf8a",
+  "reader_execution": "maraithon-todo-validation-xjbzd",
+  "visual_check": "Initial email rendered in Mimestream with the mailbox signature links and Kent Fenwick display name."
+}
