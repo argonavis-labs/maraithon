@@ -28,8 +28,12 @@ struct TodoDelegationSheet: View {
                         LabeledContent("From", value: scope.identity.email ?? scope.identity.displayName ?? "Assistant")
                         LabeledContent("Task owner", value: scope.taskOwner.title)
                         TextField("Outcome", text: $outcome, axis: .vertical)
-                        TextField("With", text: $recipients)
-                        TextField("Cc", text: $cc)
+                        if scope.provider == "gmail" {
+                            TextField("With", text: $recipients)
+                            TextField("Cc", text: $cc)
+                        } else {
+                            LabeledContent("Conversation", value: "Original Slack thread")
+                        }
                         TextField("Instruction (optional)", text: $instruction, axis: .vertical)
                     }.disabled(busy)
                 }
@@ -39,6 +43,7 @@ struct TodoDelegationSheet: View {
                     if scope == nil { Button("Retry") { Task { await preview() } } }
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle("Delegate this task")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }

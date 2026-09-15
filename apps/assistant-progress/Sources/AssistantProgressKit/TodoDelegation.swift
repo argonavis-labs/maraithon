@@ -32,6 +32,7 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
     }
 
     public struct Scope: Decodable, Sendable {
+        public let provider: String
         public let actor: String
         public let kind: String
         public let outcome: String
@@ -54,7 +55,7 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
             public var title: String { label ?? name ?? (kind == "user" ? "You" : "Someone else") }
         }
         enum CodingKeys: String, CodingKey {
-            case actor, kind, outcome, to, cc, identity
+            case provider, actor, kind, outcome, to, cc, identity
             case scopeHash = "scope_hash", workflowRevision = "workflow_revision", taskOwner = "task_owner"
         }
     }
