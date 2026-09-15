@@ -1,0 +1,119 @@
+{
+  "messages": [
+    {
+      "action_id": "d7232f85-97e5-358a-22e7-d2f84d4d4efd",
+      "fixture": true,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": false,
+      "body_matches_frozen_action": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "c02981e5-facc-432d-aebf-ea94d74689ba",
+      "fixture": false,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": false,
+      "body_matches_frozen_action": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "c5ed0f6d-9569-e313-501b-33b2ceaf6193",
+      "fixture": true,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": false,
+      "body_matches_frozen_action": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "2524752c-73b1-457e-b3cf-1e99e6dbc540",
+      "fixture": false,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": false,
+      "body_matches_frozen_action": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    },
+    {
+      "action_id": "71364932-4720-76a8-3c27-0e2a984792d3",
+      "fixture": true,
+      "provider_receipt_found": true,
+      "mailbox_signature_configured": true,
+      "sender_name_configured": false,
+      "body_matches_frozen_action": true,
+      "mailbox_signature_present": true,
+      "sender_name_frozen": true,
+      "sender_name_present": true
+    }
+  ],
+  "at": "2026-09-15T18:19:58.898899Z",
+  "state": "stopped",
+  "result": {
+    "calendar_cleanup": "completed",
+    "cleanup_checks": 1,
+    "delegation_id": "95ca0b86-af83-4242-9acb-a4f128d20ecd",
+    "phase": "failed",
+    "reason": "conversation_held",
+    "received_offer_verified": true,
+    "reply_action_id": "c5ed0f6d-9569-e313-501b-33b2ceaf6193",
+    "reply_count": 1,
+    "reply_message_id": "1a0a64463a5b92d5",
+    "todo_id": "f71b8947-fc93-40cf-973f-960ff452bf46"
+  },
+  "delegation_id": "95ca0b86-af83-4242-9acb-a4f128d20ecd",
+  "turns": [
+    {
+      "id": "78357ddf-263e-487d-8edb-92d92f3fef52",
+      "status": "settled",
+      "calls": 2,
+      "cost_micro_usd": 1324
+    },
+    {
+      "id": "94f3c2c6-e556-4199-92f7-31724b20aecd",
+      "status": "settled",
+      "calls": 2,
+      "cost_micro_usd": 1521
+    },
+    {
+      "id": "fb4055a5-d5a9-4154-a72f-ddd1fe8be7f8",
+      "status": "superseded",
+      "calls": 2,
+      "cost_micro_usd": 1673
+    }
+  ],
+  "cost_micro_usd": 4518,
+  "job_id": "db7f29d4-3080-46bc-bf99-8f7ff026447b",
+  "job_status": "completed",
+  "lifetime_sends": 2,
+  "revision": "maraithon-00351-j2n",
+  "booking_review": {
+    "verdict": {
+      "allowed": true,
+      "outcome_proven": false,
+      "reason": "Counterparty explicitly accepted first of 3 offered slots (4:00-4:30 America/Toronto) in evidence 1a0a64773877afec, and that slot id remains in complete free available_slots, satisfying book_agreed_time without overlap."
+    },
+    "decision": {
+      "accepted_slot_id": "1a8241b96a5d5566e8d7f8b67a0de1c3627a49d871ea38c4954f258bcae61eb0",
+      "kind": "book",
+      "reason": "User accepted first offered slot Wed Sep 16 4:00 PM to 4:30 PM and it remains in free available slots"
+    },
+    "turn_id": "fb4055a5-d5a9-4154-a72f-ddd1fe8be7f8",
+    "phase": "decision",
+    "stage": "policy",
+    "run_error": "policy_review_required"
+  },
+  "invite_sent": false,
+  "diagnosis": "The reviewer allowed the accepted replacement slot, but Policy.approved? incorrectly required outcome_proven before creating the calendar event.",
+  "fix_commit": "0bbf7c4a",
+  "signature_limit": "All five sent messages matched the frozen mailbox signatures, but the old plain-text conversion exposed href annotations. Rich HTML and clean plain-text alternatives are added in c98b50ee."
+}

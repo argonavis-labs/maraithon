@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending. The signature review correction is deployed, and a new conflict run is in progress. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information and regular calendar paths have passed controlled live evals. The conflict formatting and provider cooldown fixes shipped. The next conflict run stopped at policy review before sending. The signature review correction passed its live check. The conflict rerun exposed a separate booking approval bug, which is fixed locally and awaiting deployment. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -57,6 +57,20 @@ Retention also keeps stopped conversations with unresolved model reservations. I
 
 Commit `3aff247f` also carries the frozen mailbox display name into the From header alongside the verified address. Nine Gmail transport checks passed, including rejection of header injection through the name. The server build passed.
 
+## Booking approval and mailbox formatting
+
+The conflict rerun on revision `maraithon-00351-j2n` sent two offers and received acceptance of the replacement time. The independent reviewer returned `allowed=true`, with a reason confirming explicit counterparty acceptance and current availability. It correctly returned `outcome_proven=false` because no calendar event existed yet. `Policy.approved?/2` incorrectly required that flag for booking as well as completion. No invite was sent. The fixture stopped and cleaned up its temporary calendar entries. Six calls cost US$0.004518. [Evidence](evidence/delegated-conversations/2026-09-15-calendar-conflict-booking-approval.json).
+
+Commit `0bbf7c4a` requires semantic approval before booking and reserves outcome proof for a complete decision. Counterparty evidence, the offered slot, fresh availability, and the provider receipt remain required by their existing checks. The two leased-booking cases passed with outcome proof false before creation, including refusal when the slot becomes busy. The 32 policy, calendar transport, and scheduling checks passed, and the server build passed. A new live rerun is still required.
+
+The provider reader verified all five emails against the frozen mailbox signatures. Kent's screenshots revealed that the evidence renderer had exposed link annotations in outgoing signatures. Commit `c98b50ee` preserves the mailbox HTML signature in a multipart email and supplies a clean plain-text alternative. Model evidence still retains its link annotations. It also falls back to the account's saved display name when send-as omits one. The email formatter escapes the composed body and appends the frozen footer once. The 36 focused identity, policy, transport, settings, and category checks passed; the follow-up identity and native contract run passed 11 checks.
+
+## Native assistant settings
+
+Commits `6e23e6aa` and `9eb9c2ac` give Mac and iPhone a shared assistant form using the same account choices, timezones, numeric limits, identity, and preferences as web. The server returns account labels without loading credentials. Both device authentication paths passed the settings contract check. Native account and delegation requests also remove a duplicate `/api/mobile` prefix that would have prevented the iPhone from reaching those endpoints.
+
+Signed Mac and iPhone simulator builds passed, with XcodeGen regeneration. The focused iPhone request test could not run because the dormant test target references the removed `TodayViewCopy` type. An earlier compile failure in the todo-count fixture was updated to include the current action, watching, and snoozed counts. The native test target remains unverified; no test was deleted, skipped in the project, or replaced with a passing stub. Deployment and live native settings verification are pending.
+
 ## Personal and work accounts
 
 Commit `ced148f9` adds account categories and an All / Personal / Work filter. The filter uses the task's source account, so changing an account updates existing tasks without model calls or rewriting todos. Unassigned accounts and tasks without a source account appear under All. Provider token refreshes cannot overwrite the category. Account and assistant settings are available to signed-in users without admin access.
@@ -67,7 +81,7 @@ The post-rollout sample at 18:13 to 18:14 UTC found all 64 partitions ready with
 
 ## Remaining work
 
-1. Finish the busy-slot conflict rerun, job `db7f29d4-3080-46bc-bf99-8f7ff026447b`, on revision `maraithon-00351-j2n`. It passed the earlier signature policy hold and entered a second turn. The final calendar result and provider signature checks remain pending. All three failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
+1. Deploy the booking approval correction and rerun the busy-slot scenario. Job `db7f29d4-3080-46bc-bf99-8f7ff026447b` offered replacement times and received acceptance, but stopped before booking. All failed conflict fixtures completed cleanup. The regular scheduling eval has passed.
 2. Complete assistant identity isolation, signatures, voice, and settings across clients. The production account check found no assistant identity and no connected `october@ewakened.com` account. Connecting it alone does not establish the assistant-account slice.
 3. Implement and verify Slack ingress, sending, authorship, and reconciliation for both actors. Slack autonomous sends remain disabled.
 4. Add delegation proposals, brief reporting, and the idle coordinator stop after seven days with no live conversations.
