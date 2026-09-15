@@ -13,7 +13,7 @@ defmodule Maraithon.Delegations.Voice do
        when is_binary(provider) do
     profile = UserVoice.prompt_context(user_id, scope["provider"], provider: provider)
 
-    if profile["status"] == "available" do
+    if profile["status"] == "available" and is_nil(profile["metadata"]["fallback_reason"]) do
       default(scope)
       |> Map.merge(%{
         "source" => "account_profile",

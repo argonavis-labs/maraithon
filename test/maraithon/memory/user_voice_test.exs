@@ -177,6 +177,29 @@ defmodule Maraithon.Memory.UserVoiceTest do
     assert profile.metadata["account_id"] == work.id
   end
 
+  test "a failed voice refresh uses explicit style instead of its generic fallback", c do
+    work = account(c.user, "work")
+
+    assert {:ok, profile} =
+             UserVoice.refresh_profile(c.user, "gmail",
+               provider: work.provider,
+               sample_texts: ["Human writing sample"],
+               llm_complete: fn _ -> {:error, :rate_limited} end
+             )
+
+    assert profile.metadata["fallback_reason"]
+
+    snapshot =
+      Voice.freeze(%{}, c.user, %{
+        "actor" => "as_user",
+        "provider" => "gmail",
+        "identity" => %{"provider" => work.provider}
+      })
+
+    assert snapshot["voice"]["source"] == "explicit_style"
+    refute snapshot["voice"]["memory_id"]
+  end
+
   defp account(user, name, assistant? \\ false) do
     provider = "google:#{name}@example.invalid"
 
