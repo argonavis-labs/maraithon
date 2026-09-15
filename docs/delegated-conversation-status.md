@@ -8,7 +8,7 @@ The delegated Slack sender now freezes the exact member or bot, workspace, chann
 
 Delivery recovery uses the existing prepared-action record. A partial response retains only Slack's channel and server timestamp, then a bounded thread read must match the author, thread, and content. A lost response stays uncertain and cannot trigger another send. This follows Slack's warning that `internal_error` and `fatal_error` can follow a partially successful operation. [Slack posting reference](https://docs.slack.dev/reference/methods/chat.postMessage/).
 
-The server build passed. Local transport, policy, manifest, and prepared-action recovery checks passed, including persistence of an uncertain timestamp and rejection of a second execution. No live Slack messages or model calls were made. Slack autonomous sends remain disabled. Source refresh, durable reply ingress, and the controlled live conversation evals are still outstanding; this adapter alone does not complete the Slack slice.
+The server build passed. Local transport, policy, manifest, and prepared-action recovery checks passed, including persistence of an uncertain timestamp and rejection of a second execution. Commit `13d7a791` deployed successfully through workflow `35023672528`; revision `maraithon-00368-sgf` is ready. No live Slack messages or model calls were made. Production retains the Gmail eval restriction, disabled Slack autonomous sends, and active development spending. Source refresh, durable reply ingress, and the controlled live conversation evals are still outstanding; this adapter alone does not complete the Slack slice.
 
 ## Previously verified
 
