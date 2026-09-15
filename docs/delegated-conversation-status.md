@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. The Gmail information, regular calendar, and busy-slot recovery paths have passed controlled live evals as the user. The booking approval correction and rich mailbox signatures are deployed and verified live. October's sending permission is enabled; its first assistant eval was held by the account cost guard. Brief reporting and the budget preflight are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 15, 2026. The Gmail information, regular calendar, and busy-slot recovery paths have passed controlled live evals as the user. The booking approval correction and rich mailbox signatures are deployed and verified live. October's sending permission is enabled. It has delivered its first signed email, but its reply eval exposed a mailbox lookup defect and has not passed yet. Brief reporting and the budget preflight are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Verified
 
@@ -137,7 +137,15 @@ Commit `2aef1f3c` checks the same account budget before a live eval reads provid
 
 Kent clarified that normal spending should pause above US$7, while active development can spend what is needed to make the product work. The explicit `LLM_DEVELOPMENT_SPENDING` setting implements that choice. Development mode skips dollar admission limits but still records charges and reservations and preserves call limits and send authority. Normal mode accepts a valid US$6 alert without pausing until usage exceeds US$7. The original US$3 projection, US$6 email warning, and six-hour schedule remain separate.
 
-The server build and five focused budget checks passed. Development spending is being enabled for the serving service and eval jobs, followed by another October information eval. It will be turned off when active development ends.
+The server build and five focused budget checks passed. Development spending is enabled for the serving service and eval jobs. Commit `bb6cf2b9` deployed successfully in workflow `35018446689`, revision `maraithon-00364-4r2`. It will be turned off when active development ends.
+
+## October reply routing and calendar selection
+
+With development spending enabled, October sent its first email from the bound assistant mailbox. The recipient identity check passed, and the fixture sent the answer back. All three sent emails matched their frozen plain-text and HTML bodies, signatures, and display names. Two Muse calls cost US$0.000650.
+
+The eval then stopped because it tried to find the reply using the ordinary user mailbox helper, which excludes assistant accounts. Commit `10b813e8` uses the existing bound-account read for that fixture lookup. The same commit corrects assistant scheduling to use the source calendar frozen in the grant instead of defaulting to the first connected account. The six focused model-admission cases passed, including the new source-calendar case. The server build passed. [Failed-run evidence](evidence/delegated-conversations/2026-09-15-october-reply-lookup.json).
+
+Commit `dd0c50e8` also keeps a failed voice-profile refresh from being treated as learned style. New turns use explicit style instructions in that case. Five focused voice checks and the server build passed. Both corrections deployed successfully in workflow `35019664976`, revision `maraithon-00365-hq8`. The fixture lookup check passed, and the next live assistant run is in progress.
 
 ## Remaining work
 

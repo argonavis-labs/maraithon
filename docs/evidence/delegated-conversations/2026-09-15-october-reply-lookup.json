@@ -1,0 +1,206 @@
+{
+  "recorded_at": "2026-09-15",
+  "scenario": "information_reply",
+  "actor": "as_assistant",
+  "serving_revision": "maraithon-00364-4r2",
+  "execution": "maraithon-todo-validation-h7v28",
+  "development_spending": true,
+  "passed": false,
+  "finding": "October sent one email and the counterparty replied. The fixture then used the ordinary user mailbox helper, which correctly excluded the assistant account and prevented the eval from routing the reply. This was an eval lookup defect, not missing sending permission.",
+  "correction_commit": "10b813e870919c2e05e84959e47b30bcee65b20f",
+  "verification": {
+    "DELEGATION_REPORT_PROOF": {
+      "as_of": "2026-09-15T20:24:12.766686Z",
+      "cost": {
+        "recorded_30d_micro_usd": 20210,
+        "unresolved_micro_usd": 210536
+      },
+      "has_section": true,
+      "item_count": 8,
+      "items": [
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 650,
+            "lifetime_micro_usd": 650,
+            "model_calls": 2,
+            "recorded_30d_micro_usd": 650,
+            "turns": 1,
+            "unresolved_micro_usd": 0
+          },
+          "state": "stopped"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 0,
+            "lifetime_micro_usd": 0,
+            "model_calls": 0,
+            "recorded_30d_micro_usd": 0,
+            "turns": 1,
+            "unresolved_micro_usd": 0
+          },
+          "state": "stopped"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 1494,
+            "lifetime_micro_usd": 4483,
+            "model_calls": 6,
+            "recorded_30d_micro_usd": 4483,
+            "turns": 3,
+            "unresolved_micro_usd": 0
+          },
+          "state": "completed"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 1506,
+            "lifetime_micro_usd": 4518,
+            "model_calls": 6,
+            "recorded_30d_micro_usd": 4518,
+            "turns": 3,
+            "unresolved_micro_usd": 0
+          },
+          "state": "stopped"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 1305,
+            "lifetime_micro_usd": 1305,
+            "model_calls": 2,
+            "recorded_30d_micro_usd": 1305,
+            "turns": 1,
+            "unresolved_micro_usd": 0
+          },
+          "state": "stopped"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 1051,
+            "lifetime_micro_usd": 2103,
+            "model_calls": 4,
+            "recorded_30d_micro_usd": 2103,
+            "turns": 2,
+            "unresolved_micro_usd": 105268
+          },
+          "state": "stopped"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 1058,
+            "lifetime_micro_usd": 2116,
+            "model_calls": 3,
+            "recorded_30d_micro_usd": 2116,
+            "turns": 2,
+            "unresolved_micro_usd": 0
+          },
+          "state": "stopped"
+        },
+        {
+          "cost": {
+            "average_per_turn_micro_usd": 1391,
+            "lifetime_micro_usd": 2783,
+            "model_calls": 4,
+            "recorded_30d_micro_usd": 2783,
+            "turns": 2,
+            "unresolved_micro_usd": 0
+          },
+          "state": "completed"
+        }
+      ],
+      "model_calls": 0,
+      "more": true,
+      "provider_calls": 0,
+      "rendered_bytes": 1700,
+      "window_start": "2026-08-16T20:24:12.766686Z"
+    },
+    "ASSISTANT_EVAL_OUTCOMES": [
+      {
+        "scenario": "information_reply",
+        "job_id": "e0135572-c8c0-4f8c-b3a4-2243bfbb84aa",
+        "phase": "failed",
+        "cost_micro_usd": 650
+      }
+    ],
+    "MAILBOX_EVAL_PROOF": {
+      "messages": [
+        {
+          "action_id": "e3ba05e6-0c0e-bb48-1066-94c0c7b4feb1",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        },
+        {
+          "action_id": "a8a3c086-f1dd-40b4-b64c-6b1902b8105e",
+          "fixture": false,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        },
+        {
+          "action_id": "731fe8de-ac66-b73a-487f-9f202e9c39c4",
+          "fixture": true,
+          "provider_receipt_found": true,
+          "frozen_footer_configured": true,
+          "sender_name_configured": true,
+          "body_matches_frozen_action": true,
+          "html_body_matches_frozen_action": true,
+          "html_footer_configured": true,
+          "html_footer_present": true,
+          "plain_signature_has_no_link_annotations": true,
+          "frozen_footer_present": true,
+          "sender_name_frozen": true,
+          "sender_name_present": true
+        }
+      ],
+      "at": "2026-09-15T20:24:12.703079Z",
+      "state": "stopped",
+      "result": {
+        "calendar_cleanup": "completed",
+        "cleanup_checks": 1,
+        "delegation_id": "1874421a-d11b-4221-bc49-2ba91e6ae57c",
+        "phase": "failed",
+        "reason": "assistant_account_excluded",
+        "todo_id": "0c43e629-53bc-428b-82bb-626f1810734e"
+      },
+      "job_id": "e0135572-c8c0-4f8c-b3a4-2243bfbb84aa",
+      "delegation_id": "1874421a-d11b-4221-bc49-2ba91e6ae57c",
+      "lifetime_sends": 1,
+      "turns": [
+        {
+          "id": "bdb00412-2aea-41b6-afaa-f80424ebec03",
+          "status": "settled",
+          "cost_micro_usd": 650,
+          "calls": 2
+        }
+      ],
+      "cost_micro_usd": 650,
+      "assistant_isolation": {
+        "email": "october@ewakened.com",
+        "account_id": 9,
+        "actor": "as_assistant",
+        "bound_to_assistant": true,
+        "excluded_from_personal_accounts": true,
+        "default_google_excludes_assistant": true,
+        "excluded_from_user_handles": true
+      },
+      "job_status": "completed"
+    }
+  }
+}
