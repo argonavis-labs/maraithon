@@ -35,7 +35,8 @@ extension MaraithonClient {
 
     func listTodos(
         filter: TodoListFilter,
-        query: String? = nil
+        query: String? = nil,
+        category: String = "all"
     ) async throws -> CompanionTodosResponse {
         var offset = 0
         var todos: [CompanionTodo] = []
@@ -45,7 +46,7 @@ extension MaraithonClient {
         // as complete. Fifty pages accommodates 10,000 todos per filter.
         for _ in 0..<50 {
             try Task.checkCancellation()
-            let page = try await todoPage(filter: filter, query: query, offset: offset)
+            let page = try await todoPage(filter: filter, query: query, category: category, offset: offset)
             for todo in page.todos where seenIDs.insert(todo.id).inserted {
                 todos.append(todo)
             }
@@ -75,9 +76,11 @@ extension MaraithonClient {
     private func todoPage(
         filter: TodoListFilter,
         query: String?,
+        category: String,
         offset: Int
     ) async throws -> CompanionTodosResponse {
         var queryItems = [
+            URLQueryItem(name: "category", value: category),
             URLQueryItem(name: "status", value: filter.statusParameter),
             URLQueryItem(name: "sort", value: filter.sortParameter),
             URLQueryItem(name: "dir", value: "desc"),

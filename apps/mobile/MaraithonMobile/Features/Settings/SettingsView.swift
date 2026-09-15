@@ -1,8 +1,10 @@
 import SwiftUI
+import AssistantProgressKit
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     @State private var identity: MobileAPIClient.IdentityResponse.Identity?
     @State private var schedule: MobileAPIClient.MorningSchedule?
@@ -27,6 +29,26 @@ struct SettingsView: View {
                         ThemedActionRow(title: "About you", systemImage: "person.crop.circle")
                     }
                     .disabled(identity == nil)
+                }
+
+                ThemedListSection {
+                    NavigationLink {
+                        AccountCategoriesView { id, category in
+                            guard let token = sessionStore.user?.sessionToken else { throw URLError(.userAuthenticationRequired) }
+                            let response = try await MobileAPIClient().accountCategories(sessionToken: token, id: id, category: category)
+                            if id != nil {
+                                do {
+                                    try await ProductionDataSync.refreshTodos(sessionStore: sessionStore,
+                                        modelContext: modelContext, includeCards: false, force: true)
+                                } catch {
+                                    errorMessage = "Category saved. Refresh Tasks to apply the change on this device."
+                                }
+                            }
+                            return response
+                        }
+                    } label: {
+                        ThemedActionRow(title: "Personal & work accounts", systemImage: "person.crop.rectangle.stack")
+                    }
                 }
 
                 ThemedListSection("Morning brief") {

@@ -288,6 +288,7 @@ struct MobileAPIClient: Sendable {
         let workflow: TodoWorkflow?
         let delegation: TodoDelegation?
         let canDelegate: Bool?
+        let accountCategory: String?
         let snoozedUntil: Date?
         let closedAt: Date?
         let resolutionNote: String?
@@ -316,6 +317,7 @@ struct MobileAPIClient: Sendable {
             case workflow
             case delegation
             case canDelegate = "can_delegate"
+            case accountCategory = "account_category"
             case snoozedUntil = "snoozed_until"
             case closedAt = "closed_at"
             case metadata
@@ -345,6 +347,7 @@ struct MobileAPIClient: Sendable {
             workflow = try container.decodeIfPresent(TodoWorkflow.self, forKey: .workflow)
             delegation = try container.decodeIfPresent(TodoDelegation.self, forKey: .delegation)
             canDelegate = try container.decodeIfPresent(Bool.self, forKey: .canDelegate)
+            accountCategory = try container.decodeIfPresent(String.self, forKey: .accountCategory)
             snoozedUntil = try container.decodeIfPresent(Date.self, forKey: .snoozedUntil)
             closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
             resolutionNote = try container.decodeIfPresent(ResolutionMetadata.self, forKey: .metadata)?.note
@@ -383,6 +386,7 @@ struct MobileAPIClient: Sendable {
             workflow: TodoWorkflow? = nil,
             delegation: TodoDelegation? = nil,
             canDelegate: Bool? = nil,
+            accountCategory: String? = nil,
             relatedPeople: [RemoteRelatedPerson] = []
         ) {
             self.id = id
@@ -411,6 +415,7 @@ struct MobileAPIClient: Sendable {
             self.workflow = workflow
             self.delegation = delegation
             self.canDelegate = canDelegate
+            self.accountCategory = accountCategory
         }
 
         private struct ResolutionMetadata: Decodable {

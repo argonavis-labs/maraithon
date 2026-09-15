@@ -195,6 +195,7 @@ enum ProductionDataSync {
         let workflowData: Data?
         let delegationData: Data?
         let canDelegate: Bool?
+        let accountCategory: String?
         let hasActionCardField: Bool
         let relatedPersonIDs: [UUID]
         let sourceSystem: String?
@@ -263,6 +264,7 @@ enum ProductionDataSync {
             workflowData: remoteTodo.workflow.flatMap { try? JSONEncoder().encode($0) },
             delegationData: remoteTodo.delegation.flatMap { try? JSONEncoder().encode($0) },
             canDelegate: remoteTodo.canDelegate,
+            accountCategory: remoteTodo.accountCategory,
             hasActionCardField: remoteTodo.hasActionCardField,
             relatedPersonIDs: remoteTodo.relatedPeople.compactMap { UUID(uuidString: $0.id) },
             sourceSystem: cleanedText(remoteTodo.source),
@@ -341,6 +343,7 @@ enum ProductionDataSync {
         todo.workflowData = prepared.workflowData
         todo.delegationData = prepared.delegationData
         todo.canDelegate = prepared.canDelegate
+        todo.accountCategory = prepared.accountCategory
         if let contactsByID {
             todo.contact = relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: contactsByID)
         }
@@ -522,6 +525,7 @@ enum ProductionDataSync {
             workflowData: prepared.workflowData,
             delegationData: prepared.delegationData,
             canDelegate: prepared.canDelegate,
+            accountCategory: prepared.accountCategory,
             sourceSystem: prepared.sourceSystem,
             sourceProvider: prepared.card.sourceProvider,
             sourceProviderLabel: prepared.card.sourceProviderLabel,

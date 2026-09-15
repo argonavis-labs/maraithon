@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import AssistantProgressKit
 
 struct TodosView: View {
     @Environment(AppNavigation.self) private var appNavigation
@@ -8,6 +9,7 @@ struct TodosView: View {
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
     @State private var filter: TodoFilter = .open
+    @State private var category: TaskCategory = .all
     @State private var searchText = ""
     @State private var isAddingTodo = false
     @State private var editingTodo: TodoItem?
@@ -39,7 +41,7 @@ struct TodosView: View {
     }
 
     private var currentWorkLists: TodoWorkLists {
-        workLists ?? TodoWorkLists(todos: todos, filter: filter, searchText: searchText)
+        workLists ?? TodoWorkLists(todos: todos, filter: filter, searchText: searchText, category: category)
     }
 
     var body: some View {
@@ -98,6 +100,13 @@ struct TodosView: View {
                 .padding(.top, Runner.Spacing.small)
 
                 RunnerTabs(items: filterTabs(counts: lists.counts), selection: $filter)
+
+                Picker("Personal or work", selection: $category) {
+                    ForEach(TaskCategory.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, Runner.Layout.pageInset)
+                .padding(.top, Runner.Spacing.small)
 
                 RunnerSearchField(placeholder: filter.searchPrompt, text: $searchText)
                     .padding(.horizontal, Runner.Layout.pageInset)
@@ -208,6 +217,7 @@ struct TodosView: View {
             .onChange(of: searchText) { _, _ in
                 rebuildWorkLists()
             }
+            .onChange(of: category) { _, _ in rebuildWorkLists() }
             .onChange(of: filter) { _, _ in
                 rebuildWorkLists()
             }
@@ -235,7 +245,7 @@ struct TodosView: View {
     }
 
     private func rebuildWorkLists() {
-        workLists = TodoWorkLists(todos: todos, filter: filter, searchText: searchText)
+        workLists = TodoWorkLists(todos: todos, filter: filter, searchText: searchText, category: category)
     }
 
     private func refreshLatestWork(force: Bool = false) async {
@@ -414,7 +424,8 @@ private struct TodoWorkLists {
     /// Single-pass per-filter counts for the tab strip, scoped to the search.
     let counts: TodoFilterCounts
 
-    init(todos: [TodoItem], filter: TodoFilter, searchText: String) {
+    init(todos: [TodoItem], filter: TodoFilter, searchText: String, category: TaskCategory) {
+        let todos = todos.filter { category.includes($0.accountCategory) }
         filtered = TodoFiltering.filter(todos, by: filter, searchText: searchText)
         counts = TodoFiltering.counts(in: todos, searchText: searchText)
     }

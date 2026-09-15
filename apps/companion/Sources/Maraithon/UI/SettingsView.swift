@@ -9,6 +9,8 @@ struct SettingsView: View {
         TabView {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            AccountSettingsView()
+                .tabItem { Label("Accounts", systemImage: "person.crop.rectangle.stack") }
             SyncSettingsView()
                 .tabItem { Label("Checks", systemImage: "arrow.triangle.2.circlepath") }
             DevicesSettingsView()

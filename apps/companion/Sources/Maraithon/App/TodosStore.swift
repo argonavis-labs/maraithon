@@ -1,3 +1,4 @@
+import AssistantProgressKit
 import Foundation
 import Observation
 
@@ -25,6 +26,14 @@ final class TodosStore {
     var filter: TodoListFilter = .active {
         didSet {
             guard filter != oldValue else { return }
+            loadGeneration += 1
+            todos = []
+            phase = .idle
+        }
+    }
+    var category: TaskCategory = .all {
+        didSet {
+            guard category != oldValue else { return }
             loadGeneration += 1
             todos = []
             phase = .idle
@@ -62,6 +71,7 @@ final class TodosStore {
             loadGeneration += 1
             if filter != .active || normalizedQuery != nil { todos = [] }
             filter = .active
+            category = .all
             query = ""
             apply(response.todo)
             phase = .loaded
@@ -93,7 +103,8 @@ final class TodosStore {
         do {
             let response = try await client.listTodos(
                 filter: requestedFilter,
-                query: requestedQuery
+                query: requestedQuery,
+                category: category.rawValue
             )
             guard generation == loadGeneration else { return }
 
@@ -242,6 +253,7 @@ final class TodosStore {
         lastUpdatedAt = nil
         phase = .idle
         filter = .active
+        category = .all
         query = ""
     }
 
@@ -251,7 +263,7 @@ final class TodosStore {
     }
 
     private func apply(_ todo: CompanionTodo) {
-        if filter.includes(todo) {
+        if filter.includes(todo) && category.includes(todo.accountCategory) {
             if let index = todos.firstIndex(where: { $0.id == todo.id }) {
                 todos[index] = todo
             } else {

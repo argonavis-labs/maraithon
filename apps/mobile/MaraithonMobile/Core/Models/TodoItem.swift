@@ -41,6 +41,8 @@ final class TodoItem {
     var workflowData: Data?
     var delegationData: Data?
     var canDelegate: Bool?
+    /// Optional for lightweight migration; populated by the next account-backed sync.
+    var accountCategory: String?
     var sourceSystem: String?
     var sourceProvider: String?
     var sourceProviderLabel: String?
@@ -129,6 +131,7 @@ final class TodoItem {
         workflowData: Data? = nil,
         delegationData: Data? = nil,
         canDelegate: Bool? = nil,
+        accountCategory: String? = nil,
         sourceSystem: String? = nil,
         sourceProvider: String? = nil,
         sourceProviderLabel: String? = nil,
@@ -174,6 +177,7 @@ final class TodoItem {
         self.workflowData = workflowData
         self.delegationData = delegationData
         self.canDelegate = canDelegate
+        self.accountCategory = accountCategory
         self.sourceSystem = sourceSystem
         self.sourceProvider = sourceProvider
         self.sourceProviderLabel = sourceProviderLabel

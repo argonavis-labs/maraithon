@@ -62,6 +62,7 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     var workflow: TodoWorkflow? = nil
     var delegation: TodoDelegation? = nil
     var canDelegate: Bool? = nil
+    var accountCategory: String? = nil
     let snoozedUntil: String?
     let updatedAt: String?
     let actionCard: CompanionTodoActionCard?
@@ -97,6 +98,7 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
         case workflow
         case delegation
         case canDelegate = "can_delegate"
+        case accountCategory = "account_category"
         case snoozedUntil = "snoozed_until"
         case updatedAt = "updated_at"
         case actionCard = "action_card"

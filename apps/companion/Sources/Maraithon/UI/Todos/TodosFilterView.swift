@@ -1,6 +1,7 @@
 /// Search and refresh row under the view tabs. Searches stay explicit
 /// (submit to run) so the store's paging stays predictable.
 import SwiftUI
+import AssistantProgressKit
 
 struct TodosFilterView: View {
     @Bindable var store: TodosStore
@@ -20,6 +21,13 @@ struct TodosFilterView: View {
             )
             .frame(maxWidth: Tokens.Layout.searchFieldMaxWidth)
             .accessibilityLabel("Search tasks")
+
+            Picker("Personal or work", selection: $store.category) {
+                ForEach(TaskCategory.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .onChange(of: store.category) { _, _ in Task { await store.load() } }
 
             Spacer(minLength: Tokens.Spacing.medium)
 

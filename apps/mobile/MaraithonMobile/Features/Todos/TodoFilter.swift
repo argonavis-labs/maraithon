@@ -430,6 +430,7 @@ enum TodoListSignature {
             hasher.combine(todo.todoBriefData)
             hasher.combine(todo.workflowData)
             hasher.combine(todo.sourceSystem)
+            hasher.combine(todo.accountCategory)
         }
 
         return hasher.finalize()
