@@ -98,6 +98,15 @@ defmodule Maraithon.Delegations do
     identity = data["identity"] || %{}
     sends? = Gates.sends_enabled?(d.user_id, d.provider)
 
+    last_action =
+      case {d.state, get_in(data, ["ledger", "latest_outcome"])} do
+        {"completed", outcome} when is_binary(outcome) and outcome != "" ->
+          String.slice(outcome, 0, 400)
+
+        _ ->
+          data["last_action"]
+      end
+
     %{
       "id" => d.id,
       "state" => d.state,
@@ -110,7 +119,7 @@ defmodule Maraithon.Delegations do
         ),
       "status_line" => status_line(d, sends?),
       "waiting_for" => data["counterparty_label"],
-      "last_action" => data["last_action"],
+      "last_action" => last_action,
       "next_follow_up" => iso(d.follow_up_at),
       "next_wake_at" => iso(d.next_wake_at),
       "question" => data["question"],
