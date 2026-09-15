@@ -1,0 +1,86 @@
+{
+  "recorded_at": "2026-09-15",
+  "scope": "Verified RFC reply ancestry across Gmail thread segments. Live Slack eval deferred by Kent.",
+  "deployment": {
+    "commit": "c18cd3d149faf725fc68598901c9d5f399490fd8",
+    "workflow": 35033415934,
+    "conclusion": "success",
+    "revision": "maraithon-00376-m9w",
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:4034fa07768fa532cdebef40c24f994881b9f193f1d1b401cc439a395dc1e494"
+  },
+  "verification": {
+    "server_build": "passed",
+    "focused_unique_checks_passed": 60,
+    "groups": {
+      "ingress": 49,
+      "gmail_source": 6,
+      "sources": 5
+    },
+    "fixture_correction": "The mixed legacy/indexed ambiguity fixture called record! instead of append!. The failed case passed after correcting that call; the other 59 checks passed in the full run.",
+    "coverage": [
+      "Two verified thread changes 180 days apart under one grant",
+      "Duplicate replies do not advance the source revision twice",
+      "Foreign mailbox, foreign user and contradictory headers cannot establish ancestry",
+      "Changed subject or participants hold without adopting the thread",
+      "Mixed indexed and legacy ambiguity holds both live delegations",
+      "Stopped conversations record late replies without reactivation",
+      "Six recent messages span verified segments",
+      "Prepared replies target the current segment despite newer cached history",
+      "October initial source classification uses the source mailbox identity"
+    ],
+    "live_provider_calls": 0,
+    "paid_model_calls": 0
+  },
+  "production_check": {
+    "execution": "maraithon-todo-validation-c5prq",
+    "execution_succeeded": true,
+    "samples": [
+      {
+        "account_id": 9,
+        "legacy_rows": 6,
+        "within_legacy_limit": true,
+        "eligible_authenticated_rows": 6,
+        "eligible_rows_with_rfc_id": 6,
+        "lookup_execution_ms": 1.106,
+        "lookup_planning_ms": 2.842
+      },
+      {
+        "account_id": 2,
+        "legacy_rows": 26,
+        "within_legacy_limit": true,
+        "eligible_authenticated_rows": 26,
+        "eligible_rows_with_rfc_id": 26,
+        "lookup_execution_ms": 1.861,
+        "lookup_planning_ms": 0.668
+      }
+    ],
+    "checked_at": "2026-09-15T23:04:51.655322Z",
+    "rfc_module_available": true,
+    "database_read_only": true,
+    "provider_calls": 0,
+    "model_calls": 0,
+    "messages_sent": 0,
+    "conversation_writes": 0,
+    "automatic_gmail_rollover_live_verified": false
+  },
+  "settings": {
+    "LLM_MODEL": "meta/muse-spark-1.3-contributor",
+    "LLM_PROJECTED_DAILY_USD": "3.00",
+    "DELEGATION_EVAL_ONLY": "true",
+    "DELEGATION_GMAIL_SENDS_ENABLED": "true",
+    "DELEGATION_SLACK_SENDS_ENABLED": "false",
+    "LLM_DEVELOPMENT_SPENDING": "true"
+  },
+  "limits": {
+    "thread_segments": 128,
+    "legacy_lookup_rows_per_account": 2048,
+    "max_recent_messages": 6
+  },
+  "remaining": [
+    "Actual Gmail automatic thread split verified with live provider evidence",
+    "Compact fact ledger and retrieval of older cited evidence",
+    "Whole-app recovery and schema evolution checks",
+    "Real longevity canary",
+    "Remaining execution plan product work"
+  ]
+}

@@ -76,6 +76,8 @@ Turn context carries at most six recent messages across verified segments and al
 
 The server build passed, and 60 focused ingress and source checks pass. The fixtures cover two thread changes months apart, duplicates, foreign users and accounts, contradictory headers, changed participants and subjects, mixed legacy/indexed ambiguity, stopped conversations, and current-thread reply preparation. One fixture called the wrong helper; that call was corrected and the failing case passed on rerun. No live email or paid model call was used for these checks. Gmail's automatic split after 100 messages has not been reproduced with a live provider conversation.
 
+Commit `c18cd3d1` deployed successfully through workflow `35033415934`. Revision `maraithon-00376-m9w` is ready and serving. Production job `maraithon-todo-validation-c5prq` then verified 32 authenticated legacy references across Kent's and October's mailboxes. Both accounts are well below the 2,048-row compatibility bound; the sampled query execution took 1.1 and 1.9 ms. The transaction was read-only, with no provider calls, model calls, messages, or conversation writes. This verifies stored upgrade evidence and lookup cost, not a live automatic thread split. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. [Thread continuity evidence](evidence/delegated-conversations/2026-09-15-gmail-thread-continuity.json).
+
 The compact fact ledger, retrieval of older cited evidence, Slack pagination, and the real longevity canary remain unfinished. Automatic Gmail rollover still needs live provider evidence.
 
 ## Previously verified
@@ -245,6 +247,6 @@ The completed information task is visible on the authenticated web app as Comple
 4. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Long-thread pagination, scheduling preference refinements, and the full conversation ledger also remain unfinished.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Older cited-evidence retrieval, Slack pagination, scheduling preference refinements, and the full conversation ledger remain unfinished. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.
