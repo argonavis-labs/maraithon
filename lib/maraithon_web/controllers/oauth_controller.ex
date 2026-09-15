@@ -961,17 +961,20 @@ defmodule MaraithonWeb.OAuthController do
   end
 
   defp resolve_user_id(conn, params) do
+    params =
+      Map.put_new(params, "user_id", conn.assigns[:current_user] && conn.assigns.current_user.id)
+
     with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
          :ok <- ensure_user_matches(conn, user_id) do
       {:ok, user_id}
     end
   end
 
-  defp ensure_user_matches(conn, _user_id) do
-    if conn.assigns[:current_user] do
-      :ok
-    else
-      {:error, "Authentication required"}
+  defp ensure_user_matches(conn, user_id) do
+    case conn.assigns[:current_user] do
+      %{id: ^user_id} -> :ok
+      nil -> {:error, "Authentication required"}
+      _ -> {:error, "The connection belongs to a different user"}
     end
   end
 
