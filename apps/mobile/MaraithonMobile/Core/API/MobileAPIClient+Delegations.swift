@@ -8,7 +8,7 @@ extension MobileAPIClient {
         let body = try input.map {
             try JSONDecoder().decode(RequestBody.self, from: JSONEncoder().encode($0))
         }
-        return try await send(path: "/api/mobile/\(path)", method: input == nil ? "GET" : "POST",
+        return try await send(path: "/\(path)", method: input == nil ? "GET" : "POST",
             sessionToken: sessionToken, body: body, responseType: TodoDelegation.Response.self)
     }
 }

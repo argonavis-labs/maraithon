@@ -51,6 +51,18 @@ struct SettingsView: View {
                     }
                 }
 
+                ThemedListSection {
+                    NavigationLink {
+                        AssistantSettingsView(webURL: URL(string: "/settings/assistant", relativeTo: AppConfiguration.mobileAPIBaseURL)) { path, fields in
+                            guard let token = sessionStore.user?.sessionToken else { throw URLError(.userAuthenticationRequired) }
+                            return try await MobileAPIClient().assistantSettings(sessionToken: token, path: path, fields: fields)
+                        }
+                        .id(sessionStore.user?.sessionToken)
+                    } label: {
+                        ThemedActionRow(title: "Assistant & scheduling", systemImage: "person.crop.circle.badge.clock")
+                    }
+                }
+
                 ThemedListSection("Morning brief") {
                     if let schedule {
                         ThemedValueRow(label: "Refresh", value: schedule.displayTime)

@@ -6,6 +6,21 @@ import Testing
 @MainActor
 struct MobileAPIClientTodoTests {
     @Test
+    func accountAndDelegationSettingsUseTheConfiguredAPIRootOnce() async throws {
+        let recorder = HTTPRequestRecorder()
+        let base = URL(string: "https://mobile.example.test/api/mobile")!
+        let categories = MobileAPIClient(baseURL: base, session: recorder.session(statusCode: 200, body: #"{"accounts":[]}"#))
+        _ = try await categories.accountCategories(sessionToken: "fixture", id: nil, category: nil)
+        #expect(recorder.requests.last?.url?.absoluteString == "https://mobile.example.test/api/mobile/account-categories")
+        let settings = MobileAPIClient(baseURL: base, session: recorder.session(statusCode: 200, body: #"{"settings":{"enabled":false}}"#))
+        _ = try await settings.assistantSettings(sessionToken: "fixture", path: "delegation-settings?assistant_account=7", fields: nil)
+        #expect(recorder.requests.last?.url?.absoluteString == "https://mobile.example.test/api/mobile/delegation-settings?assistant_account=7")
+        let delegation = MobileAPIClient(baseURL: base, session: recorder.session(statusCode: 200, body: #"{}"#))
+        _ = try await delegation.delegationRequest(sessionToken: "fixture", path: "delegations/fixture", input: nil)
+        #expect(recorder.requests.last?.url?.absoluteString == "https://mobile.example.test/api/mobile/delegations/fixture")
+    }
+
+    @Test
     func todoETagKeysForceTheTimestampBackfill() {
         #expect(MobileAPIClient.ETagKey.todos(includeCards: false) == "todos.v2")
         #expect(MobileAPIClient.ETagKey.todos(includeCards: true) == "todos.v2.cards")

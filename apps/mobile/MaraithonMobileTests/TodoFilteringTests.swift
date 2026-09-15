@@ -101,7 +101,7 @@ struct TodoFilteringTests {
             calendar: calendar
         )
 
-        #expect(counts == TodoFilterCounts(all: 5, open: 4, decisions: 1, today: 1, overdue: 1, upcoming: 1, completed: 1))
+        #expect(counts == TodoFilterCounts(all: 5, open: 4, needsAction: 4, watching: 0, decisions: 1, today: 1, overdue: 1, upcoming: 1, snoozed: 0, completed: 1))
         #expect(counts.value(for: .overdue) == TodoFiltering.filter(
             [overdue, decision, today, upcoming, completed, other],
             by: .overdue,

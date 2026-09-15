@@ -11,6 +11,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             AccountSettingsView()
                 .tabItem { Label("Accounts", systemImage: "person.crop.rectangle.stack") }
+            DelegationSettingsView()
+                .tabItem { Label("Assistant", systemImage: "person.crop.circle.badge.clock") }
             SyncSettingsView()
                 .tabItem { Label("Checks", systemImage: "arrow.triangle.2.circlepath") }
             DevicesSettingsView()
