@@ -1,361 +1,421 @@
-# Delegated email and Slack conversations
+# Delegated conversations: as me, or as my assistant
 
-Architecture spike and implementation plan. September 14, 2026.
+Implementation plan. Revised September 15, 2026. Supersedes the September 14 spike (`8bbb0c48`).
 
-Source baseline: `12edccd16ea1aec1ef6959ec8ddf1e9dc49e75e4`.
-Status: proposed. This spike inspected code and provider documentation. It did not run a delegated conversation, send messages, change production, or measure the proposed feature's cost.
+Source baseline: `8bbb0c48` on `main`. Status: proposed, ready to implement. This revision inspected code and provider documentation. It did not send messages, change production, or measure cost.
 
-## Recommendation
+## Goal
 
-Build delegation as a durable workflow attached to a todo. The user gives Maraithon an outcome and permission to pursue it. Maraithon sends the first message, waits for a reply, responds within that permission, follows up when needed, and stops when the outcome is proven or it needs the user's decision.
+Delegate a todo to Maraithon and have it finish the conversation for you: email people, read your calendar, find and book times, follow up, and stop when the outcome is proven or it needs your decision. The conversation can last months. It survives deploys, restarts, and database failover because it is rows in PostgreSQL plus one supervised OTP process per user, not a long-running model session.
 
-Use the existing Erlang/OTP `gen_statem` Agent runtime, PostgreSQL ownership protocol, background jobs, model execution, voice memory, and prepared actions. Add explicit conversation authority and durable reply routing. A delegation can remain open for months, including months without a reply. Its lifetime is independent of any process, lease, model run, login session, or deployment.
+Delegating is one action with one choice:
 
-Keep one supervised delegation coordinator per user on the existing Agent runtime. Each conversation has its own durable state machine in PostgreSQL. The coordinator handles small transition requests and dispatches bounded work. Waiting consumes records and a future wake time, with no running model or sleeping worker. The app can shut down completely and resume those conversations from stored facts.
+- **As me.** Maraithon writes from your own mailbox or Slack account, in your voice, as you.
+- **As my assistant.** Maraithon writes as a named assistant with its own email address and Slack name, clearly working for you.
 
-The main work is deciding when Maraithon still has permission to act and proving what happened after a send. Gmail already has a useful recovery path. Slack needs that path built and verified. Both need a conversation lifecycle that outlives a chat request.
+An illustrative delegation, as me:
 
-### The experience we're building
+> Todo: "Get the delivery date from Northline for order 4471."
+> Delegate → As me → Delegate.
 
-An illustrative delegation:
+Maraithon emails Northline from Kent's work address. Northline asks for the order number. Maraithon answers from the order in the source email. Northline confirms October 3. Maraithon records the date with Northline's message as evidence, marks the todo done, and tells Kent. Kent approved nothing after the first tap.
 
-> Get the delivery date from this supplier by Friday. Use my work email. You can answer questions using this order and follow up twice. Ask me before accepting a price or delivery change.
+The same, as my assistant, for scheduling:
 
-Maraithon sends an email in the user's voice. The supplier asks for the order number. Maraithon answers from the supplied order. The supplier confirms a date. Maraithon records the date with the supplier's message as evidence, closes the delegated outcome, and updates the user. The user did not approve each message.
+> Todo: "Meet Christina and Michael about the Q4 plan."
+> Delegate → As my assistant → "45 minutes, next two weeks" → Delegate.
 
-The same workflow must work in a Slack thread using the connected user's identity. A successful first send followed by a notification asking the user to write every reply does not satisfy this feature.
+October, Kent's assistant, emails Christina and Michael from `october@ewakened.com`, offers three times that are free on Kent's calendar, collects answers, books the meeting on Kent's calendar with both invited, and moves the todo to Waiting until the meeting happens.
 
-Start with text conversations about status, coordination, and collecting information. A delegation can authorise specific commitments when its limits are explicit. The first release does not execute payments, change contracts, upload files, run browser actions, or create meetings. Those require separate capabilities later. Supplying an already approved link or answering from an authorised source is supported.
+## Decisions
+
+1. A delegation is a mode of an existing todo, not a new object the user manages. The todo keeps its owner, state, and next action through `Maraithon.Todos.Workflow`. The delegation owns follow-through and updates the todo through the same transition API everyone else uses.
+2. One tap. The grant is derived from the todo: outcome, counterparties, source thread, and account come from the todo's source. The user chooses the actor and may add one line of instruction. Nothing else is asked unless it changes who we contact or what we may promise.
+3. Two actors, one code path. `as_user` and `as_assistant` differ only in the frozen sending identity, the signature, and the voice profile. Authority, routing, reconciliation, and budgets are identical.
+4. The assistant identity on email is its own Google account, connected by the user and bound to the assistant (Kent's is `october@ewakened.com`). It gets its own sync, Sent mail, history cursor, and reconciliation through the existing per-account connector code, and it is excluded from everything that treats a mailbox as the user: discovery, briefs, voice sampling, and identity. A verified send-as alias on the user's own mailbox is the lighter alternative when a separate account is not wanted.
+5. The assistant identity on Slack is the installed app's bot user, named per user through `chat:write.customize`. As-me Slack uses the member's user token. Neither actor ever falls back to the other.
+6. The assistant discloses that it is an AI assistant in its signature by default. As-me messages are the user's messages under the user's authority and carry no disclosure. Either default can be changed per user.
+7. Scheduling is deterministic. Free slots come from the user's calendars through the existing `Maraithon.Calendar.FreeBlocks` math and the user's scheduling preferences. The model chooses wording and which of the computed slots to offer. It never invents a time.
+8. Booking reuses the existing `calendar_create_event` prepared action, its deterministic `client_event_id`, its fresh slot check, and its reconciliation, extended with attendees.
+9. One `Maraithon.Runtime.Agent` per user hosts a `DelegationCoordinator` behaviour. Waiting is a row with a wake time. There is no process, timer, or model context per conversation.
+10. The model returns a structured decision from a read-only toolbox. Server code validates every send against the frozen grant, identity, thread, recipients, revision, counters, and budget before the provider is touched. Counterparty text is evidence, never instruction.
+11. The first outbound message goes out without approval. For as-me it waits in a two-minute undo window visible on the todo. For as-assistant it sends immediately. Both are per-user settings.
+12. Ship thin slices behind config gates with sends off, then on, per provider. Manual verification per slice under the current development mode. The automated failure matrix in the appendix runs only when Kent authorises hardening.
+13. Cheap by construction. Waiting costs nothing. Inbound mail is classified deterministically before any model call. A turn makes one composition call on the user's configured model; triage and the policy check run on the cheapest configured tier, and escalate only on uncertainty. Context is a compact fact ledger plus the recent thread, never the whole history. The coordinator Agent exists only for users with a live delegation.
 
 ## What exists today
 
-These findings come from the code at the baseline above. Historical verification reports are useful context, but do not establish that the proposed behaviour works today.
+Verified at the baseline. Historical reports establish what shipped, not that delegation works.
 
 | Area | Current implementation | What delegation needs |
 | --- | --- | --- |
-| Task ownership | [Workflow](../lib/maraithon/todos/workflow.ex) distinguishes the user from another person. Tracking preserves that person's ownership. [ActionHandoff](../lib/maraithon/todos/action_handoff.ex) applies a planned transition after a successful action, with a todo revision check. | Keep the accountable person separate from who executes a follow-up. A Charlie-owned task stays Charlie-owned. Merely being copied or affected does not authorise sending. |
-| Shared chat runtime | [AssistantChat.Execution](../lib/maraithon/assistant_chat/execution.ex) runs web, Mac, and iPhone requests through `runtime_model_user`, with assignment fencing and saved continuations. Its entry point requires a bound user turn. [Run](../lib/maraithon/telegram_assistant/run.ex) currently supports `telegram` and `mobile` surfaces. | Add a real delegation trigger and binding. Do not fabricate user messages to wake this runtime or treat an inbound supplier message as a user instruction. |
-| OTP lifecycle | [Runtime.Agent](../lib/maraithon/runtime/agent.ex) is an existing `gen_statem`, started through [AgentSupervisor](../lib/maraithon/runtime/agent_supervisor.ex) and monitored by [AgentWatcher](../lib/maraithon/runtime/agent_watcher.ex). [Behavior](../lib/maraithon/behaviors/behavior.ex) supports versioned snapshot migration and absolute wake times. Agent directives currently cap delay at seven days; active Agents poll directives every five seconds. | Use one coordinator per user rather than multiplying idle polling by conversation count. Keep months-away dates in business rows and materialise due directives within the supported horizon. Add strict restore validation for automated sends. |
-| Individual actions | [PreparedAction](../lib/maraithon/telegram_assistant/prepared_action.ex) persists encrypted payloads. [TelegramAssistant](../lib/maraithon/telegram_assistant.ex) freezes the payload and claims execution after confirmation. | Add a distinct authorisation path referencing the user's delegation grant. Preserve individual confirmation for actions outside delegation. |
-| Gmail sends | [GmailSendMessage](../lib/maraithon/tools/gmail_send_message.ex) uses OAuth and supports reply and message identities. [ActionReconciliation](../lib/maraithon/telegram_assistant/action_reconciliation.ex) observes uncertain Gmail sends using a frozen Message-ID and account. | Reuse those send and recovery guarantees for each conversation turn. Add stricter thread, recipient, and grant binding. |
-| Slack sends | [SlackPostMessage](../lib/maraithon/tools/slack_post_message.ex) requests a user token and `chat:write`. The connector sends channel, text, and optional `thread_ts`. `slack_post` is absent from reconciliation's supported action types. | Add frozen send identity, positive reconciliation, and provider error classification before unattended Slack writes. |
-| Account selection | [SlackHelpers](../lib/maraithon/tools/slack_helpers.ex) prioritises a supplied Slack user ID but retains other user-token candidates in that workspace. | Pin the exact account and external user. Missing credentials must not select another identity or fall back to a bot. |
-| Gmail arrivals | [Gmail](../lib/maraithon/connectors/gmail.ex) enqueues `gmail_incremental_sync`, ingests messages, and advances a source cursor after successful ingestion. Expired history triggers a complete mailbox resync. | Route matching, provider-fetched messages to waiting delegations without waiting for a full Chief of Staff scan. Repair missed wakeups and bound resync load. |
-| Slack arrivals | [WebhookController](../lib/maraithon_web/controllers/webhook_controller.ex), [Connector](../lib/maraithon/connectors/connector.ex), and [AgentDirectiveIngress](../lib/maraithon/runtime/agent_directive_ingress.ex) durably publish to subscribed Agents before acknowledging. Slack normalises edits and deletions and includes provider event IDs. | Persist matching delegation events even when there is no Agent subscription. Retain the durable acceptance boundary. |
-| Follow-through | [SlackFollowthroughAgent](../lib/maraithon/behaviors/slack_followthrough_agent.ex) detects unresolved commitments and creates insights for escalation. | Discovery may recommend delegation. It must not silently grant itself permission to send. |
-| Voice | [UserVoice](../lib/maraithon/memory/user_voice.ex) samples Gmail and Slack and stores channel profiles in Memory. [Drafts](../lib/maraithon/drafts.ex) consumes them with preferences and context. | Version profiles, preserve authorship provenance, separate accounts, and make refresh reliable. |
-| Activity and cost | [ActionLedger](../lib/maraithon/action_ledger.ex) explains activity. [Spend](../lib/maraithon/spend.ex) aggregates LLM usage. [CostMonitor](../lib/maraithon/llm/cost_monitor.ex) checks OpenRouter every six hours. | Link every event, model call, and send receipt to the delegation. Add per-delegation reservations and limits; the existing email alert is not a dispatch budget. |
+| Todo ownership | `Todos.Workflow` states `you_own working waiting they_own cancelled done`; owner `user` or `person`; `transition_workflow/4` with expected revision; `ActionHandoff` applies a planned transition after a proven send. `TodoWorkflowReview` re-reviews open todos each minute with zero model calls on unchanged fingerprints. | Drive workflow state from the delegation reducer. Exclude delegated todos from the due-Waiting nag and from the per-pass model review. |
+| Model runs | `AssistantChat.Execution.enqueue/2` needs a bound user turn; `Run` surfaces are `telegram` and `mobile`; continuations checkpoint before and after each model call; `Toolbox` classifies read and write tools and routes every external write through `prepare_external_action`. | Add a `delegation` surface and trigger. Give the delegated model only read tools. Bind runs to a delegation turn, never to a fabricated user message. |
+| OTP lifecycle | `Runtime.Agent` `gen_statem` (`recovering idle working waiting_effect`), `AgentSupervisor` temporary children, `AgentWatcher` restart guard (3 crashes per 10 minutes), `Behavior` callbacks including `next_wakeup/1 {:absolute, dt}` through `Runtime.Scheduler`, which has no horizon cap; directive poll every 5 s; directive delay capped at 7 days; the Agent activates only `message`, `channel_ingress`, `scheduled_wakeup`, `manual_wake`, and `background_job` directives. | One coordinator Agent per user, created on first delegation. Wake at `min(next due, now + 6 h)`. Use the activatable kinds only. No outbox table exists yet; add one. |
+| Prepared actions | `PreparedAction` statuses `awaiting_confirmation confirmed executed execution_unknown rejected expired failed`; `confirm_and_execute` freezes identity and payload hash and enqueues reconciliation; only calendar writes may execute without confirmation. | Add `authorization_kind` and delegation references so a grant, not a person, can authorise. Keep human confirmation for everything else. |
+| Gmail send | `GmailSendMessage` takes `to subject body` plus `account thread_id reply_to_message_id`; reply headers are fetched from Gmail; no `cc`, `bcc`, or `From`. `gmail_compose` is the only send-capable service requestable at `/auth/google`. | Add `cc` and `From` (verified alias only). List aliases with `users.settings.sendAs.list`, which accepts `gmail.readonly`. |
+| Gmail arrivals | Push notification → `gmail_incremental_sync` → history cursor → `Crm.Ingest.observe/2` into `crm_observations` with `metadata.thread_id` and `direction`. `internet_message_id`, `in_reply_to`, and `references` are parsed and dropped. `verify_signature/2` is a no-op; the account lookup constrains the untrusted notification. | Persist the three RFC headers. Route matching messages to delegations inside ingestion. Verify authenticated Pub/Sub push before autonomous sends. |
+| Gmail reconciliation | `ActionReconciliation` proves `gmail_send` by frozen `Message-ID` `<maraithon.<action_id>@maraithon.com>` in Sent with matching headers; 12 checks, 15-minute backoff, `needs_review` terminal. | Reuse as is. Add the alias `From` to the header equality check. |
+| Slack | `SlackPostMessage` with `token_preference` (`user` default, `bot`, `auto`); bot token `slack:<team>` exists with `chat:write im:write`; events arrive signed, normalised with `provider_event_id`, and published as `channel_ingress` directives to subscribed Agents; `slack_post` has no reconciliation. | Subscribe the coordinator to bound channels. Add `chat:write.customize`. Add `slack_post` reconciliation by `ts`, author, channel, and text hash. |
+| Calendar | Google connector: `events_in_window/3` fresh read, `create_event/2`, `update_event/3`, `delete_event/2` on the primary calendar; `Calendar.FreeBlocks.openings/3` pure interval math; local Mac mirror preferred for reads; `CalendarLinks` hold per-user Calendly links; the `calendar_create_event` tool stamps ownership markers and checks the slot is still free. No free/busy API call, no attendees, no slot proposal. | Add delegation preferences (scheduling and first-send settings), an account-scoped `events_in_window/4`, `propose_slots/2`, and attendees on create. |
+| Identity | `UserIdentity.Profile` holds display name, emails, phones. No persona, alias, or send-as concept. Connected accounts are all treated as the user's. | Add `assistant_identities` and exclude the assistant's account from discovery, identity, voice, and briefs. |
+| Voice | `UserVoice` profiles per user and channel from `from:me` samples; `Drafts.create/3` consumes them with an `llm_complete` option and generic fallback copy. | As-me uses the existing profile plus explicit preferences. As-assistant uses a house style. Fallback copy never sends. |
+| Cost | `Spend` derives cost from `effect_completed` events; no reservation or per-feature budget. `CostMonitor` alerts on the account total every six hours. | Add per-delegation windowed counters and a conservative reservation before each model call. |
+| Gating | No feature-flag module. Gates are config keys, `users` columns, and agent config. | Config keys `delegations_enabled`, `delegation_sends_enabled: %{gmail:, slack:}` plus an agent-config allowlist. |
+| Privacy | New tables need the erasure write-fence trigger, the catalog list, and a `privacy_protocol_manifests` refresh (`20260818155748_refresh_todo_privacy_manifest.exs`, `20260913223000_register_assistant_model_in_privacy_manifest.exs`). Encrypted payloads use `DurablePayload` binding. | One reviewed-refresh migration per slice that touches storage. |
 
-Two voice details matter. Refresh is currently requested through `refresh_voice`; it is not an automatic incremental learning loop. Profile extraction accepts an `llm_complete` callback and falls back to generic guidance when unavailable. Draft generation can also return fallback copy with warnings. Autonomous sending must not silently promote either fallback into a verified, personalised reply.
+## The user experience
 
-The current profile key is user plus channel. Gmail sampling defaults to `from:me newer_than:180d`; the collector itself does not establish human authorship or strip quoted history. Connected accounts give us material to learn from, but the learning pipeline still needs work.
+### Delegating
 
-## Authority: delegate an outcome once
+On the todo, beside "Prepare this for me", a **Delegate** button opens a compact sheet:
 
-A delegation grant is a versioned record of what the user authorised. It is created through an authenticated app action or an explicit user instruction in an authenticated Maraithon conversation. If that instruction supplies the necessary scope, create the grant directly and show the accepted scope. Ask only for missing information that would change who we contact or what we may promise.
-
-Every grant records:
-
-| Field | Meaning |
+| Row | Content |
 | --- | --- |
-| Outcome and success criteria | What needs to be true, what evidence can prove it, and whether that also completes the parent todo. |
-| Author and source | Authenticated user ID, originating request/turn ID, timestamp, and immutable grant version. |
-| Identity | Exact connected account ID, Gmail sender/approved alias or Slack workspace and user ID. Token rotation is allowed only within that identity. |
-| Conversation | Gmail thread or Slack channel and root timestamp. For a new conversation, freeze its destination first and bind the returned thread identity after sending. |
-| Participants | Exact email To/Cc/Bcc sets or Slack conversation and allowed counterparties. Recipient changes and reply-all expansion require a new grant. |
-| Allowed actions | Send, reply, ask for clarification, and follow up within the named outcome. Specify permitted facts, links, disclosures, and commitments. |
-| Boundaries | Decisions reserved for the user, prohibited commitments, optional outcome deadline/authority expiry, follow-up timing, quiet hours/timezone, send limits, and cost limits with explicit accounting windows. No default conversation expiry. |
-| Control state | Active, paused, revoked, or expired, with a monotonically increasing version and an audit event for each change. |
+| Actor | Segmented control: **As me** · **As my assistant**. The assistant option is disabled with "Set up your assistant" until an identity exists. |
+| Outcome | The todo's outcome, editable. |
+| With | The counterparties resolved from the source thread and People. Editable chips. |
+| From | The exact account and address that will send, derived from the source. Read-only here; change it in settings. |
+| Instruction | Optional one line, for example "Ask me before agreeing to anything after Friday." |
+| Button | **Delegate**. |
 
-Freeze the grant version, source revision, voice version, destination, and exact message payload for each outbound action. The model proposes a next step. Server code enforces account, recipient, capability, revision, deadline, count, and budget checks. A semantic policy check assesses whether the proposed content stays within the authorised purpose and facts. Model confidence alone cannot bypass a failed check.
+Delegating creates the grant, starts the delegation, and returns to the todo. The todo row now reads, for example, "Northline's move · Maraithon is following up · First email sends in 2:00 · Undo."
 
-Connected source text is evidence, including instructions a counterparty puts in a reply. It cannot change a grant, add tools, choose another mailbox, disclose unrelated memory, or override these checks. Treat retrieved links, quoted mail, Slack blocks, attachments, and voice samples the same way. The delegated model receives a restricted read toolbox and returns a structured decision; it has no direct provider mutation tool. Recheck current permissions whenever a conversation wakes, even if its grant is months old.
+### While it runs
 
-The product keeps three separate facts: **task owner**, **Maraithon's delegated responsibility**, and **who we're waiting for**. For Charlie's task, a valid display is “Owner: Charlie · Maraithon is following up · Waiting for Charlie.” Completing that follow-up does not claim Charlie's underlying work is done.
+The delegation summary on the todo is server-owned and identical on web, Mac, and iPhone:
 
-## Durable data and execution
+| Field | Example |
+| --- | --- |
+| Status line | "Waiting for Christina · Following up Thursday" |
+| Actor | "October, as your assistant" or "As you" |
+| Last action | "Sent 3 time options · Tue 09:12" with a link to the message |
+| Controls | **Pause**, **Take over**, **Stop**; **Answer** when a decision is needed |
+| Evidence | Links to the source messages behind the current state |
 
-Add a `Maraithon.Delegations` context and a `Maraithon.Behaviors.DelegationCoordinator` behaviour on the existing `Runtime.Agent`. Reuse its supervision, monitors, leases, directives, restart guard, and the existing jobs/action receipts. This is an OTP application feature, with short isolated workers and durable state transitions, not a long-running LLM session.
+"Sent", "waiting", "needs your decision", and "done" always correspond to durable rows. The morning brief includes delegations that moved or need a decision. Notifications fire only for a needed decision, a completed outcome, or a hold.
 
-### OTP ownership and supervision
+### Assistant setup
+
+A settings page, one row per fact: assistant name; email identity, either **Connect your assistant's Google account** (the existing `/auth/google` flow with `gmail_compose`, after which the account is bound to the assistant identity and never treated as the user's mailbox) or a verified send-as alias picked from the user's own Gmail; Slack name and icon; disclosure line (default "I'm <user>'s AI assistant and handle scheduling and follow-ups."); the disclosure toggle; and whether to copy the user on the assistant's first message in each thread (default off, because the todo already shows the thread). Delegation preferences sit on the same page: timezone, working days and hours, default meeting length, buffer, lead time, daily meeting cap, preferred video link or Calendly link, and the first-send undo window per actor.
+
+## Authority
+
+### Grant
+
+A grant is an immutable versioned record of what the user authorised. Delegating creates version 1 from the todo and the user's defaults. Broadening scope, resuming after expiry, or answering a `needs_user` question that expands scope creates the next version. Pausing, resuming, and stopping change control state and bump the version without changing scope.
+
+| Field | Derived from | Default |
+| --- | --- | --- |
+| Outcome and success evidence | Todo outcome; the reducer's completion rule for the delegation kind | Kind `information` needs a counterparty statement of the fact; kind `scheduling` needs a booked event with attendees proven by calendar reconciliation, after which the todo waits for the meeting itself; kind `coordination` needs the counterparty's confirmation of the agreed action |
+| Actor and identity | User choice; `assistant_identities` or the user's primary send-as | `as_user` |
+| Account and conversation | The source's connected account and thread; a new thread when the todo has none | Bound after the first send returns provider IDs |
+| Participants | Source participants and the todo's counterparty | Exact `To` and `Cc` sets; reply-all expansion and new participants need a new version |
+| Allowed | Reply, ask, answer from the todo's facts, follow up, propose computed times, book an agreed time, share the user's booking link | Same for both actors |
+| Reserved for the user | Money, contracts, commitments not in the todo's facts, changing recipients, anything the instruction reserves | Always |
+| Limits | User defaults | 6 sends per rolling 7 days, 2 unanswered reminders per waiting cycle, 3 model calls per turn, US$0.25 per rolling 30 days, follow-up every 3 business days, quiet hours outside 08:00 to 18:00 in the user's timezone on working days |
+| Expiry | Instruction or todo due date | None. Silence never expires a grant. |
+
+Every outbound action freezes the grant version, workflow revision, identity, destination, participants, voice version, and payload hash. The model proposes; server code enforces. A semantic policy check confirms the text stays within the outcome and facts. Model confidence never bypasses a failed check.
+
+### Actors
+
+| | As me | As my assistant |
+| --- | --- | --- |
+| Gmail sender | Primary send-as of the bound account | The assistant's own connected account (`google:october@ewakened.com`), or a verified alias on the user's account (`sendAs.verificationStatus == "accepted"`) |
+| `From` header | Omitted (Gmail uses the primary) | `"<name> <address>"` for the assistant account's primary address or the verified alias; Gmail rejects unverified addresses, which the preflight checks first |
+| Signature | The user's primary send-as signature, plain text | "<name> · assistant to <user>" plus the disclosure line when enabled |
+| Slack token | The member's user token, `chat:write` | Bot token `slack:<team>`, `chat:write` plus `chat:write.customize` for `username` and `icon_url` |
+| Slack appearance | The user | The assistant's name with Slack's app badge |
+| Voice | `UserVoice` profile for the channel plus explicit preferences; missing profile falls back to explicit style instructions, never generic copy | House style: brief, warm, plain, no em dashes, first person as the assistant, never claims to be human |
+| Reply routing | Same inbox and sync | The assistant account's own sync and history cursor, matched by `(connected_account_id, thread_id)` like any other account. Alias mode routes through the user's inbox |
+| Calendar | The user's calendars | The user's calendars; events are created on the user's primary calendar with the user as organiser, so invitations come from the user and the assistant account needs no calendar scope |
+
+The three facts stay separate on the todo: **task owner** (from the workflow), **Maraithon's responsibility** (the delegation), and **who we are waiting for** (the delegation's current counterparty). A Charlie-owned todo can carry "Charlie's move · October is following up · Waiting for Charlie" without claiming Charlie's work is done.
+
+### The assistant's account is not the user
+
+An account bound to an assistant identity is a sending and receiving identity for delegations and nothing else. `Connections.assistant_account?/1` answers from `assistant_identities.gmail_connected_account_id`, so no catalogued connection table changes. Every path that treats a mailbox as the user consults it: todo discovery and the Chief of Staff source bundle skip the account; `UserIdentity` never adds its address to the user's handle set; `UserVoice` never samples it; People affinity and communication scores do not count its mail as the user's; briefs do not summarise its inbox. Its messages reach the product only through delegation routing, reconciliation, and the evidence links on the todo. Disconnecting the account holds every delegation bound to it and asks the user to reconnect the same address.
+
+### Untrusted input
+
+Connected source text, counterparty replies, quoted mail, Slack blocks, attachments, calendar descriptions, and voice samples are evidence. None can change a grant, add a tool, choose another identity, disclose unrelated memory, or override a check. The delegated model runs with a read-only toolbox and returns a structured decision; it holds no provider mutation tool. Every wake rechecks current permissions and the grant's control state, even months later.
+
+## OTP design
+
+### Processes and rows
 
 ```mermaid
 flowchart TD
-    S[Existing supervision tree] --> W[AgentWatcher and restart guard]
+    S[Application supervision tree] --> W[AgentWatcher and restart guard]
     S --> A[AgentSupervisor]
-    A --> C[Runtime.Agent gen_statem: one delegation coordinator per user]
-    I[Durable inbound events and due dates] --> D[AgentDirectives]
-    D --> C
-    C --> P[(PostgreSQL delegation states and grants)]
-    C --> J[Existing bounded model and provider jobs]
-    J --> R[Durable decisions and action receipts]
-    R --> D
+    A --> C["Runtime.Agent gen_statem<br/>DelegationCoordinator, one per user"]
+    I[Gmail ingestion, Slack ingress, Scheduler, user actions, worker results] -->|durable directives| C
+    C -->|locks, reduces, enqueues| P[(delegations, grants, events, turns)]
+    C --> J[Bounded jobs: sync, decide, send]
+    J -->|results + wake intents| P
+    P -->|outbox| C
 ```
 
-The coordinator serialises small routing and transition decisions for a user. Each delegation remains independently revisioned, so one slow supplier does not block another conversation. The coordinator never waits for HTTP or model work inside its callback and never stores a mailbox's messages in its process state. Workers publish durable results and wake the coordinator after commit. An Erlang message is a prompt to look at committed work, not the only record that work exists.
+The coordinator is a `Behavior` on the existing Agent runtime with its own Agent row per user (`behavior: "delegation_coordinator"`), separate from the Chief of Staff Agent so neither crash loop stops the other. It inherits leases, the watcher, the restart guard, checkpoints, and directive claiming. Its callback data is tiny: schema version, a work cursor, and the next wake time. `snapshot_state/1` strips everything else.
 
-Keep the runtime's process states (`recovering`, `idle`, `working`, `waiting_effect`) separate from the conversation states (`waiting_reply`, `needs_user`, and so on). An Agent can be idle while 100 conversations are waiting for different people. Use the existing fair queues and Task supervision for slow work. Bounded batches drain durable directives; a full in-memory mailbox cannot lose a reply because the accepted event is already persisted.
+The coordinator never does HTTP or model work in a callback. `handle_wakeup/2` calls `Delegations.Coordinator.drain(user_id, limit: 25)`, which in one short transaction locks due delegations, applies the pure reducer to their pending events, enqueues bounded jobs, and updates `next_wake_at`. It returns `{:continue, state}` while work remains and `{:idle, state}` otherwise. `next_wakeup/1` returns `{:absolute, min(earliest live next_wake_at, now + 6 h)}`, which the runtime materialises through `Runtime.Scheduler` as a scoped unique row. The 6-hour cap is the repair sweep: a dormant user costs one indexed query every six hours.
 
-Store only coordinator schema/version and a bounded work cursor in its checkpoint, with `snapshot_state/1` stripping fetched content. Keep delegation state in its own rows. Agent crashes use the existing watcher and fenced restart path, including the three-crashes-in-ten-minutes guard. Do not let a DynamicSupervisor restart an old child with stale lease arguments. When the guard trips, show that progress is paused and preserve all waiting conversations; routine provider failure belongs in job backoff, not an Agent crash loop.
+Wake sources map onto existing directive kinds:
 
-Agent directive settlement and associated work-result evidence must use the existing `AgentWorkResults` transaction path where required. Provider jobs retain their own task authority. Preserve each protocol's established authority prefix before taking delegation/turn/action locks. Do not wrap `AgentDirectives.enqueue_in_transaction/6` inside a transaction that already holds lower-order work locks or assume job and Agent ownership helpers can be nested in either order.
+| Source | Directive kind | Dedupe key |
+| --- | --- | --- |
+| Gmail message routed during ingestion | `background_job` with payload `%{"job_type" => "delegation_event", "job_id" => event_id, "payload" => %{"delegation_id" => id}}` | `delegation-event:<event_id>` |
+| Slack event on a bound channel or DM | `channel_ingress` (existing subscription fan-out) | Slack's `slack-event:<event_id>` |
+| Due follow-up, deadline, or the 6-hour sweep | `scheduled_wakeup` from `Runtime.Scheduler`, which has no horizon cap and enqueues the directive at fire time, so the 7-day directive delay cap never applies | Scheduler scope |
+| Worker result (sync, decision, send receipt) | `background_job` with `job_type` `delegation_result`, `job_id` the turn ID, result sequence in `payload` | `delegation-result:<turn_id>:<seq>` |
+| User action (delegate, pause, resume, stop, answer) | `manual_wake` with `job_type` `delegation_user_action`, `job_id` the request ID | `delegation-user:<request_id>` |
 
-For worker results, atomically persist the result and a pending wake intent in `delegation_events` under the worker's existing fence. Publish that intent as an idempotent Agent directive in a separate transaction after commit, using the Agent protocol's canonical lock order. Mark delivery after the directive commits; a crash between those writes safely republishes the same key. The repair sweep drains undispatched intents. Ingress may combine event and directive creation only when it can acquire the canonical prefix first. This durable outbox pattern avoids either lost wakeups or a lock-order inversion between two ownership protocols.
+`Runtime.Agent` activates only `message`, `channel_ingress`, `scheduled_wakeup`, `manual_wake`, and `background_job` payloads, and the last three require `job_type`, `job_id`, and `payload` keys. `connector_sync` is declared but has no activation clause, so this plan does not use it.
 
-This keeps one coordination mechanism. The small per-user coordinator is an existing leased Agent, not a new global GenServer or a separate workflow service. Measure its idle database cost; do not create a five-second polling Agent for every dormant conversation. Process hibernation can reduce memory later, but is neither the source of durability nor a replacement for persisted wakeups.
+Process states (`recovering idle working waiting_effect`) stay separate from conversation states. An idle Agent can own a hundred conversations waiting on a hundred people.
 
-### Proposed persistence
+### Durable outbox
 
-| Record | Key fields and constraints |
+Workers and ingestion never call `AgentDirectives.enqueue_in_transaction/6` while holding lower-order work locks. They persist the result and a `delegation_events` row with `wake_state = "pending"` under their own fence, commit, then in a second transaction enqueue the idempotent directive and mark `wake_state = "dispatched"`. A crash between the two republishes the same key. `drain/2` also picks up any pending event older than 30 seconds, so a lost second transaction costs latency, never a lost reply.
+
+Directive settlement uses `AgentDirectives.settle_ready_with/7` when a turn creates a new checkpoint boundary. It preserves the documented order, `Agent → same-user Binding → Guard → Lease → LifecycleOperation` and then `Directive → Run → RunStep → Effect`, with the partition fence taken before the user privacy fence exactly as that function does. Job writes go through a public write helper modelled on `AssistantChat.Execution.write/1`: it re-verifies the task assignment and job claim and sets the transaction-local action through `TaskClaims.set_action!` before touching outcome or assignment rows. Provider I/O runs outside every transaction.
+
+### Restart, deploy, crash
+
+| Event | Behaviour |
 | --- | --- |
-| `delegations` | User/todo/coordinator Agent IDs, workflow/schema revision, current grant ID, lifecycle state, exact account and conversation binding, source watermark, next wake time, optional outcome deadline, reserved/settled cost by window, send counters, current turn. One active delegation per todo initially. A partial unique index also prevents two active delegations owning the same bound conversation for the same user/account. |
-| `delegation_grants` | Immutable versioned authority, encrypted outcome/scope, originating authenticated request, policy version, and hash. Unique `(delegation_id, version)` and idempotent originating request. Never mutate a previous grant to make an old send look authorised. |
-| `delegation_events` | Durable inbox and lifecycle history: delegation, provider event/message identity, source reference/version, event kind, received sequence, occurrence time, consumed turn ID, wake-intent key and delivery state. Unique delegation plus canonical event key. Bodies remain in the encrypted source store; any necessary bounded snapshot is encrypted and bound. |
-| `delegation_turns` | Wake reason, input event range/hash, grant version, run ID, decision, expected workflow/source revisions, voice version, budgets, and prepared action ID. Unique `(delegation_id, turn_sequence)` and unique wake key. This connects model work to the existing action outbox. |
-| Existing prepared action | Add explicit `authorization_kind`, delegation/turn/grant references, and a grant-authorised state distinct from human `confirmed`. Bind these promoted fields to the encrypted payload and hash. One mutating action per turn; a reply creates a later turn. |
-| Voice profile version | Add `user_voice_profile_versions` with account/channel key, immutable version, encrypted profile, source manifest, provenance, extraction model/prompt version, and validation status. Existing Memory points to the current usable version. |
+| Rolling deploy | The old node's lease expires; the new node claims a fresh owner generation; `recovering` reloads the checkpoint and the authoritative rows; due work resumes. Nothing in flight is resent: an entered send stays entered until reconciliation proves it. |
+| Agent crash | Watcher restarts under a new lease. Three crashes in ten minutes trip the guard: the Agent stops, its claimed directive is recovered or dead-lettered, delegation rows are untouched, the todo shows "Paused after repeated errors", and the recurring `delegation_due_sweep` (every 5 minutes) keeps surfacing due work until an operator resets the guard. Routine provider failure is job backoff, not an Agent crash. |
+| Worker crash before decision save | The turn is retried under a new job claim. Stale claims cannot write. |
+| Worker crash after send entry | `execution_unknown`; reconciliation observes; no replacement sender. |
+| Database point-in-time restore | Autonomous sends stay disabled until an operator reconciles provider history against retained action identities. Missing receipts are not permission to resend. |
 
-Use foreign keys that preserve user ownership across these records. Add status checks, unique request keys, an index on live `next_wake_at`, and a constraint preventing concurrent nonterminal turns. Store money in integer micro-USD or an exact decimal, not floating-point counters. Thread timestamps and provider message IDs remain strings.
+### A six-month conversation, step by step
 
-Resolve user IDs from authentication or durable job authority, never from model arguments or unrestricted changeset casts. New payloads must use `DurablePayload` encryption, binding, size limits, purge behaviour, and the privacy-erasure write fence. Include the new tables in erasure and retention manifests. Preserve the minimum redacted receipt facts needed to explain a send after content retention ends.
+| Day | What exists | What runs |
+| --- | --- | --- |
+| 0 | Grant v1, delegation `ready`, first turn decided and sent, `next_wake_at = +3 business days` | One model job, one send job, one reconciliation observation |
+| 3 | Timer due; no reply | One bounded thread check, one model job, one reminder send; `reminder_count = 1` |
+| 6 | Second reminder | Same; `reminder_count = 2`, now `waiting_reply` with no timer; the todo says "No reply after two reminders · waiting" |
+| 6 to 89 | Nothing | Zero model calls. The coordinator wakes every 6 hours, runs one query, sleeps. Deploys, restarts, and lease rotations happen; leases renew, the grant does not change |
+| 90 | Counterparty replies "back in the office, dates are…" | Ingestion routes the message; the coordinator wakes within seconds; a fresh turn reads the recent thread plus the fact ledger, not six months of text |
+| 90 | Model returns `complete` with the reply as evidence | The reducer transitions the todo to Done through `transition_workflow/4` with `outcome_confirmed`; the user is notified once |
+| 91 to 180 | A late "thanks" arrives | Stored as an event; no reactivation without a current grant |
 
-### One wake, one bounded turn
+`next_wake_at` is an absolute UTC timestamp with the user's local-time rule. The Scheduler holds only the next due wake; everything further out lives in the delegation row.
 
-1. Receive an authenticated user delegation, a matching source event, a timer, or a send observation. Persist the event and enqueue a directive for the user's delegation coordinator in the same transaction. Use a deterministic wake key. Notify processes after commit.
-2. The coordinator claims a directive through the exact runtime, proves its lease/claim, and locks the delegation in the established lock order. Verify the current grant, source watermark, and state, then enqueue a bounded job for any acquisition or model work. Every worker separately proves its job claim and live task assignment on writes. A stale duplicate finishes without calling the model.
-3. Acquire the bound thread and permitted supporting facts. Fetch only missing or changed content. Complete pagination or record that the source is incomplete. A gap prevents claims about silence or completion.
-4. Run a bounded model decision in `runtime_model_user`. Return one of `send`, `wait`, `complete`, or `needs_user`, with source references and a short reason. Save the decision and continuation, then durably wake the coordinator with its result reference. No provider write happens inside this call.
-5. The coordinator validates the decision against the latest source/grant revision, reserves send capacity, creates the frozen prepared action, and queues its provider job atomically under the required authority/delegation locks. Model cost was reserved before model entry. A changed revision supersedes the decision and schedules fresh reasoning.
-6. The provider job repeats the deterministic checks immediately before recording send entry. Commit that entry, release database locks, then perform provider I/O. A positive receipt settles the action for the coordinator to consume. An ambiguous outcome enters read-only reconciliation.
-7. Persist the provider receipt and its result wake intent atomically, then deliver the intent through the outbox path. The coordinator applies `waiting_reply` and a durable follow-up time after the confirmed send. Finish the turn. A later reply or due date creates the next turn. Completion requires cited outcome evidence and an atomic, revision-aware update. Replayed result directives apply that transition only once.
+## Data
 
-Use `runtime_model_user` for inference and `runtime_provider_account` for provider I/O, with `delegation:<id>` partition keys and the appropriate shared rate-limit keys. Keep source sync, model decisions, and sends as bounded tasks so a slow provider does not occupy the coordination loop.
+| Table | Key columns and constraints |
+| --- | --- |
+| `assistant_identities` | `user_id` unique, `display_name`, `gmail_connected_account_id` (the assistant's own account, or the user's account in alias mode), `gmail_send_as_email`, `slack_username`, `slack_icon_url`, `disclosure_line`, `disclose_ai` default true, `cc_user_on_first_send` default false, `signature_text`, `voice_style` (`house` or `user`). Encrypted, bound. |
+| `delegation_preferences` | `user_id` PK, `timezone`, `work_days`, `work_start`, `work_end`, `default_duration_min` 30, `buffer_min` 15, `lead_time_hours` 24, `max_meetings_per_day`, `video_link`, `calendar_link_id`, `calendar_account_ids`, `as_user_undo_seconds` 120, `as_assistant_undo_seconds` 0, default limits. A new table, so per-user settings stay off the catalogued `users` table. |
+| `delegations` | `user_id`, `todo_id`, `agent_id`, `kind` (`information scheduling coordination`), `actor` (`as_user as_assistant`), `provider` (`gmail slack`), `connected_account_id`, `identity_snapshot` (encrypted), `provider_thread_id`, `slack_channel`, `state`, `current_grant_id`, `revision`, `next_wake_at`, `follow_up_at`, `deadline_at`, `send_count_7d`, `reminder_count_cycle`, `spent_micro_usd_30d`, `lifetime_sends`, `lifetime_micro_usd`, `last_action_id`, `summary` (encrypted, bounded 16 KB), `fact_ledger` (encrypted, bounded 32 KB), `schema_version`. Partial unique `(user_id, todo_id)` and `(connected_account_id, provider_thread_id)` where live; index on `next_wake_at` where live. |
+| `delegation_grants` | `delegation_id`, `version`, `authored_by_user_id`, `origin_request_id` unique, `scope` (encrypted), `control_state` (`active paused revoked expired`), `policy_version`, `scope_hash`. Unique `(delegation_id, version)`. Never mutated. |
+| `delegation_events` | `delegation_id`, `seq` bigserial, `kind` (`inbound_message our_send_observed timer_due user_action send_receipt calendar_observed source_gap`), `event_key` unique per delegation, `source_ref`, `source_revision`, `occurred_at`, `consumed_by_turn_id`, `wake_state`, `snapshot` (encrypted, bounded 8 KB). Bodies stay in the source store. |
+| `delegation_turns` | `delegation_id`, `seq`, `grant_version`, `wake_reason`, `event_range`, `run_id`, `decision` (encrypted: `kind send wait complete needs_user propose_times book`, reason, evidence refs, proposed slots), `prepared_action_id`, `status` (`deciding validated dispatched settled superseded failed`), `model`, `cost_micro_usd`. Unique `(delegation_id, seq)`; partial unique on live turns. |
+| `telegram_prepared_actions` | Add `authorization_kind` (`human_confirmed delegation_grant`), `delegation_id`, `delegation_turn_id`, `grant_version`; surface `delegation`. The existing binding spec stays unchanged so stored MACs remain valid. The same references travel inside the encrypted payload and are cross-checked against the columns at execution, and a check constraint requires all three when `authorization_kind = 'delegation_grant'`. |
+| `crm_observations` | Persist `internet_message_id`, `in_reply_to`, `references` in `metadata`. |
 
-Extract the reusable authority/continuation and action-dispatch pieces from `AssistantChat.Execution`, `TelegramAssistant`, and `Runner` behind narrow shared functions. Add a first-class delegation run trigger and binding to `Run` and its payload contract. Do not copy their execution protocol, rename the entire Telegram subsystem, or call `confirm_and_execute` while pretending a person approved the generated message.
+Money is integer micro-USD. Provider IDs and timestamps are strings. User IDs come from authentication or job authority, never from model arguments. Every new table gets the erasure write-fence trigger, catalog registration, `PrivacyRetention` handling for encrypted copies, and a manifest refresh in the same migration. Erasure overrides an active delegation.
 
-Delegation jobs must require authority explicitly. `Execution.write/1` currently permits a caller without job context to execute its function directly; the new automated entry point must reject missing authority. All task outcome and assignment writes continue through the existing transaction-local `set_action!` and fencing helpers. No synchronous call into Coordination Session while holding database locks. Do not add memberships to the six canonical database roles; update applicable storage manifests and fingerprints through the repository's migration process.
+## One wake, one bounded turn
+
+1. **Accept.** An inbound message, timer, user action, or worker result becomes a `delegation_events` row plus a directive through the outbox. Notify after commit.
+2. **Claim and reduce.** The coordinator claims the directive under its lease, locks the delegation, verifies the grant is `active`, the workflow revision is current, and the event is unconsumed, then runs `Delegations.StateMachine.apply/2`. The reducer is pure: `(delegation, event) -> {delegation', [command]}`. Commands are `enqueue_sync`, `enqueue_decide`, `enqueue_send`, `schedule_wake`, `transition_todo`, `notify_user`, `hold`.
+3. **Sync.** A `delegation_sync` job on `runtime_provider_account`, partitioned by the bound account so it shares the per-mailbox limit, fetches only missing thread messages for the bound account and thread, completes pagination or records `source_gap`, and refreshes the fact ledger's evidence references. A gap blocks claims about silence or completion.
+4. **Decide.** A `delegation_decide` job on `runtime_model_user` (partition `delegation:<id>`, rate-limit key `model`) reserves the model budget, starts a `Run` with surface `delegation` bound to the turn, and calls the user's configured model with the read-only toolbox: thread, fact ledger, todo facts, People context for the counterparties, scheduling slots when the kind is `scheduling`, and the actor's voice context. It returns one decision. The continuation checkpoint follows the existing `Continuation` phases. The result and a wake intent commit together.
+5. **Validate and freeze.** The coordinator validates the decision against the latest grant, revision, counters, quiet hours, and budget, runs the semantic policy check, and for `send` or `book` creates the frozen `PreparedAction` with `authorization_kind = "delegation_grant"` and enqueues the provider job atomically. A changed revision supersedes the decision and schedules fresh reasoning. `needs_user` transitions the todo to "Your move" with the concrete question.
+6. **Send.** A `delegation_send` job on `runtime_provider_account` repeats the deterministic checks, records send entry, releases locks, then performs the provider write. For as-me email in the undo window, entry waits until `available_at`. A positive receipt settles the action; ambiguity enters the existing reconciliation.
+7. **Settle.** The receipt and its wake intent commit together. The reducer applies `waiting_reply`, sets `follow_up_at`, updates the todo through `transition_workflow/4` (for example `they_own` with the counterparty as owner and "Waiting for their reply" as next action), and finishes the turn. Completion requires cited evidence and an atomic revision-aware update; replayed receipts apply once.
 
 ### Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ready: user grants scope
-    ready --> deciding: reply or due work
-    deciding --> sending: validated action saved
-    deciding --> waiting_reply: no action needed
-    deciding --> needs_user: decision outside scope
-    deciding --> waiting_capacity: budget or provider cooldown
-    waiting_capacity --> ready: capacity available and grant active
-    deciding --> completed: outcome evidence verified
+    [*] --> ready: grant v1
+    ready --> deciding: due work or reply
+    deciding --> sending: validated send or booking
+    deciding --> waiting_reply: nothing to do yet
+    deciding --> needs_user: outside scope
+    deciding --> waiting_capacity: limit reached
+    deciding --> completed: evidence verified
     sending --> waiting_reply: positive send receipt
-    sending --> reconciling: outcome uncertain
-    reconciling --> waiting_reply: exact positive evidence
-    reconciling --> needs_user: observation limit reached
-    waiting_reply --> ready: matching reply or follow-up due
-    needs_user --> ready: user supplies answer or new grant
-    ready --> paused: user pauses
-    waiting_reply --> paused: user takes over
+    sending --> completed: booking receipt (scheduling)
+    sending --> reconciling: uncertain
+    reconciling --> waiting_reply: proven
+    reconciling --> needs_user: observation exhausted
+    waiting_reply --> ready: reply or follow-up due
+    waiting_capacity --> ready: capacity and grant active
+    needs_user --> ready: answer or new grant version
+    ready --> paused: user pauses or takes over
+    waiting_reply --> paused: user pauses or takes over
     paused --> ready: user resumes
     completed --> [*]
 ```
 
-`revoked` and `expired` are terminal for new sends from every live state. Pause or revocation stops queued work and increments authority before another send can enter. A request already entered at the provider boundary may still arrive. Keep its observation active and show “Stopping; one message may already be sending” until resolved. Revocation cannot unsend a message or prove that a remote request was cancelled.
+`stopped` and `expired` are terminal for sends from every live state. A stop after send entry shows "Stopping; one message may already be sending" until reconciled. Revocation cannot unsend. `expired` applies only to an explicit expiry. A missed deadline creates a user decision, never deletes history. Silence never expires a grant, creates one, or authorises reminders beyond the limit.
 
-`expired` applies only when the user supplied an authority expiry. A missed target date can create a decision for the user without deleting the conversation or its grant history. Months of silence alone do not expire a delegation, create a new grant, or authorise repeated reminders.
+Todo workflow mapping while a delegation is live:
 
-If an external send was entered, an expired lease does not authorise a replacement sender. Even a crash after marking entry but before writing to the network must remain conservative if that boundary cannot be proven. A clearly unentered action can resume under a new claim. Unknown outcomes can be observed, never blindly resent. This deliberately permits “needs your review” when avoiding a duplicate cannot be reconciled with guaranteed delivery.
+| Delegation state | Todo workflow | Owner | Next action |
+| --- | --- | --- | --- |
+| `ready`, `deciding`, `sending`, `reconciling` | `working` | Unchanged | "Maraithon is working on this" |
+| `waiting_reply` | `they_own` | Counterparty person | "Waiting for <name> · following up <date>" |
+| `waiting_capacity` | `working` | Unchanged | "Resumes <date>" |
+| `needs_user` | `you_own` | User | The question |
+| `paused` | Unchanged | Unchanged | "Paused" |
+| `completed`, kind `scheduling` | `waiting` with `waiting_until` at the meeting end | User | "Attend the meeting"; the existing sweep asks afterwards whether it happened |
+| `completed`, other kinds | `done` with `outcome_confirmed` | Unchanged | Outcome |
 
-### Conversations that last months
+`TodoWorkflowReview` skips model review and the due-Waiting return for todos with a live delegation; the delegation owns those judgments and cites its own evidence.
 
-Keep business lifetime, authority lifetime, and execution lifetime separate. A construction update can remain open for six months under one grant, wait until an agreed date next quarter, and use a fresh short model run when a reply arrives. OAuth access tokens and runtime leases can renew many times without recreating that grant. An outcome deadline or temporary send hold does not erase the conversation.
+## Scheduling
 
-Persist `next_wake_at` as an absolute UTC timestamp plus the user's intended local-time rule when relevant. The recurring scheduler materialises only due or near-term directives. In particular, the current seven-day directive-delay limit must not become a seven-day conversation limit or a chain of daily model calls. A ninety-day wait is one future date in PostgreSQL until its wake horizon arrives. On startup or after downtime, a bounded indexed scan recovers overdue work; it does not emit every missed reminder at once. Re-evaluate once using current facts.
+`Delegations.Scheduling.propose_slots(user_id, %{duration_min, window, participants})` is deterministic:
 
-Maintain a compact, versioned conversation summary plus a structured fact ledger: objective, constraints, participants, decisions, promises with owners/dates, open questions, last confirmed send, and unresolved outcomes. Every fact points to source message IDs and revisions. Summaries help retrieve context; they cannot independently prove completion or authorise a commitment. Retrieve the recent thread and relevant older evidence for each turn, rather than replaying months of text into every prompt.
+1. Read events for the window from each calendar account listed in `delegation_preferences` through a new account-scoped `GoogleCalendar.events_in_window/4`. The existing `events_in_window/3` reads one token and the primary calendar only, which is what the first release uses when no accounts are listed. Prefer the local Mac mirror when its sync is fresher. Refuse to propose if any read fails.
+2. Iterate `Calendar.FreeBlocks.openings/3` per local day, since it computes one work day at a time, then apply buffer, lead time, and the daily cap in `propose_slots/2` in the user's timezone.
+3. Rank by the user's stated preferences (earlier in the week, mornings, and so on) and return the top eight with a coverage summary and the exact read timestamps.
 
-Keep active delegation evidence and send identities available for the full active lifetime. Audit existing source, Run, Step, action, event, and Memory retention before enabling this. Add explicit active references or bounded encrypted evidence snapshots so routine retention cannot remove the only proof of an outstanding send or promise. Avoid retaining an entire mailbox. When evidence is deleted by the user or becomes inaccessible, mark the affected facts unavailable and hold decisions that require them. Privacy erasure overrides an active workflow.
-
-Persist separate versions for business-state schema, grant, policy, prompt, model configuration, and voice profile. Use the existing `schema_version/0`, `migrate_state/3`, and `reconcile_restored_state/2` behaviour callbacks for coordinator checkpoints, with pure idempotent migrations. Validate business rows and restored state before dispatch. The existing Agent restore can retain old state after a migration callback fails; the new delegation boundary must explicitly reject an unsupported version rather than proceeding from defaults. A policy tightening can pause affected work, but a deployment cannot silently widen a six-month-old grant.
-
-Add compatibility fixtures from every shipped delegation schema version. Use additive migrations, retain old readers until open work has migrated, and exercise downgrade/rollback with active and uncertain sends. Restoration must work with an empty ETS table, a new node incarnation, and a missing process checkpoint by reloading the authoritative rows. Do not depend on an Erlang PID, a process mailbox, a long timer, or a model provider's conversation cache surviving.
-
-A database backup restore is different from a process restart: providers may have accepted sends newer than the restored database. Keep autonomous dispatch disabled after a point-in-time restore until an operator establishes the recovery window and reconciles provider history against retained action identities. Do not interpret missing post-backup receipts as permission to resend. Include this distinction in the recovery runbook and exercise it with fake providers before a live pilot.
-
-If OAuth refresh fails after weeks of inactivity, preserve state and request reconnection to the same external identity. After reconnect, repair the source gap and review changed facts before sending. A removed Slack channel, changed participants, or source retention gap becomes a specific hold. A no-response reminder limit creates a quiet waiting state or a user decision according to the grant; it does not destroy the conversation. The next legitimate reply can resume work under the still-active scope months later.
+The model picks up to three to offer and writes the message. Each offered slot is recorded on the turn. When a counterparty accepts a slot, the reducer emits `book`: the send job calls the existing `calendar_create_event` action with attendees and `sendUpdates: "all"`, keeping the event ID the runner already derives from the prepared action ID (Google requires its base32hex form), the fresh `ensure_calendar_slot_free` check, and ownership markers. The accepted slot is part of the frozen payload. A conflict returns to `deciding` with the slot marked taken and re-offers once. Booking is proven by the existing calendar reconciliation, which completes the delegation and moves the todo to Waiting until the meeting. If the user has a Calendly link for the context, the model may offer it as an alternative in the same message, never instead of computed slots. Google `freebusy.query` for other people's calendars is a later addition.
 
 ## Gmail and Slack adapters
 
 ### Gmail
 
-Reuse the existing frozen RFC Message-ID and Sent reconciliation. A new send receives the provider's message and thread IDs. A reply must preserve the thread ID, appropriate `In-Reply-To` and `References` headers, and matching subject. Validate header construction against [Gmail's thread requirements](https://developers.google.com/workspace/gmail/api/guides/threads). A subject match alone is insufficient for routing or proof.
+Reuse the frozen `Message-ID` and Sent reconciliation. A reply carries `threadId`, `In-Reply-To`, `References`, and the same subject; validate against Gmail's threading rules. Subject alone never routes or proves anything. Extend `GmailSendMessage` with `cc` and `from`; `from` must equal a verified alias of the bound account or be absent. Bind account, alias, recipients, content hash, and reply parent before dispatch; reject header injection; never infer reply-all, `Reply-To`, forwarding, or attachments.
 
-Bind the exact account, authorised From alias, recipients, content hash, and reply parent before dispatch. Reject header injection. Do not infer permission to reply-all, add a new `Reply-To` destination, forward the conversation, or include an attachment. When using a saved Gmail draft, freeze its current content and identity; an edited draft needs a new validated action. Draft existence is never evidence of a promise or completed send.
-
-Positive reconciliation requires the existing identity evidence plus the delegated destination/thread checks. Search absence is not proof of non-delivery. `sent` means the provider accepted the message, not that the recipient read it or that the business outcome happened. Bounces and delivery failures update the workflow separately.
-
-Persist delegation events during the successful sync/ingestion path, before advancing its cursor. If source persistence and routing cannot share a transaction, persist a routable source reference in that transaction and replay it idempotently. Extend the existing sync rather than running a mailbox scan per delegation. Gmail notifications carry a history pointer, not an authoritative message body. Renew watches daily, recover notification gaps through history, and test expiration recovery; [Gmail requires watch renewal at least every seven days](https://developers.google.com/workspace/gmail/api/guides/push). That provider renewal is independent of the lifetime of any delegated conversation.
-
-The current Gmail `verify_signature/2` is a no-op, with account lookup constraining an untrusted notification. Before enabling delegated sends, establish and verify authenticated Pub/Sub push at the ingress boundary. Validate signature, issuer/expiry, expected audience, and expected verified service-account email, following [Google's authenticated push guidance](https://docs.cloud.google.com/pubsub/docs/authenticate-push-subscriptions). Audit deployment configuration rather than assuming the application method describes every perimeter control. In all cases, act only on messages fetched with the bound OAuth grant.
+Route inside `Gmail.ingest_messages/3`: for each parsed message whose `(account, thread_id)` matches a live delegation, insert the `delegation_events` row with the persisted RFC headers in the same transaction, before the cursor advances. Our own sends return through sync and reconcile the action; they are never treated as a reply or learned as the user's writing. Renew watches daily and recover gaps through history. Before autonomous sends ship, verify authenticated Pub/Sub push at the ingress (signature, issuer, audience, service account), and in all cases act only on messages fetched with the bound grant.
 
 ### Slack
 
-Use the exact connected member's user token. Slack documents that [writes with user tokens act as that user](https://docs.slack.dev/authentication/tokens/), and [`chat.postMessage` accepts `chat:write` on a user token](https://docs.slack.dev/reference/methods/chat.postMessage/). Verify the installed token's identity, granted scopes, and access to the target conversation before accepting a delegation. Missing permission pauses that delegation; it never changes the sender.
+A bot is the right assistant identity on Slack, and most of it already exists. The installed app stores a bot token per workspace with `chat:write` and `im:write`, so it can post in channels it has been invited to and open DMs. Messages from it carry Slack's app badge, which is honest disclosure. Adding `chat:write.customize` lets each user's assistant post under its own name and icon, "October" for Kent, instead of the app's default name. As-me stays on the member's own user token. The assistant never posts from the user's account: a message from Kent's account signed "October" would confuse people and would break the identity rules above. If a workspace keeps the bot out of a channel, the delegation holds and offers one decision, "Send as you instead?", which creates a new grant version with the actor changed rather than a silent fallback. A separate paid member seat for the assistant is possible but unnecessary.
 
-Freeze workspace, channel, root `thread_ts`, author ID, payload hash, and a server-generated action identity. Disable broadcast replies and uncontrolled mentions. For a new DM, resolve the approved participant set to a channel before grant activation; do not let a model choose an arbitrary channel later. An unthreaded DM reply is eligible only when that DM has one active delegation and its meaning is unambiguous. Otherwise keep the event and ask for clarification.
+As-me uses the exact member's user token; as-assistant uses the bot token with `chat:write.customize`. Verify token identity, scopes, and channel membership before activating a delegation; a missing permission holds the delegation, never swaps identity. Freeze workspace, channel, root `thread_ts`, author, payload hash, and action identity. Pass `client_msg_id = action_id` where the API accepts it, without relying on it for dedupe. Disable broadcast replies and uncontrolled mentions. A new DM resolves its participant set to a DM channel before activation and freezes both the channel and the counterparty's user ID. An unthreaded DM reply is eligible only when that DM has one live delegation.
 
-The first implementation slice must prove an observable send identity for our actual user token and installation. Evaluate a stable `client_msg_id` and opaque message metadata with controlled sends and history/event reads. Do not assume either is an exactly-once API or that metadata works with every token. Slack's method documentation does not establish a durable duplicate-send guarantee; it also describes errors where an operation may have partly succeeded. Treat lost responses and those errors as uncertain.
+Add `slack_post` reconciliation: a bounded `conversations.replies` or `conversations.history` read must find a message with the returned `ts`, the expected author (`user` for as-me, `bot_id` or `app_id` for as-assistant), channel, thread, and text hash. Text plus a nearby timestamp alone proves nothing. Lost responses and partial-success errors remain uncertain; no automatic resend. The first Slack slice proves which identity survives for our installation.
 
-Add `slack_post` reconciliation only when a read can match the frozen identity, author, workspace, channel, thread, and content. Metadata, if supported, contains only an opaque ID and non-sensitive verification material, because it is visible in the workspace. Matching text and a nearby timestamp alone cannot prove which action sent a message. If no reliable identity survives the user-token path, retain unknown outcomes for user review and record that limitation. Do not ship automatic resend as the workaround.
+The coordinator subscribes to the bound topic, `slack:<team>:<channel>` for a channel or `slack:<team>:dm:<counterparty_user_id>` for a DM, so existing ingress fan-out delivers events durably before acknowledgement, deduped on `provider_event_id` and then on message revision. Use bounded repair reads only for live conversations with a suspected gap or a due decision.
 
-Extend the existing durable webhook transaction to insert matching delegation events alongside Agent directives. Acknowledge only after durable acceptance, without model calls or history reads. Slack expects an acknowledgment within three seconds and retries failed deliveries, so dedupe by workspace/event ID and then by canonical message revision when repair reads overlap events. See [Slack Events API](https://docs.slack.dev/apis/events-api/).
+### Races
 
-Prefer events to polling. Use bounded `conversations.replies` repair reads only for active conversations with suspected gaps or a due decision. Confirm the installation's rate class: [Slack documents different limits for some commercially distributed apps and internal applications](https://docs.slack.dev/reference/methods/conversations.replies/). Do not apply one quota assumption to every workspace.
-
-### Reply routing and races
-
-| Situation | Required behaviour |
+| Situation | Behaviour |
 | --- | --- |
-| Same event delivered repeatedly | One event record, one eligible turn, at most one entered send for its decision. |
-| Two replies arrive close together | Coalesce their source revisions; invalidate a draft if a later known reply arrived before send entry. |
-| Reply arrives before send receipt | Persist it, reconcile/bind the outbound thread, then process it. Never discard because the workflow was not yet waiting. |
-| Same subject in another email thread | No match without the bound account and thread/reply identity. |
-| Slack edit or deletion | Record the revision and reconsider unsent decisions. Preserve that earlier decisions used earlier evidence. |
-| Our own outbound message returns through sync | Reconcile the action; do not answer ourselves or learn it as human writing. |
-| User sends manually in the same thread | If it does not match our send identity, pause automatically for takeover. Do not race the user with another reply. |
-| Auto-reply, bounce, bot response, reaction, or unsubscribe | Classify deterministically where possible. No autoresponder loop. Out-of-office can defer within deadline; bounce needs attention; stop requests end outreach. A reaction alone cannot prove the required outcome. |
-| New participant, forwarded thread, or channel change | Preserve evidence and request expanded scope. Do not follow the conversation into another destination automatically. |
-| Timer and reply race | Lock/recheck source revision before send entry. A reply supersedes an unsent reminder. |
-| Late reply after completion, expiry, or revocation | Store it and show relevant context. Do not reactivate sending without a current grant. |
+| Duplicate delivery | One event, one eligible turn, at most one entered send per decision. |
+| Two replies close together | Coalesce; a draft is invalidated if a later reply arrived before send entry. |
+| Reply before send receipt | Persist, bind the thread, then process. Never discard. |
+| Same subject in another thread | No match without the bound account and thread identity. |
+| Slack edit or delete | Record the revision; reconsider unsent decisions; earlier decisions keep their earlier evidence. |
+| The user replies manually in the thread | Auto-pause for takeover. Never race the user. |
+| Auto-reply, bounce, bot, reaction, unsubscribe | Deterministic classification. Out-of-office defers within the deadline; a bounce needs the user; a stop request ends outreach; a reaction proves nothing. |
+| New participant or forwarded thread | Hold and ask for scope. Never follow into another destination. |
+| Timer and reply race | Recheck the source revision under lock before send entry; a reply supersedes an unsent reminder. |
+| Late reply after completion or stop | Store and show. No reactivation without a current grant. |
 
-There is no atomic transaction across Gmail/Slack and our database. A person can reply after our last read while our send is in flight. Record the source revision used and make this limit visible in diagnostics. Do not promise that every possible conversational race can be eliminated.
+There is no transaction across Gmail or Slack and PostgreSQL. A person can reply after our last read while our send is in flight. Record the source revision used and show it in diagnostics.
 
-## Learning the user's voice
+## Voice
 
-Extend `UserVoice` and `Drafts` rather than building a separate persona system. The goal is channel-appropriate writing based on the user's own messages, with facts supplied by the current task.
+As-me extends `UserVoice` and `Drafts` rather than adding a persona system. Samples must be authored by the bound sender in Sent or by the bound Slack member, with quotes, forwards, signatures, boilerplate, automated mail, and Maraithon's own sends excluded and exclusion counts recorded. Profiles are versioned per user, account, and channel; each prepared action pins the version it used. Explicit preferences override inferred style. A missing or fallback profile switches to explicit style instructions; generic fallback copy or a failed generation never sends. Incremental refresh, correction learning, held-out evaluation, and promotion thresholds are a separate spec; the pilot ships with the current profile plus explicit preferences.
 
-1. **Collect reliable samples.** Prefer already ingested content. Gmail samples must be in Sent, authored by the bound sender/verified alias, and contain newly written text. Exclude drafts, received quotations, forwarded bodies, signatures, boilerplate, automated messages, and Maraithon-generated sends. Slack samples must have the bound member's author ID in the selected workspace. Exclude bots, imported quotations, and our own action identities.
-2. **Keep provenance.** Record account, source ID, content hash/revision, timestamp, authorship class, and extraction version. Imported historical sends whose authorship cannot be established may support a clearly labelled provisional profile, but cannot count as a verified human evaluation set. A sent message is not automatically human-authored.
-3. **Separate contexts.** Key by user, connected account, and channel. Add audience variants only when there are enough examples and the user permits that context. Explicit preferences override inferred style. Private personal writing must not appear in a work response, and voice retrieval must not make unrelated facts available to the drafting model.
-4. **Extract and version.** Wire a real LLM callback through the existing configured provider. Store a compact profile covering length, greeting/sign-off, directness, punctuation, and channel habits. Preserve prior versions and their sample manifests. Treat the samples as data, not instructions. No em dashes remains an explicit preference for Kent, not a universal inference about other users.
-5. **Refresh incrementally.** Proposed starting limits: bootstrap at most 40 samples per account/channel, then refresh at most weekly or after 20 new eligible messages. Expose an explicit refresh action. Fetch only missing sample bodies with shared provider limits. Do not rebuild the profile on every reply.
-6. **Learn from corrections.** Store the distinction between generated, human-edited, and human-written text. A user's edit is feedback; accepting a draft unchanged is weak evidence. Attribute changes to style versus facts before updating a profile. Never let the model train on its own output as if it were new user preference.
-7. **Validate before promotion.** Compare the new version with the current one on held-out conversations. Keep the old version if quality falls. A missing profile can use explicit user-authored style instructions, but generic fallback copy or failed generation cannot silently proceed to send.
+As-assistant uses a fixed house style with the assistant's name, plain and brief, first person as the assistant, no em dashes, and an honest answer if asked whether it is a person. Nothing is learned from the user's writing for this actor.
 
-Pin a voice version to each prepared action. A refresh affects future drafts, not an action already frozen for dispatch. Deleting samples, revoking a voice-learning preference, disconnecting an account, and erasing a user must remove or invalidate affected derived profiles as well as source content. Record exclusion counts so “40 samples” cannot conceal 39 quoted replies.
+## Compute and cost economy
 
-## Budgets, waiting, and observability
+Quality comes from evidence and checks, not from spending. Model calls, provider calls, and running processes scale with conversation activity, never with elapsed time or the number of open delegations.
 
-Use the configured `meta/muse-spark-1.3-contributor` model. A fallback to another model requires an explicit configured policy, not an unobserved substitution. Record requested and actual provider/model, prompt version, token counts, and billed cost when available for every decision and voice refresh.
+| Activity | Cost |
+| --- | --- |
+| Waiting | Zero model calls. One indexed query per user every six hours. A dormant delegation is a row and an index entry. |
+| Inbound event | Deterministic classification first: our own echo, auto-reply, bounce, reaction, unsubscribe, unrelated sender, or a reply that only says thanks. Those never reach a model. |
+| Turn | One composition call on the user's configured model through `LLM.UserModel.bind/1`. Triage (is this substantive, which decision kind) and the semantic policy check run on the cheapest tier already configured for closure classification, after a deterministic pass over headers, participants, and known phrases. Escalate triage to the configured model only when its confidence is low or the decision would end or interrupt the conversation (`complete`, `needs_user`). Target under 1.3 model calls per turn on average, measured. |
+| Scheduling | Pure interval math over calendar reads. No model call to find times. |
+| Sync | Only the missing messages of the bound thread through the existing per-account sync. No per-delegation mailbox scans. |
+| Reconciliation | Bounded provider reads, at most 12 per action, no model. |
 
-Proposed pilot limits are six outbound messages per rolling seven days, two unanswered reminders per waiting cycle, at most three model calls per turn, and US$0.25 of LLM spend per delegation per rolling thirty days. There is no default lifetime deadline or total-turn cap. These are starting configuration values to validate, not measured economics or user commitments. A new substantive reply can start a new waiting cycle; a timer, self-echo, or auto-reply cannot reset its reminder count.
+Context stays compact: the fact ledger (32 KB cap), the last six messages of the thread, the todo's facts, one line per counterparty from People, and the actor's voice context, under the existing `PromptBudget`. Older evidence is fetched only when the ledger cites it for the decision at hand. Six months of history is never replayed into a prompt.
 
-Show the meaningful scope when the user delegates; reserve one model call at a time against both the delegation and a separately configured user allowance. The first implementation must record the price source/version and refuse a new autonomous model call if it cannot establish a conservative bound. A lost billable response keeps its reservation until reconciled or conservatively charged. Parallel jobs, restarts, and new turns cannot reset windowed counters. Persist lifetime totals for reporting as well.
+The coordinator Agent is created on a user's first delegation. Its steady cost is lease renewal and the 5-second directive poll, paid only for users with live delegations. After seven days with none, the Agent is stopped through the existing lifecycle operations and recreated on the next delegation. There is no process, timer, or model context per conversation.
 
-When a rolling limit is reached, enter `waiting_capacity` until the next eligible time or a user adjustment. Preserve events and the grant. Recheck accumulated replies and current facts when capacity becomes available; do not release a backlog of stale reminders. This automatic hold is distinct from a user-requested `paused` state, which never resumes on a timer. A monthly reporting period is an accounting boundary, not permission to expand scope or a reason to request the same delegation again.
+Provider calls are shared and bounded: one in-flight Gmail request per mailbox across sync, voice sampling, reconciliation, manual sends, and delegation, with durable cooldown honouring `Retry-After`; Slack limits keyed on workspace, method, and channel; events over polling, with repair reads only on a suspected gap. Under throttling the todo stays open and says so.
 
-Keep the existing US$3/day projection, US$6 email threshold, and six-hour cost-monitor cadence. That account-wide alert remains separate from feature budgets. Do not claim exact per-task cost from the aggregate OpenRouter balance. `Spend` has fallback rates for unknown model names; add provider cost attribution for delegation calls and explicitly label estimates until actual usage is available.
+Budgets per delegation default to 6 sends per rolling 7 days, 2 reminders per waiting cycle, 3 model calls per turn, and US$0.25 per rolling 30 days, with a per-user cap of US$1 per day across all delegations. Reserve a conservative bound before each model call and refuse the call if no bound can be established; lost billable responses keep their reservation until reconciled; parallel jobs and restarts cannot reset windowed counters; lifetime totals persist. A reached limit enters `waiting_capacity` until the window frees or the user adjusts, and the backlog is re-evaluated with current facts, never released as stale reminders. The account-wide `CostMonitor` alert stays separate and is a hard stop for new autonomous calls.
 
-Reply events should wake work promptly. Ordinary waiting performs no LLM calls. Store a specific follow-up date, materialise its job within the scheduler's supported horizon, and run a cheap repair sweep every six hours for stranded work. A due reminder performs a fresh bounded thread check before sending. Follow-up cadence comes from the grant: it may be business days, a month, or a named milestone next quarter. Respect timezone-aware quiet hours, any explicit authority expiry, and reminder limits. Silence does not justify an indefinite outreach loop.
+Record requested and actual model, tier, prompt version, tokens, and billed cost per turn. Report dollars per finished delegation, per turn, and per 30-day window. Slice 1's exit evidence includes the measured cost of the controlled conversation. Pilot targets, revised from measurement rather than promised: under US$0.10 per finished information delegation and under US$0.25 per scheduling delegation.
 
-All Gmail consumers, including sync, voice collection, reconciliation, and manual sends, must share a per-mailbox concurrency limit and persisted cooldown across Cloud Run instances. Begin conservatively with one in-flight request per mailbox and tune from evidence. Respect `Retry-After` and bounded exponential backoff without losing cooldown information in wrapped errors. Reserve fairness for normal user actions. Gmail's [concurrent-request limit is shared by all API clients accessing the mailbox](https://developers.google.com/workspace/gmail/api/guides/handle-errors); we can bound Maraithon's contribution, not control Mimestream or other clients.
+Emit redacted ledger events for grant changes, event acceptance, decision, policy hold, send entry, receipt, uncertainty, reconciliation, follow-up, takeover, and completion, with delegation, turn, action, job, and assignment IDs, revisions, versions, timings, and cost. Bodies, prompts, tokens, and recipients never appear in logs.
 
-Slack limits should be keyed by workspace/method and channel for sends, with durable cooldown. Source repair and voice refresh must not bypass those limits. Enforce queue bounds and expire stale work. Under throttling, keep the todo open and explain the delay instead of claiming the other person has not replied.
+## Product and API
 
-Emit redacted events for grant creation/change, event acceptance, decision, policy hold, send entry, provider receipt, uncertainty, reconciliation, follow-up, takeover, and completion. Include delegation/turn/action IDs, job and assignment IDs, source revisions, model/voice/policy versions, timings, and cost. Message bodies, raw prompts, OAuth tokens, and recipient details do not belong in normal logs. The encrypted activity view can link to the original conversation.
+Server-owned delegation summary on `MobileJSON.todo/2` and the web workspace: `state`, `actor`, `waiting_for`, `last_action`, `next_follow_up`, `question`, `controls`, `revision`, `evidence`. The Delegate sheet and controls reuse `todo_workspace_components.ex`, `apps/mobile/MaraithonMobile/Features/Todos/TodoDetailView.swift`, and `apps/companion/Sources/Maraithon/UI/Todos/TodoDetailView.swift`, following `DESIGN.md`: compact rows, shared `<.button>` and `<.badge>`, right-aligned quiet secondary actions.
 
-## Product and API changes
+API operations `create`, `show`, `pause`, `resume`, `take_over`, `stop`, `answer`, each requiring authenticated scope, an idempotency key, and the expected revision. Stale clients receive the current state with a conflict. Old clients render the todo safely without delegation controls. The `delegate` button joins the `available_buttons` allowlist on the action card.
 
-Add the same server-owned delegation summary to web, Mac, and iPhone todo responses: current state, responsible person, delegated outcome, waiting-for label, last action, next follow-up, allowed controls, revision, and recent evidence links.
+Assistant setup and delegation preferences live under Settings as plain rows.
 
-The todo detail surface gets **Delegate**, then **Pause**, **Resume**, **Take over**, and **Stop** when relevant. An activity row might say “Sent your reply · Waiting for the supplier · Following up Thursday.” Show a concrete question only when the user must decide. “Sent,” “waiting,” “needs your decision,” and “completed” must correspond to durable facts.
+### Proposed delegations
 
-Implement one shared context behind proposed create/show/pause/resume/revoke API operations. Mutations require authenticated scope, request idempotency keys, and expected revision. A stale client gets the current state and a conflict response. Resuming an expired grant or broadening scope creates a new grant version. A client reconnect must never restart a completed delegation.
-
-Reuse [web todo workspace components](../lib/maraithon_web/components/todo_workspace_components.ex), [mobile TodoDetailView](../apps/mobile/MaraithonMobile/Features/Todos/TodoDetailView.swift), and [Mac TodoDetailView](../apps/companion/Sources/Maraithon/UI/Todos/TodoDetailView.swift). Follow [DESIGN.md](../DESIGN.md): compact rows, shared controls, and source links. Keep job IDs, policy hashes, and token settings out of the ordinary product flow. Include meaningful progress in the morning brief, with notifications for a needed decision or completed outcome rather than every internal step.
+The Chief of Staff may propose a delegation, never start one. A `delegation_proposals` skill adds no model call: it runs a deterministic filter over open todos (state `you_own`, an outbound next action, a verified counterparty with a known channel, a bound account, and facts sufficient for the kind) and hands the candidates to the cycle memo call that already runs, which ranks them and writes the one-line reason. Each proposal is an insight through `AttentionArbiter` and a suggested primary action on the todo card, "Delegate to October?", with the derived grant preview and the suggested actor. Accepting is the same one-tap path. A proposal expires at the todo's next review. The brief lists the day's proposals in one row. A per-user setting can switch proposals off, or later allow auto-delegation for named kinds; the first release proposes only, and only the grant-aware boundary ever sends.
 
 ## Implementation sequence
 
-Each slice leaves a reviewable artifact. Proposed tests below are specific to this feature; they do not change the repository's [manual-first development policy](development-mode.md), enable broad CI tests, or change the normal deployment path. This document is a plan for those checks, not evidence they ran.
+Each slice compiles with `make build`, ships behind its gate, and is verified by hand between two controlled accounts Kent owns. No production contact receives a test message. Native slices build only when they change. Tests listed in the appendix are written and run only when Kent authorises hardening.
 
-| Slice | Concrete work | Exit evidence |
-| --- | --- | --- |
-| 1. Provider contracts | Add strict account resolution; audit token scopes and Gmail push authentication; create controlled Gmail and Slack send/read experiments. Extend Slack error classification and establish which send identity survives with our user token. | Redacted account/scope manifest and provider receipts proving sender, thread, and identity round-trip. Record Slack limitations explicitly. No real user delegation yet. |
-| 2. OTP authority and persistence | Add the per-user coordinator behaviour, delegation context, schemas, immutable grants, constraints, erasure/retention integration, and revision-aware APIs. Extract a required-authority execution adapter and extend Run/PreparedAction bindings and states. Add strict schema restoration and due-date materialisation beyond the directive horizon. | Deterministic authority and concurrency cases pass. A six-month fixture survives multiple schema upgrades and a full process restart. Existing individually confirmed actions retain their behaviour. Migration/storage verification runs through the project's supported roles. |
-| 3. Complete Gmail loop | Add source-event routing, short model/provider jobs, strict structured decisions, durable timers, Gmail reconciliation reuse, completion evidence, and takeover. | One controlled multi-reply Gmail task finishes after a single delegation, with no intervening user approvals. A lost response and a worker restart do not duplicate a send. |
-| 4. Voice and budgets | Add account-specific versioned profiles, provenance filters, real extraction, held-out evaluation, call reservations, attribution, shared mailbox limiting, and fallback holds. | Voice evaluation report plus exact fake-provider budget assertions and actual pilot cost receipts. Generated messages cannot feed human voice samples. |
-| 5. Complete Slack loop | Add durable webhook routing, strict thread/member binding, send identity and observation, event-gap repair, edits/deletions, and DM rules. | The same multi-reply task passes on Slack with verified member authorship. Lost-response recovery either proves the send or remains visibly uncertain without a resend. |
-| 6. Shared product and pilot | Add the summary and controls to web, Mac, and iPhone; morning-brief integration; feature flags; redacted trace export; controlled release exercises and a continuing longevity canary. | Consistent status and controls across all three apps, background progress with clients closed, measured latency/cost, and successful stop/restart exercises. Long-running canary results are dated observations, not premature claims of months in production. |
+| Slice | Work | Files | Exit evidence |
+| --- | --- | --- | --- |
+| 0. Identity, grant, control | `assistant_identities`, `delegation_preferences`, `delegations`, `delegation_grants`, `delegation_events`, `delegation_turns`, prepared-action columns, RFC headers on observations, manifest refresh. `Delegations` context with `delegate/3`, `pause/3`, `resume/3`, `stop/3`, `answer/4`. Pure `StateMachine`. `DelegationCoordinator` behaviour, Agent row per user, `delegation_due_sweep`. Delegate sheet and summary on web; JSON for native. Assistant settings page reading `sendAs.list`. Gates default off. | `lib/maraithon/delegations/{delegation,grant,event,turn,state_machine,coordinator,ingress,wakes}.ex`, `lib/maraithon/behaviors/delegation_coordinator.ex`, `lib/maraithon/assistant_identities.ex`, `lib/maraithon/delegations/preferences.ex`, `lib/maraithon/connections.ex` (`assistant_account?/1`), `priv/repo/migrations/*`, `todo_workspace_components.ex`, `mobile_json.ex`, `recurring_jobs.ex`, `background_job_handler.ex` | Delegate a todo as me and as assistant; the todo shows the derived scope and "Sends are off"; the coordinator Agent recovers to idle, checkpoints under 1 KB, and wakes on the 6-hour cap with one query. Migration passes catalog checks. |
+| 1. Gmail as me | `delegation_sync`, `delegation_decide` with read-only toolbox and `delegation` run surface, `delegation_send` through `PreparedAction` with `authorization_kind`, undo window, reply routing in ingestion, follow-up timers, reminder limits, completion, takeover, ledger events. Gmail gate on. | `lib/maraithon/delegations/{execution,policy,toolbox}.ex`, `gmail.ex` ingestion hook, `gmail_send_message.ex` (`cc`), `prepared_action.ex`, `telegram_assistant/run.ex` (surface), `action_reconciliation.ex` | One controlled multi-reply conversation between two Kent accounts finishes after one tap: question, answer, confirmation, Done with evidence, with the measured model calls and cost per turn recorded. A killed worker mid-turn and a lost send response produce no duplicate. |
+| 2. Gmail as assistant | Connect and bind the assistant account (`october@ewakened.com`) with `gmail_compose`; `Connections.assistant_account?/1` and its exclusions in discovery, the source bundle, `UserIdentity`, `UserVoice`, People scoring, and briefs; `From` display name and optional alias on send and in reconciliation; signature, disclosure, house style; optional Cc of the user; identity preflight. | `assistant_identities.ex`, `connections.ex`, `gmail_send_message.ex`, `gmail.ex` `build_raw_message`, `action_reconciliation.ex` header check, `delegations/voice.ex`, discovery and voice call sites | The same conversation runs from `october@ewakened.com`; replies land in October's inbox and route to the delegation; Kent's inbox, todos, identity, and voice profile are untouched; the counterparty sees October's name and disclosure. |
+| 3. Find times and book | Account-scoped `events_in_window/4`, `propose_slots/2`, preferences UI, attendees and `sendUpdates` on `calendar_create_event`, `book` decision with the slot in the frozen payload, Calendly alternative, completed-to-Waiting mapping. | `lib/maraithon/delegations/scheduling.ex`, `connectors/google_calendar.ex`, `tools/calendar_create_event.ex`, `telegram_assistant/runner.ex` slot check | A scheduling delegation offers three real free slots, books the accepted one on Kent's calendar with the counterparty invited, and the todo moves to Waiting until the meeting time. A slot taken between offer and acceptance is re-offered, not double-booked. |
+| 4. Slack | Coordinator subscriptions to channel and `dm:<user>` topics, event routing, as-me user token, as-assistant bot token with `chat:write.customize` (reinstall if Slack requires it), `slack_post` reconciliation, DM rules, the "Send as you instead?" hold, edits and deletes. Slack gate on. | `oauth/slack.ex` scopes, `slack_post_message.ex`, `action_reconciliation.ex`, `delegations/ingress.ex` | The information conversation passes in a controlled workspace under both actors with verified authorship; a lost response is proven or visibly held. |
+| 5. Proposals, longevity, reporting | `delegation_proposals` Chief of Staff skill and card action, accelerated-clock fixture across schema versions, spend attribution report, morning-brief integration, idle-Agent stop after seven days, longevity canary. Voice learning proceeds under its own spec. | `chief_of_staff/skills/delegation_proposals.ex`, `delegations/reports.ex`, brief integration | The Chief of Staff proposes a delegation on a real todo with the right actor and scope, and one tap starts it. A real controlled delegation stays open across releases and reports elapsed time at each review; per-delegation cost is reported against the caps. |
 
-Suggested new modules under `lib/maraithon/delegations/`: `grant`, `event`, `turn`, `policy`, `state_machine` (a pure transition reducer), `execution`, `ingress`, `scheduler`, `context`, and provider adapters. Add `DelegationCoordinator` under `lib/maraithon/behaviors/` using the existing Behavior contract. Keep shared send authorisation in a small `Maraithon.Actions` boundary over the existing prepared-action implementation. Add handlers to [BackgroundJobHandler](../lib/maraithon/runtime/background_job_handler.ex) and due-work registration to [RecurringJobs](../lib/maraithon/runtime/recurring_jobs.ex). Existing Chief of Staff skills may propose a delegation or summarise progress, but only the grant-aware boundary dispatches its messages.
+## Decisions made and still open
 
-## Verification plan
+Decided by Kent on September 15: the assistant is a dedicated Google account, `october@ewakened.com`, connected through the normal flow and bound as the assistant; the Chief of Staff may propose delegations on its own; on Slack the assistant is the bot, not Kent's account; the design must stay economical in compute and cost without losing quality.
 
-### Deterministic tests and failure injection
+Still open, with the plan's defaults:
 
-Build injectable fake Gmail, Slack, clock, and LLM adapters. Fake providers maintain their own accepted-message store, separate from application receipts, so a test can accept a message and then drop the response. Use real PostgreSQL transactions, constraints, and runtime roles for ownership tests. Synchronise failures with explicit barriers/monitors, not sleeps. Retain seeds and event traces for replay.
+- Disclosure default for the assistant: on.
+- First-message handling: a two-minute undo for as-me, immediate send for as-assistant.
+- Copying Kent on October's first message in each thread: off.
 
-Extend the existing [action reconciliation tests](../test/maraithon/telegram_assistant/action_reconciliation_test.exs), [continuation tests](../test/maraithon/telegram_assistant/continuation_test.exs), [Gmail replay tests](../test/maraithon/runtime/gmail_source_replay_test.exs), [Slack replay tests](../test/maraithon/runtime/slack_source_replay_test.exs), and [draft tests](../test/maraithon/drafts_test.exs). Add focused files under a proposed `test/maraithon/delegations/` directory.
+## Remaining uncertainties
 
-| Test | Verifiable assertion |
+Slack send identity round-trip under our installation; whether `chat:write.customize` needs a reinstall; the display name Gmail applies to the assistant account's `From`; deployed Pub/Sub push authentication; how far the current voice profile carries as-me without the learning work; measured cost per turn on the configured model and the cheap tier; and how retention behaves across months. Each is resolved by a slice's exit evidence rather than assumed.
+
+## Appendix: automated checks when hardening is authorised
+
+Injectable fake Gmail, Slack, Calendar, clock, and LLM adapters with their own accepted-message stores. Real PostgreSQL transactions and runtime lanes. Barriers, not sleeps.
+
+| Test | Assertion |
 | --- | --- |
-| Full loop, both providers | One user grant -> first send -> counterparty question -> answer -> final reply -> evidence-backed completion. Provider store contains exactly the expected messages; no per-reply approval is requested. |
-| No-response path | Advancing the fake clock sends only authorised reminders, respects quiet hours and deadline, then stops. Waiting alone makes zero model calls. |
-| Duplicate/reordered delivery | Replay each inbound event ten times and reorder adjacent events. One canonical event revision and no duplicate entered action; all eligible input is eventually consumed. |
-| Crash matrix | Kill before decision save, after save, after action enqueue, after send entry, after provider acceptance, after receipt commit, and during workflow update. Unentered work resumes; uncertain entered work observes; successful handoff applies once. |
-| Split ownership | Two workers and a lease rollover contend for a turn. Stale workers cannot commit decisions, sends, outcomes, or completion; no replacement enters an unknown send. |
-| Reply/timer/revoke races | Pause or revoke committed before send entry prevents dispatch. A concurrent reply invalidates a stale reminder. After entry, stop reports possible in-flight delivery and never starts another action. |
-| Wrong identity | Other user, other mailbox, alternate Slack user token, bot fallback, changed From/Reply-To/Cc, and wrong thread are rejected before provider entry. |
-| Injection and disclosure | Counterparty text asks to change recipients, reveal unrelated mail, ignore limits, or use another tool. Grant/capabilities remain unchanged and no secret or out-of-scope message is sent. Include quoted and voice-sample attacks. |
-| Human takeover and self-echo | A manual human send pauses; our echoed message reconciles without reply or voice training. Test event-before-receipt ordering. |
-| Ambiguous provider outcome | Accepted-then-timeout, 5xx/partial Slack errors, delayed search, duplicate identity matches, and missing receipts never trigger blind resend or false success. |
-| Source gaps | Missing webhook, expired Gmail history, incomplete pagination, Slack edit/delete, auth revocation, and 429 cooldown preserve unconsumed work and suppress stale follow-ups. |
-| Completion accuracy | “I'll do it” is insufficient for an outcome requiring delivery. Exact received evidence can complete it; unrelated messages, drafts, self-claims, or Charlie's promised work cannot falsely close the task. |
-| Budget and fairness | Concurrent decisions cannot oversubscribe reserved micro-USD or send count; restart cannot reset spend; failed/lost calls are accounted for; voice refresh and repair share provider limits. |
-| Voice and privacy | Quoted text, bot posts, generated sends, and wrong-account samples are excluded. Explicit edits affect future versions only. Erasure invalidates dependent profiles and cancels future sends. |
-| Six-month lifecycle | Advance a fake clock through 180 days, with 60 days of silence, a day-90 follow-up, replies in later months, and multiple deploy/schema versions. The same delegation and grant survive; due work is not lost to the seven-day directive limit; waiting uses zero LLM calls. |
-| Whole-app recovery | Stop all BEAM processes, clear ETS, restart with a new node incarnation, and restore an older checkpoint. Committed events, grants, counters, and unknown sends survive; uncommitted decisions cannot authorise writes. |
-| Result delivery and disaster recovery | Crash after receipt/wake-intent commit and before directive delivery, then after delivery but before marking it delivered. Exactly one transition follows. Restore a database snapshot older than a provider send; dispatch remains disabled until recovery reconciliation. |
-| Long-context and retention | Compact a 1,000-message thread, run retention, and resume from an old promise. The fact has a valid evidence reference or the decision is held; summary prose alone never proves it. User erasure still removes retained evidence. |
-| Schema compatibility | Restore every shipped state version; inject migration failure and unsupported future versions. No send occurs until an explicit, valid migration exists. Test rolling mixed-version readers and rollback with a live unknown action. |
-| Long-term token/source recovery | Rotate OAuth tokens repeatedly, revoke on day 45, reconnect the same identity on day 80, and repair expired history. No account substitution, stale reminder burst, or loss of pending work. |
-| Dormant scale | Keep 1,000 waiting delegations for a user, with five due and one active reply. One coordinator stays responsive, queries use due/thread indexes, snapshots stay below 1 MiB, and no per-conversation polling or model calls appear. |
-| API and clients | Duplicate requests are idempotent, stale revisions conflict, other users cannot access records, and old clients render a safe todo without starting delegation. |
+| Full loop, both actors, both providers | One grant, first send, question, answer, final reply, evidence-backed Done; no approval requested. |
+| Scheduling loop | Offered slots equal computed openings; the booked event has the attendees; a taken slot is re-offered once. |
+| No-response path | Fake clock advances; only authorised reminders send inside quiet hours and deadline; waiting makes zero model calls. |
+| Duplicate and reordered delivery | Ten replays and adjacent reorders yield one event revision and no duplicate entered action. |
+| Crash matrix | Kill before decision save, after save, after enqueue, after send entry, after acceptance, after receipt commit, during workflow update. Unentered resumes; entered observes; handoff applies once. |
+| Split ownership | Two workers and a lease rollover; stale workers cannot commit. |
+| Reply, timer, revoke races | Stop before entry prevents dispatch; a reply invalidates a stale reminder; after entry stop reports possible delivery. |
+| Wrong identity | Other user, mailbox, alias, token, bot fallback, changed headers, wrong thread rejected before entry. |
+| Injection | Counterparty and quoted text asking to change recipients, reveal mail, ignore limits, or use tools; grant unchanged, nothing out of scope sent. |
+| Takeover and self-echo | Manual send pauses; our echo reconciles without reply or voice training. |
+| Ambiguous provider outcome | Timeouts, partial Slack errors, delayed search, duplicate matches never resend or falsely succeed. |
+| Source gaps | Missing webhook, expired history, incomplete pagination, auth revocation, 429 cooldown preserve work and suppress stale follow-ups. |
+| Completion accuracy | "I'll do it" never completes a delivery outcome; unrelated messages and drafts never close the todo. |
+| Budget | Concurrent decisions cannot oversubscribe micro-USD or sends; restart cannot reset spend. |
+| Six-month lifecycle | 180 fake days with 60 days of silence, a day-90 reply, and two schema upgrades; the same grant survives; due work is not lost to the 7-day directive cap. |
+| Whole-app recovery | Stop all BEAM processes, clear ETS, new node incarnation, older checkpoint; committed rows survive; uncommitted decisions cannot write. |
+| Disaster recovery | Restore a snapshot older than a send; dispatch stays disabled until reconciliation. |
+| Dormant scale | 1,000 waiting delegations, five due, one reply: one coordinator, indexed queries, snapshot under 1 MiB, no per-conversation polling. |
+| API | Idempotent duplicates, revision conflicts, tenant isolation, old clients safe. |
 
-After implementing those files, proposed focused commands are `mix test test/maraithon/delegations/` and the named existing regression files relevant to the changed boundary. These are future, explicitly scoped feature checks, not commands run by this spike. Compile server work with `make build`; build each native slice only when that slice changes.
+Focused command when authorised: `mix test test/maraithon/delegations/` plus the existing reconciliation, continuation, and replay files. Real-provider proof uses dedicated accounts and a controlled workspace, records a redacted evidence artifact under `docs/evidence/delegated-conversations/<run-id>.json`, and is verified by a reader of provider history and database rows, not by the model's own claim.
 
-### Real provider proof
+## Revision notes
 
-Use dedicated sender/recipient Gmail accounts and a controlled Slack workspace with a human-member OAuth grant. No production contact receives a test message. Any scripted live sender uses only the explicitly configured test destinations and fails on an unexpected account or participant.
+Compared with the September 14 spike, this revision adds the "as me" and "as my assistant" actors with concrete Gmail and Slack identities, brings calendar reading, slot proposal, and booking into the first release on the existing calendar tools, replaces the eight-field grant form with a one-tap grant derived from the todo, maps delegation states onto the shipped todo workflow, names the directive kinds and wake mechanics the runtime actually has, corrects the model and provider lane names (queues, not database roles), cuts the implementation into gated slices with files and exit evidence, and moves the automated matrix to an appendix that runs only when hardening is authorised.
 
-For each provider, delegate a fixture outcome such as obtaining a delivery date for order `DELEGATION-TEST-<run-id>`. The counterparty fixture first asks for the order number, then confirms the date after the answer. Repeat with a two-reminder silence case, a request outside scope, manual takeover, and a lost send response. Test both an existing thread and a new conversation. Run with web, Mac, and iPhone closed during waiting.
-
-Record a machine-readable evidence artifact under proposed `docs/evidence/delegated-conversations/<run-id>.json` containing commit, environment, fixture seed, grant/turn/action IDs, requested and actual model, profile/policy versions, provider message IDs, thread/author checks, runtime assignment/outcome evidence, transition times, call counts, and actual versus estimated cost. Keep message bodies and credentials in the controlled encrypted fixture store, not the committed artifact. A separate verifier reads provider history and database state; it must not accept the model's claim that the test passed.
-
-Acceptance targets for the pilot:
-
-- At least ten complete controlled conversations per provider, including existing and new threads, with every normal in-scope reply sent without another user approval.
-- Zero duplicate sends, wrong recipients/accounts, unauthorised commitments, lost accepted reply events, or false completions in the deterministic matrix and controlled runs. A single failure blocks unattended sending for the affected path.
-- Every uncertain send is either settled with exact positive evidence or visibly held. No unknown action disappears during deployment, stop, or retry.
-- Healthy-provider reply-to-decision latency has a proposed p95 target below two minutes; a missed event is recovered by the six-hour repair sweep or a due follow-up read. Report observed values and throttled cases separately.
-- Every model call, including retries, voice extraction, and lost responses, has attributed spend or an explicit outstanding reservation. Report dollars per finished task, per active turn, and per thirty-day window against the proposed US$0.25 windowed cap. Do not claim savings before measuring.
-- The accelerated 180-day scenario passes across at least two state-schema upgrades. Start a real controlled conversation that remains open across releases and report its elapsed duration at each review. Accelerated time proves scheduling/state semantics, not six months of actual provider availability.
-
-Production database verification uses a Cloud Run job with an eval override and `POOL_SIZE=2`, never a laptop database connection. If reporting runtime health, inspect all partition leases/states, termination requests, advancing recurring schedules, Agent recovery/effect/outcome/checkpoint evidence, and `pg_stat_statements`, as required by [AGENTS.md](../AGENTS.md). A green health endpoint alone is insufficient. Use the normal `make deploy` path; this feature plan does not require the opt-in hardened deployment path.
-
-### Voice evaluation
-
-Create a private, consented dataset with at least 30 held-out contexts per channel where enough human-authored history exists. Split by conversation and time, with near-duplicate removal, so a quoted reply or another message from the same thread cannot leak into training. If the corpus is smaller, report the sample size and keep the profile provisional.
-
-Generate a current-baseline draft and a proposed-profile draft using identical task facts, model, and settings. Hide which is which. The user rates voice fit and send-readiness; a separate factual review checks supported claims, correct recipients, and authorised commitments. Record corrections and edit distance, but do not use edit distance as a substitute for judgment.
-
-Proposed promotion criteria: at least 80% of drafts rated send-ready without a style rewrite, at least 60% preference for the new profile in blind comparisons, and zero factual inventions or scope violations in the evaluated set. Report denominators, ties, and failures for Gmail and Slack separately. These are pilot decision thresholds, not a statistical guarantee. A model judge can triage regressions but cannot be the sole judge of the user's voice.
-
-## Rollout and stop conditions
-
-Ship additive storage and read-only controls with dispatch disabled. Run shadow decisions on controlled/replayed conversations, then the real-provider fixtures above, then one explicitly delegated user task per provider. Expand only after reviewing its receipts, voice, completion evidence, and cost. This is a feature enablement sequence; it does not add gates to unrelated product deployments.
-
-Provide flags for delegation globally, per user, per provider, and separately for new sends. Turning sends off must leave event ingestion and read-only reconciliation running so an in-flight action can still be explained. Rollback cancels unentered actions and future wakeups, preserves unknown actions and receipts, and keeps new-schema readers available until active work is settled. Do not roll back a migration by dropping live delegation data.
-
-Immediately stop new sends for a wrong identity, duplicate send, scope violation, or false completion. Hold only the affected delegation for ordinary missing information, exceeded task limits, or unclear outcome evidence. Persist the actual reason and show the next useful user action.
-
-The remaining uncertainties include Slack identity round-trip and user-token event coverage, deployed OAuth grants and Gmail push authentication, available human-authored voice samples, measured Muse cost/quality, and how current retention and schema restoration behave over months. The provider experiments, lifecycle fixtures, and continuing canary resolve these separately. The architecture should keep those uncertainties visible rather than turning them into assumptions inside an autonomous loop.
+Later on September 15, after Kent's answers and an independent code review of this draft: the assistant became a dedicated connected account with explicit exclusions from every user-facing path; a compute and cost economy section replaced the budgets section; the Chief of Staff proposal skill was designed; the Slack bot question was answered; and twelve review findings were fixed, including the directive kinds the Agent can actually activate, the account-scoped calendar read, the calendar event ID, the booking lifecycle, the lock-order quotation, the job lane for sync, the prepared-action binding, the DM topic key, and where per-user settings live.
