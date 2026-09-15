@@ -121,6 +121,10 @@
             </div>
 
             <div class="flex flex-wrap items-center justify-end gap-1 lg:col-span-3">
+              <.button :if={account[:sending_permission_url] && @provider[:connect_blocked?] != true}
+                href={account.sending_permission_url} variant="plain" class="text-xs">
+                Enable Gmail sending
+              </.button>
               <%= if account_reconnect_visible?(@provider, account) do %>
                 <.link
                   href={account.reconnect_url}

@@ -1046,24 +1046,48 @@ defmodule Maraithon.Connections do
 
   defp google_account_entries(user_id, tokens, account_by_provider, return_to, timezone_info)
        when is_binary(user_id) and is_list(tokens) and is_map(account_by_provider) do
-    reconnect_url =
-      auth_url("/auth/google", user_id, return_to, scopes: "gmail,calendar,contacts")
+    assistants =
+      if tokens == [], do: [], else: Maraithon.AssistantIdentities.assistant_providers(user_id)
 
     tokens
     |> Enum.filter(&google_provider?(&1.provider))
     |> Enum.map(fn token ->
       status = token_account_status(token, account_by_provider)
+      assistant? = token.provider in assistants
+      can_send? = OAuth.gmail_send_scopes?(token_scopes(token))
+      purpose = if assistant?, do: "assistant"
+      email = google_account_label(token)
+      missing_send? = status == :connected and not can_send?
+
+      sending_url =
+        if missing_send?,
+          do:
+            auth_url("/auth/google", user_id, return_to,
+              scopes: "gmail_compose",
+              purpose: purpose,
+              login_hint: email
+            )
 
       %{
         provider: token.provider,
         account: google_account_label(token),
         updated_at: token_or_account_updated_at(token, account_by_provider),
         status: status,
-        status_note: token_account_status_note(token, account_by_provider),
+        status_note:
+          if(assistant? and missing_send?,
+            do: "Gmail sending permission needed",
+            else: token_account_status_note(token, account_by_provider)
+          ),
         refresh_token_status: refresh_token_status([token], [%{status: status}]),
         expires_at: token.expires_at,
         details: google_account_details(token, timezone_info),
-        reconnect_url: reconnect_url,
+        sending_permission_url: sending_url,
+        reconnect_url:
+          auth_url("/auth/google", user_id, return_to,
+            scopes: if(assistant?, do: "gmail_compose", else: "gmail,calendar,contacts"),
+            purpose: purpose,
+            login_hint: email
+          ),
         needs_reconnect?: status == :needs_refresh
       }
     end)
@@ -1100,7 +1124,20 @@ defmodule Maraithon.Connections do
     |> Enum.filter(fn service ->
       google_service_connected?(token, Google.scopes_for([service.id]))
     end)
-    |> Enum.map(& &1.label)
+    |> Enum.map(fn
+      %{id: "gmail"} ->
+        if OAuth.gmail_send_scopes?(token_scopes(token)),
+          do: "Gmail (read and send)",
+          else: "Gmail (read only)"
+
+      %{id: "calendar"} ->
+        if OAuth.google_write_scopes?(:calendar, token_scopes(token)),
+          do: "Google Calendar (read and book)",
+          else: "Google Calendar (read only)"
+
+      service ->
+        service.label
+    end)
   end
 
   defp google_provider_suffix("google"), do: nil
