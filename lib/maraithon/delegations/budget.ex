@@ -203,7 +203,8 @@ defmodule Maraithon.Delegations.Budget do
     end
   end
 
-  defp account_budget_ok?(now) do
+  @doc "Read-only admission check; model entry rechecks this under its existing authority."
+  def account_budget_ok?(now) do
     type = RecurringJobs.job_type("llm_cost_monitor")
 
     job =

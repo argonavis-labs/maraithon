@@ -201,7 +201,8 @@ defmodule Maraithon.LLM.CostMonitor do
     history. The exact interval starts at the time above. All models using this key count.
 
     Review model and request activity at https://openrouter.ai/activity.
-    Maraithon continues running. This warning does not stop your assistant.
+    Maraithon continues syncing. Delegated conversations pause new model work
+    until a later cost check is within budget. Your saved tasks and conversations remain available.
     If spend stays above the threshold, another warning can follow in 24 hours.
     """
 

@@ -20,6 +20,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy) and
              actor in ~w(as_user as_assistant) do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
+         :ok <- budget_preflight(),
          %{} = scenario <-
            Enum.find(Evaluation.scenarios()["scenarios"], &(&1["id"] == scenario_id)),
          %{"accounts_ready" => true, "model_ready" => true} = report <-
@@ -58,11 +59,18 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         %{job_id: job.id, scenario: scenario_id, phase: "queued"}
       end)
     else
+      {:error, :account_cost_hold} = error -> error
       _ -> {:error, :eval_preflight_required}
     end
   end
 
   def start(_, _), do: {:error, :unsupported_eval_scenario}
+
+  defp budget_preflight do
+    if Maraithon.Delegations.Budget.account_budget_ok?(DateTime.utc_now()),
+      do: :ok,
+      else: {:error, :account_cost_hold}
+  end
 
   def execute(%BackgroundJob{job_type: @job_type, user_id: @user} = job) do
     job = BackgroundJob.hydrate_payloads(job)

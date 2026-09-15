@@ -389,6 +389,10 @@ defmodule Maraithon.Delegations do
        when reason in ~w(rate_limited llm_busy),
        do: "Model is busy. Retrying automatically."
 
+  defp status_line(%{state: "waiting_capacity", data: %{"hold_reason" => reason}}, _)
+       when reason in ~w(account_cost_hold user_cost_limit delegation_cost_limit model_call_limit),
+       do: "LLM spending is on hold"
+
   defp status_line(%{state: "waiting_capacity"}, _), do: "Waiting for capacity"
   defp status_line(%{state: "reconciling"}, _), do: "Checking whether the message was sent"
   defp status_line(_, _), do: "Maraithon is working on this"
