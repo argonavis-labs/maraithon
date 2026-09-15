@@ -15,6 +15,9 @@ defmodule Maraithon.Tools.GmailSendMessage do
          {:ok, result} <-
            Gmail.send_message(user_id, %{
              account: ActionHelpers.optional_string(args, "account"),
+             account_id: args["account_id"],
+             from: ActionHelpers.optional_string(args, "from"),
+             cc: ActionHelpers.optional_string(args, "cc"),
              to: to,
              subject: subject,
              body: body,

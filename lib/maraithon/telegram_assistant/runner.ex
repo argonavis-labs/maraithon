@@ -2736,7 +2736,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
     with {:ok, start_at, end_at} <- calendar_block_window(payload),
          :ok <- ensure_calendar_block_in_future(start_at),
-         :ok <- ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id) do
+         :ok <-
+           ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id, prepared_action) do
       execute_tool_action(
         "calendar_create_event",
         Map.put(payload, "client_event_id", client_event_id),
@@ -2780,7 +2781,27 @@ defmodule Maraithon.TelegramAssistant.Runner do
   # silently picking a different time. All-day events don't block timed work
   # (same rule as `FreeBlocks`), and this action's own event (already
   # created by a prior lost-response attempt, R7) is not a conflict.
-  defp ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id) do
+  defp ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id, %{
+         authorization_kind: "delegation_grant",
+         payload: payload
+       }) do
+    ids = payload["calendar_account_ids"]
+
+    if is_integer(payload["account_id"]) and is_list(ids) and payload["account_id"] in ids do
+      Maraithon.Delegations.Scheduling.ensure_free(
+        user_id,
+        ids,
+        start_at,
+        end_at,
+        client_event_id,
+        Maraithon.Delegations.Preferences.get(user_id)
+      )
+    else
+      {:error, "invalid_calendar_accounts"}
+    end
+  end
+
+  defp ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id, _) do
     case GoogleCalendar.events_in_window(user_id, start_at, end_at) do
       {:ok, events} ->
         conflict? =

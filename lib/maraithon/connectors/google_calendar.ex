@@ -32,7 +32,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   @behaviour Maraithon.Connectors.Connector
 
   alias Maraithon.ConnectedAccounts
-  alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.Connectors.{GoogleAccount, SourceCursors}
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
   alias Maraithon.Connectors.Connector
@@ -392,10 +392,11 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   this error, since the account's read/sync/watch path is still healthy.
   """
   def create_event(user_id, event_attrs) when is_map(event_attrs) do
-    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google"),
+    with {:ok, token} <- GoogleAccount.access_token(user_id, read_attr(event_attrs, :account_id)),
          {:ok, client_event_id} <- fetch_client_event_id(event_attrs),
          {:ok, start_iso} <- event_time_iso(read_attr(event_attrs, :start)),
          {:ok, end_iso} <- event_time_iso(read_attr(event_attrs, :end)),
+         {:ok, attendees} <- event_attendees(event_attrs),
          {:ok, timezone} <- fetch_timezone(event_attrs) do
       body =
         %{
@@ -408,8 +409,9 @@ defmodule Maraithon.Connectors.GoogleCalendar do
           }
         }
         |> maybe_put_description(read_attr(event_attrs, :description))
+        |> then(&if(attendees == [], do: &1, else: Map.put(&1, :attendees, attendees)))
 
-      url = "#{api_base_url()}/calendars/primary/events"
+      url = "#{api_base_url()}/calendars/primary/events" <> invitation_query(attendees)
 
       case Google.api_request(:post, url, token, body) do
         {:ok, response} when is_map(response) ->
@@ -425,7 +427,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
           end
 
         {:error, {:http_status, 409, _body}} ->
-          recover_existing_event(user_id, client_event_id)
+          recover_existing_event(user_id, client_event_id, event_attrs)
 
         {:error, reason} ->
           {:error, reason}
@@ -440,8 +442,10 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   Returns `{:error, :event_gone}` on 404/410.
   """
-  def get_event(user_id, event_id) when is_binary(event_id) and event_id != "" do
-    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google") do
+  def get_event(user_id, event_id, opts \\ [])
+
+  def get_event(user_id, event_id, opts) when is_binary(event_id) and event_id != "" do
+    with {:ok, token} <- GoogleAccount.access_token(user_id, Keyword.get(opts, :account_id)) do
       url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}"
 
       case Google.api_request(:get, url, token) do
@@ -457,7 +461,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     end
   end
 
-  def get_event(_user_id, _event_id), do: {:error, :missing_event_id}
+  def get_event(_user_id, _event_id, _opts), do: {:error, :missing_event_id}
 
   @doc """
   Patches an event on the primary calendar (SPEC 12 R9). Callers MUST have
@@ -500,9 +504,10 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   Idempotent: a 404/410 (already deleted) returns `{:ok, :already_gone}` —
   a second delete of an already-deleted event is success, not error.
   """
-  def delete_event(user_id, event_id) when is_binary(event_id) and event_id != "" do
-    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google") do
-      url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}"
+  def delete_event(user_id, event_id, opts \\ []) when is_binary(event_id) and event_id != "" do
+    with {:ok, token} <- GoogleAccount.access_token(user_id, Keyword.get(opts, :account_id)) do
+      query = if Keyword.get(opts, :notify_attendees, false), do: "?sendUpdates=all", else: ""
+      url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}" <> query
 
       case Google.api_request(:delete, url, token) do
         {:ok, _response} ->
@@ -531,24 +536,23 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   exactly the events that genuinely overlap the window.
   """
   def events_in_window(user_id, time_min, time_max) do
-    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google"),
+    events_in_window(user_id, nil, time_min, time_max)
+  end
+
+  @doc "Bounded, complete availability read using the exact connected account when supplied."
+  def events_in_window(user_id, account_id, time_min, time_max) do
+    with {:ok, token} <- GoogleAccount.access_token(user_id, account_id),
          {:ok, time_min_iso} <- event_time_iso(time_min),
-         {:ok, time_max_iso} <- event_time_iso(time_max) do
-      params =
-        URI.encode_query(%{
-          timeMin: time_min_iso,
-          timeMax: time_max_iso,
-          singleEvents: true,
-          maxResults: 50,
-          orderBy: "startTime"
-        })
-
-      url = "#{api_base_url()}/calendars/primary/events?#{params}"
-
-      case Google.api_request(:get, url, token) do
-        {:ok, response} -> {:ok, parse_events(response["items"] || [])}
-        {:error, reason} -> {:error, reason}
-      end
+         {:ok, time_max_iso} <- event_time_iso(time_max),
+         {:ok, events, _cursor} <-
+           fetch_events(token,
+             time_min: time_min_iso,
+             time_max: time_max_iso,
+             max_results: 250,
+             max_pages: 10,
+             max_items: 2_500
+           ) do
+      {:ok, events}
     end
   end
 
@@ -556,10 +560,11 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   # attempt whose response was lost. Fetch it back and treat as success only
   # when the R8 `maraithon_client_key` marker proves it is this action's
   # event (defense against a hash collision with an unrelated event).
-  defp recover_existing_event(user_id, client_event_id) do
-    case get_event(user_id, client_event_id) do
+  defp recover_existing_event(user_id, client_event_id, attrs) do
+    case get_event(user_id, client_event_id, account_id: read_attr(attrs, :account_id)) do
       {:ok, event} ->
-        if Map.get(event.private_properties || %{}, "maraithon_client_key") == client_event_id do
+        if Map.get(event.private_properties || %{}, "maraithon_client_key") == client_event_id and
+             existing_event_matches?(event, attrs) do
           {:ok, event}
         else
           {:error, :calendar_event_id_conflict}
@@ -572,6 +577,38 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         {:error, reason}
     end
   end
+
+  defp existing_event_matches?(event, attrs) do
+    {:ok, attendees} = event_attendees(attrs)
+    emails = &MapSet.new(&1, fn attendee -> String.downcase(attendee.email) end)
+
+    event.status != "cancelled" and event.summary == read_attr(attrs, :summary) and
+      emails.(event.attendees) == emails.(attendees) and
+      Enum.all?([:start, :end], fn field ->
+        with {:ok, iso} <- event_time_iso(read_attr(attrs, field)),
+             {:ok, expected, _} <- DateTime.from_iso8601(iso),
+             %DateTime{} = actual <- Map.get(event, field) do
+          DateTime.compare(actual, expected) == :eq
+        else
+          _ -> false
+        end
+      end)
+  end
+
+  defp event_attendees(attrs) do
+    case read_attr(attrs, :attendees) || [] do
+      emails when is_list(emails) ->
+        if Maraithon.Delegations.Scope.valid_emails?(emails, true),
+          do: {:ok, Enum.map(Enum.uniq(emails), &%{email: &1})},
+          else: {:error, :invalid_attendees}
+
+      _ ->
+        {:error, :invalid_attendees}
+    end
+  end
+
+  defp invitation_query([]), do: ""
+  defp invitation_query(_), do: "?sendUpdates=all"
 
   defp fetch_client_event_id(event_attrs) do
     case read_attr(event_attrs, :client_event_id) do
@@ -763,6 +800,11 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         next_page_token = response["nextPageToken"]
 
         cond do
+          length(acc_items) > Keyword.get(opts, :max_items, :infinity) or
+              (present?(next_page_token) and
+                 MapSet.size(seen_page_tokens) + 1 >= Keyword.get(opts, :max_pages, :infinity)) ->
+            {:error, :calendar_source_gap}
+
           present?(next_page_token) and MapSet.member?(seen_page_tokens, next_page_token) ->
             {:error, :calendar_pagination_loop}
 
@@ -779,7 +821,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
             {:ok, parse_events(acc_items), response["nextSyncToken"]}
         end
 
-      {:error, {:http_status, 410, _}} ->
+      {:error, {:http_status, 410, _}} when not is_nil(sync_token) ->
         # Sync token expired - clear the stored cursor (if the caller gave us
         # a way to do so) and do one full window fetch; the fresh
         # nextSyncToken from that fetch is what gets persisted.
@@ -821,6 +863,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         description: item["description"],
         location: item["location"],
         status: item["status"],
+        transparency: item["transparency"] || "opaque",
         start: parse_event_time(item["start"]),
         end: parse_event_time(item["end"]),
         attendees: parse_attendees(item["attendees"]),

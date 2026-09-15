@@ -711,19 +711,21 @@ defmodule Maraithon.Connectors.Gmail do
     with {:ok, access_token, provider} <- access_token_for_send(user_id_or_token, attrs),
          {:ok, to} <- required_attr(attrs, "to"),
          {:ok, subject} <- required_attr(attrs, "subject"),
-         {:ok, body} <- required_attr(attrs, "body") do
+         {:ok, body} <- required_attr(attrs, "body"),
+         :ok <- valid_send_headers(attrs),
+         :ok <- verified_sender(access_token, optional_attr(attrs, "from")),
+         {:ok, reply_headers} <-
+           fetch_reply_headers(access_token, optional_attr(attrs, "reply_to_message_id")),
+         :ok <- reply_thread_matches(attrs, reply_headers) do
       thread_id = optional_attr(attrs, "thread_id")
-      reply_to_message_id = optional_attr(attrs, "reply_to_message_id")
-      reply_headers = fetch_reply_headers(access_token, reply_to_message_id)
 
       raw =
-        build_raw_message(
-          to,
-          subject,
-          body,
-          reply_headers["message_id"],
-          reply_headers["references"],
-          optional_attr(attrs, "message_id_header")
+        Maraithon.Tools.GmailApiHelpers.raw_message(to, subject, body,
+          from: optional_attr(attrs, "from"),
+          cc: optional_attr(attrs, "cc"),
+          in_reply_to: reply_headers["message_id"],
+          references: reply_headers["references"],
+          message_id_header: optional_attr(attrs, "message_id_header")
         )
 
       request_body =
@@ -887,13 +889,24 @@ defmodule Maraithon.Connectors.Gmail do
   end
 
   defp access_token_for_send(user_id, attrs) when is_binary(user_id) do
-    account = optional_attr(attrs, "account")
-    provider = if is_binary(account) and account != "", do: "google:#{account}", else: "google"
+    case Map.get(attrs, :account_id, Map.get(attrs, "account_id")) do
+      nil ->
+        account = optional_attr(attrs, "account")
 
-    # An explicit mailbox must not silently become the user's default account.
-    user_id
-    |> OAuth.get_valid_access_token(provider)
-    |> wrap_provider(provider)
+        provider =
+          if is_binary(account) and account != "", do: "google:#{account}", else: "google"
+
+        user_id
+        |> OAuth.get_valid_access_token(provider, exact?: not is_nil(account))
+        |> wrap_provider(provider)
+
+      id ->
+        with {:ok, account} <- Maraithon.Connectors.GoogleAccount.resolve(user_id, id) do
+          user_id
+          |> OAuth.get_valid_access_token(account.provider, exact?: true)
+          |> wrap_provider(account.provider)
+        end
+    end
   end
 
   defp wrap_provider({:ok, access_token}, provider), do: {:ok, access_token, provider}
@@ -1131,8 +1144,8 @@ defmodule Maraithon.Connectors.Gmail do
 
   defp decode_body(_body), do: nil
 
-  defp fetch_reply_headers(_access_token, nil), do: %{}
-  defp fetch_reply_headers(_access_token, ""), do: %{}
+  defp fetch_reply_headers(_access_token, nil), do: {:ok, %{}}
+  defp fetch_reply_headers(_access_token, ""), do: {:ok, %{}}
 
   defp fetch_reply_headers(access_token, message_id) do
     with id when is_binary(id) <- normalize_id(message_id) do
@@ -1151,34 +1164,69 @@ defmodule Maraithon.Connectors.Gmail do
         {:ok, response} ->
           parsed = parse_message(response)
 
-          %{
-            "message_id" => parsed.internet_message_id,
-            "references" => parsed.references
-          }
+          if valid_header?(parsed.internet_message_id) and present?(parsed.internet_message_id) and
+               valid_header?(parsed.references) do
+            references =
+              [parsed.references, parsed.internet_message_id]
+              |> Enum.reject(&is_nil/1)
+              |> Enum.join(" ")
 
-        _error ->
-          %{}
+            {:ok,
+             %{
+               "message_id" => parsed.internet_message_id,
+               "references" => references,
+               "thread_id" => parsed.thread_id
+             }}
+          else
+            {:error, :reply_headers_unavailable}
+          end
+
+        {:error, _} = error ->
+          error
       end
     else
-      nil -> %{}
+      nil -> {:error, :invalid_gmail_id}
     end
   end
 
-  defp build_raw_message(to, subject, body, in_reply_to, references, message_id_header) do
-    [
-      "To: #{to}",
-      "Subject: #{subject}",
-      Maraithon.Tools.GmailApiHelpers.message_id_header(message_id_header),
-      "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=UTF-8",
-      if(present?(in_reply_to), do: "In-Reply-To: #{in_reply_to}"),
-      if(present?(references), do: "References: #{references}"),
-      "",
-      body
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join("\r\n")
-    |> Base.url_encode64(padding: false)
+  defp valid_send_headers(attrs) do
+    if Enum.all?(
+         ~w(to cc from subject message_id_header),
+         &valid_header?(optional_attr(attrs, &1))
+       ),
+       do: :ok,
+       else: {:error, :invalid_mail_headers}
+  end
+
+  defp valid_header?(nil), do: true
+
+  defp valid_header?(value),
+    do: byte_size(value) <= 8_192 and not String.contains?(value, ["\r", "\n", <<0>>])
+
+  defp verified_sender(_, nil), do: :ok
+
+  defp verified_sender(token, from) do
+    with {:ok, %{"sendAs" => aliases}} <-
+           Google.api_request(:get, "#{api_base_url()}/users/me/settings/sendAs", token),
+         true <-
+           Enum.any?(
+             aliases,
+             &(&1["sendAsEmail"] == from and
+                 (&1["isPrimary"] == true or &1["verificationStatus"] == "accepted"))
+           ) do
+      :ok
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :unverified_sender}
+    end
+  end
+
+  defp reply_thread_matches(attrs, headers) do
+    expected = optional_attr(attrs, "thread_id")
+
+    if expected == nil or headers == %{} or headers["thread_id"] == expected,
+      do: :ok,
+      else: {:error, :reply_thread_mismatch}
   end
 
   defp maybe_put(map, _key, nil), do: map
@@ -1413,7 +1461,8 @@ defmodule Maraithon.Connectors.Gmail do
              "excerpt" => Map.get(message, :snippet) || Map.get(message, "snippet"),
              "metadata" => %{
                "thread_id" => Map.get(message, :thread_id) || Map.get(message, "thread_id"),
-               "internet_message_id" => Map.get(message, :internet_message_id) || Map.get(message, "internet_message_id"),
+               "internet_message_id" =>
+                 Map.get(message, :internet_message_id) || Map.get(message, "internet_message_id"),
                "in_reply_to" => Map.get(message, :in_reply_to) || Map.get(message, "in_reply_to"),
                "references" => Map.get(message, :references) || Map.get(message, "references"),
                "labels" => Map.get(message, :labels) || Map.get(message, "labels") || [],

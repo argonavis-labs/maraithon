@@ -26,8 +26,19 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
       provider = provider(action, payload)
 
       account =
-        if action.action_type != "browser_interact",
-          do: execution_account(action.user_id, provider)
+        case payload["account_id"] do
+          id when is_integer(id) ->
+            case Maraithon.Connectors.GoogleAccount.resolve(action.user_id, id) do
+              {:ok, account} -> account
+              _ -> nil
+            end
+
+          nil when action.action_type != "browser_interact" ->
+            execution_account(action.user_id, provider)
+
+          _ ->
+            nil
+        end
 
       identity = %{
         "version" => 1,
@@ -273,7 +284,12 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
     id = identity["message_id"]
 
     if valid_message_id?(id) do
-      args = %{"user_id" => action.user_id, "provider" => identity["provider"]}
+      args = %{
+        "user_id" => action.user_id,
+        "provider" => identity["provider"],
+        "exact_account" => true
+      }
+
       query = URI.encode_query(%{q: "in:sent rfc822msgid:#{id}", maxResults: 2})
 
       with {:ok, response} <- gmail_request(args, "/users/me/messages?" <> query),
@@ -284,6 +300,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
            true <- "SENT" in (message["labelIds"] || []),
            true <- header(message, "message-id") == id,
            true <- mail_headers_match?(action.payload, message),
+           true <- delegated_mail_matches?(action, message),
            true <- draft_matches?(action, message) do
         {:ok,
          %{
@@ -314,13 +331,48 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
   defp draft_matches?(_, _), do: true
 
   defp mail_headers_match?(payload, message) do
-    Enum.all?([{"to", "to"}, {"subject", "subject"}, {"cc", "cc"}], fn {key, name} ->
+    Enum.all?([{"to", "to"}, {"subject", "subject"}, {"cc", "cc"}, {"from", "from"}], fn {key,
+                                                                                          name} ->
       case payload[key] do
-        value when is_binary(value) and value != "" -> header(message, name) == value
-        _ -> true
+        value when is_binary(value) and value != "" and key != "subject" ->
+          mail_addresses(header(message, name)) == mail_addresses(value)
+
+        value when is_binary(value) and value != "" ->
+          header(message, name) == value
+
+        _ ->
+          true
       end
     end)
   end
+
+  defp mail_addresses(value) do
+    Maraithon.Connectors.Gmail.message_participants(%{from: value || ""})
+    |> MapSet.new(&String.downcase(&1["identifier"]["email"]))
+  end
+
+  defp delegated_mail_matches?(
+         %{authorization_kind: "delegation_grant", payload: payload},
+         message
+       ) do
+    expected_thread = payload["thread_id"]
+    expected_body = payload["body"]
+    actual_body = get_in(message, ["payload", "body", "data"])
+
+    with true <- is_binary(expected_body) and is_binary(actual_body),
+         {:ok, actual_body} <- Base.url_decode64(actual_body, padding: false) do
+      normalize = &(&1 |> String.replace("\r\n", "\n") |> String.trim_trailing())
+
+      (expected_thread == nil or expected_thread == message["threadId"]) and
+        mail_addresses(header(message, "cc")) == mail_addresses(payload["cc"]) and
+        mail_addresses(header(message, "bcc")) == MapSet.new() and
+        normalize.(expected_body) == normalize.(actual_body)
+    else
+      _ -> false
+    end
+  end
+
+  defp delegated_mail_matches?(_, _), do: true
 
   defp header(message, name) do
     (get_in(message, ["payload", "headers"]) || [])
@@ -333,7 +385,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
         do: calendar_event_id(action.id),
         else: action.payload["event_id"]
 
-    case calendar_get(action.user_id, id) do
+    case calendar_get(action, id) do
       {:ok, event} ->
         if calendar_matches?(action, id, event) do
           {:ok,
@@ -373,6 +425,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
       owned and event[:status] == "cancelled"
     else
       owned and event[:status] != "cancelled" and
+        calendar_attendees_match?(action, event) and
         (action.action_type != "calendar_create_event" or private["maraithon_client_key"] == id) and
         Enum.all?(
           [
@@ -391,6 +444,16 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
         )
     end
   end
+
+  defp calendar_attendees_match?(%{payload: %{"attendees" => expected}}, event)
+       when is_list(expected) do
+    actual = Enum.map(event[:attendees] || [], & &1[:email])
+    normalize = fn emails -> MapSet.new(emails, &String.downcase/1) end
+    Enum.all?(actual, &is_binary/1) and normalize.(actual) == normalize.(expected)
+  end
+
+  defp calendar_attendees_match?(%{authorization_kind: "delegation_grant"}, _), do: false
+  defp calendar_attendees_match?(_, _), do: true
 
   defp same_instant?(left, %DateTime{} = right),
     do: same_instant?(left, DateTime.to_iso8601(right))
@@ -444,7 +507,17 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
     end
   end
 
-  defp calendar_get(user_id, id) do
+  defp calendar_get(%{authorization_kind: "delegation_grant"} = action, id) do
+    case action.payload["account_id"] do
+      account_id when is_integer(account_id) ->
+        GoogleCalendar.get_event(action.user_id, id, account_id: account_id)
+
+      _ ->
+        {:error, :invalid_calendar_account}
+    end
+  end
+
+  defp calendar_get(%{user_id: user_id}, id) do
     case config()[:calendar_get] do
       fun when is_function(fun, 2) -> fun.(user_id, id)
       _ -> GoogleCalendar.get_event(user_id, id)

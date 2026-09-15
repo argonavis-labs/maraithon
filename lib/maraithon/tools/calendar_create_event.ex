@@ -27,6 +27,8 @@ defmodule Maraithon.Tools.CalendarCreateEvent do
          {:ok, event} <-
            GoogleCalendar.create_event(user_id, %{
              client_event_id: client_event_id,
+             account_id: args["account_id"],
+             attendees: args["attendees"] || [],
              summary: title,
              description: optional_string(args, "description"),
              start: start_at,
@@ -38,7 +40,7 @@ defmodule Maraithon.Tools.CalendarCreateEvent do
                "maraithon_client_key" => client_event_id
              }
            }) do
-      {:ok, %{source: "google_calendar", event: event_payload(event)}}
+      {:ok, %{source: "google_calendar", event_id: event.event_id, event: event_payload(event)}}
     else
       {:error, reason} -> {:error, translate_error(reason, "create the calendar block")}
     end
@@ -105,6 +107,7 @@ defmodule Maraithon.Tools.CalendarCreateEvent do
       start: Map.get(event, :start),
       end: Map.get(event, :end),
       status: Map.get(event, :status),
+      attendees: Map.get(event, :attendees, []),
       html_link: Map.get(event, :html_link)
     }
   end

@@ -1,6 +1,6 @@
 defmodule Maraithon.Delegations.Scope do
   @moduledoc "Derives a reviewable grant from a todo, a verified identity, and source evidence."
-  alias Maraithon.{Repo, OAuth, Crm, AssistantIdentities, UserIdentity}
+  alias Maraithon.{Repo, OAuth, Crm, AssistantIdentities}
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Delegations.Preferences
@@ -60,11 +60,7 @@ defmodule Maraithon.Delegations.Scope do
            OAuth.get_valid_access_token(todo.user_id, account.provider, exact?: true),
          {:ok, message} <- Gmail.fetch_message(token, todo.source_item_id, access_token: true),
          false <- "DRAFT" in message.labels do
-      own = [identity["email"] | UserIdentity.identity(todo.user_id).emails]
-      participants = Gmail.message_participants(message)
-      others = Enum.reject(participants, &(get_in(&1, ["identifier", "email"]) in own))
-      from = addresses(others, "from")
-      to = if from == [], do: addresses(others, "to"), else: from
+      to = counterparties(message, [identity["email"], account.metadata["email"]])
       thread = if identity["account_id"] == account.id, do: message.thread_id
 
       {:ok,
@@ -148,6 +144,18 @@ defmodule Maraithon.Delegations.Scope do
         &(is_binary(&1) and byte_size(&1) <= 320 and
             Regex.match?(~r/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/, &1))
       )
+  end
+
+  @doc "Only the bound mailbox and actor are self here; another connected Kent address can reply."
+  def counterparties(message, own_addresses) do
+    own = own_addresses |> Enum.filter(&is_binary/1) |> MapSet.new(&String.downcase/1)
+
+    others =
+      Gmail.message_participants(message)
+      |> Enum.reject(&MapSet.member?(own, String.downcase(&1["identifier"]["email"])))
+
+    from = addresses(others, "from")
+    if from == [], do: addresses(others, "to"), else: from
   end
 
   defp addresses(people, role),

@@ -80,6 +80,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   def raw_message(to, subject, body, opts \\ []) do
     [
       "To: #{to}",
+      maybe_header("From", Keyword.get(opts, :from)),
       maybe_header("Cc", Keyword.get(opts, :cc)),
       maybe_header("Bcc", Keyword.get(opts, :bcc)),
       "Subject: #{subject}",
