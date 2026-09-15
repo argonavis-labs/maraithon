@@ -253,6 +253,71 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     end
   end
 
+  test "direct personal Gmail and Calendar reads cannot fall back to the only assistant account",
+       %{user: user} do
+    assistant = account(user, "assistant@example.invalid", true)
+
+    for opts <- [[], [provider: assistant.provider]] do
+      assert {:error, :assistant_account_excluded} = Gmail.fetch_messages(user, opts)
+
+      assert {:error, :assistant_account_excluded} =
+               Gmail.fetch_message_content(user, "aa11", opts)
+
+      assert {:error, :assistant_account_excluded} =
+               Gmail.fetch_thread_content(user, "bb22", opts)
+
+      assert {:error, :assistant_account_excluded} =
+               Maraithon.Connectors.GoogleCalendar.sync_calendar_events(user, opts)
+    end
+
+    assert {:error, :assistant_account_excluded} = Gmail.sync_mail_changes(user, "42")
+
+    assert {:error, :assistant_account_excluded} =
+             Maraithon.Connectors.GoogleCalendar.fetch_upcoming_events(user)
+
+    assert {:error, :assistant_account_excluded} =
+             Maraithon.Connectors.GoogleAccount.access_token(user, nil)
+
+    # The delegated worker binds an explicit account and remains able to read it.
+    assert {:ok, "isolation-test-token"} =
+             Maraithon.Connectors.GoogleAccount.access_token(user, assistant.id)
+  end
+
+  test "direct personal reads choose the user while explicit assistant evidence reads remain available",
+       %{user: user} do
+    own = account(user, user)
+    assistant = account(user, "assistant@example.invalid", true)
+    {:ok, _} = OAuth.store_tokens(user, own.provider, %{access_token: "personal-read-token"})
+    bypass = Bypass.open()
+    original = Application.get_env(:maraithon, :gmail, [])
+    Application.put_env(:maraithon, :gmail, api_base_url: "http://localhost:#{bypass.port}")
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, original) end)
+
+    Bypass.expect_once(bypass, "GET", "/users/me/messages", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer personal-read-token"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, ~s({"messages":[]}))
+    end)
+
+    assert {:ok, []} = Gmail.fetch_messages(user)
+
+    Bypass.expect_once(bypass, "GET", "/users/me/messages", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer isolation-test-token"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, ~s({"messages":[]}))
+    end)
+
+    {:ok, token} = Maraithon.Connectors.GoogleAccount.access_token(user, assistant.id)
+    assert {:ok, []} = Gmail.fetch_messages(token, access_token: true)
+
+    assert {:error, :assistant_account_excluded} =
+             Gmail.fetch_messages(user, provider: assistant.provider)
+  end
+
   test "pending assistant setup is excluded from user sources, identity, voice reads and CRM", %{
     user: user
   } do

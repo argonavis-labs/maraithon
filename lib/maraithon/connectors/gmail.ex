@@ -235,7 +235,7 @@ defmodule Maraithon.Connectors.Gmail do
   Returns `{:ok, messages}` or `{:error, reason}`.
   """
   def sync_mail_changes(user_id, history_id) do
-    case OAuth.get_valid_access_token(user_id, "google") do
+    case Maraithon.Connectors.GoogleAccount.user_access_token(user_id) do
       {:ok, token} ->
         case fetch_history(token, history_id) do
           {:ok, messages, _latest_history_id} -> {:ok, messages}
@@ -878,10 +878,10 @@ defmodule Maraithon.Connectors.Gmail do
     else
       case Keyword.get(opts, :provider) do
         provider when is_binary(provider) and provider != "" ->
-          OAuth.get_valid_access_token(token, provider)
+          Maraithon.Connectors.GoogleAccount.user_access_token(token, provider)
 
         _ ->
-          get_access_token(token, nil)
+          Maraithon.Connectors.GoogleAccount.user_access_token(token)
       end
     end
   end

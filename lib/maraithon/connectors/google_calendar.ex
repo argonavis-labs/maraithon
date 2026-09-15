@@ -259,7 +259,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   def sync_calendar_events_with_token(user_id, opts \\ []) do
     provider = Keyword.get(opts, :provider, "google")
 
-    case OAuth.get_valid_access_token(user_id, provider) do
+    case GoogleAccount.user_access_token(user_id, provider) do
       {:ok, token} ->
         case fetch_events(token, opts) do
           {:ok, events, next_sync_token} ->
@@ -334,7 +334,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   Fetches upcoming events from the user's primary calendar.
   """
   def fetch_upcoming_events(user_id, max_results \\ 10) do
-    case OAuth.get_valid_access_token(user_id, "google") do
+    case GoogleAccount.user_access_token(user_id) do
       {:ok, token} ->
         now = DateTime.utc_now() |> DateTime.to_iso8601()
 

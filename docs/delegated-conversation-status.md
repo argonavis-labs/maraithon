@@ -30,6 +30,12 @@ The server build and focused transport, leased-worker, isolation, manifest, and 
 
 A read-only production inventory on September 15 found one connected Runner member and its bot. The bot lacks `chat:write.customize`; the external Slack installation must also adopt the updated message subscription. A second controlled test member is still needed. Autonomous Slack sends remain disabled while these live prerequisites are outstanding.
 
+## Personal provider reads
+
+The direct-read audit found that the legacy Gmail connector and Calendar's default account lookup could bypass the assistant exclusion already present in tool and discovery helpers. They now share a personal-account resolver. A named assistant provider is rejected for personal reads, and the generic Google fallback cannot select an assistant when no personal account remains. Explicit account reads used by delegation workers, signature setup, and delivery reconciliation remain available.
+
+The server build and all 14 assistant-isolation checks passed. The new cases cover direct Gmail lists, messages, threads and history, Calendar sync and upcoming events, an assistant-only connection, choosing the personal account when both exist, and retaining explicit assistant evidence reads. These were local provider fixtures with no live messages or model calls.
+
 ## Previously verified
 
 - A real information conversation between `kent@runner.now` and `kent.fenwick@gmail.com` reached Done with the counterparty reply as evidence. Two turns used four Muse calls and cost US$0.001421. [Live evidence](evidence/delegated-conversations/2026-09-15-live-information.json).
