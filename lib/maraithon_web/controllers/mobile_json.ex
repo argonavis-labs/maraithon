@@ -34,6 +34,8 @@ defmodule MaraithonWeb.MobileJSON do
   end
 
   def todo(%Todo{} = todo, opts \\ []) do
+    proposal = Maraithon.ChiefOfStaff.Skills.DelegationProposals.current(todo)
+    opts = Keyword.put(opts, :delegation_proposal, proposal)
     todo = UserFacingCopy.polish_attrs(todo)
 
     base = %{
@@ -45,6 +47,7 @@ defmodule MaraithonWeb.MobileJSON do
       workflow: Maraithon.Todos.Workflow.current(todo),
       delegation: delegation(todo, opts),
       can_delegate: Maraithon.Delegations.available?(todo),
+      delegation_proposal: proposal,
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,
@@ -75,10 +78,12 @@ defmodule MaraithonWeb.MobileJSON do
   end
 
   defp delegation(todo, opts) do
-    row = case Keyword.fetch(opts, :delegations_by_todo_id) do
-      {:ok, rows} -> Map.get(rows, todo.id)
-      :error -> Maraithon.Delegations.for_todo(todo.user_id, todo.id)
-    end
+    row =
+      case Keyword.fetch(opts, :delegations_by_todo_id) do
+        {:ok, rows} -> Map.get(rows, todo.id)
+        :error -> Maraithon.Delegations.for_todo(todo.user_id, todo.id)
+      end
+
     Maraithon.Delegations.summary(row)
   end
 

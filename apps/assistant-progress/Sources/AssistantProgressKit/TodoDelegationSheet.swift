@@ -15,6 +15,14 @@ struct TodoDelegationSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var pending: TodoDelegation.Request?
+    private let kind: String
+
+    init(todoID: String, proposal: TodoDelegation.Proposal?, request: @escaping TodoDelegationPanel.Transport,
+         finished: @escaping (TodoDelegation?) async -> Void) {
+        self.todoID = todoID; self.request = request; self.finished = finished
+        self.kind = proposal?.kind ?? "information"
+        _actor = State(initialValue: proposal?.actor ?? "as_user")
+    }
 
     var body: some View {
         NavigationStack {
@@ -68,6 +76,7 @@ struct TodoDelegationSheet: View {
         defer { busy = false }
         var input = TodoDelegation.Request()
         input.actor = actor
+        input.kind = kind
         do {
             guard let value = try await request("todos/\(todoID)/delegation/preview", input).scope else {
                 throw URLError(.badServerResponse)

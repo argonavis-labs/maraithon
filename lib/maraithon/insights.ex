@@ -26,6 +26,7 @@ defmodule Maraithon.Insights do
     |> open_for_user_query(attention_mode)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.filter(&Maraithon.ChiefOfStaff.Skills.DelegationProposals.insight_current?/1)
   end
 
   def list_open_with_details_for_user(user_id, opts \\ []) when is_binary(user_id) do

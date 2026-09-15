@@ -9,6 +9,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   @behaviour Maraithon.Behaviors.Behavior
 
   alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills, SourceBundle}
+  alias Maraithon.ChiefOfStaff.Skills.DelegationProposals
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OperatorEvents
 
@@ -54,6 +55,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       last_cycle_stats: %{},
       cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
       cycle_memo_generated: false,
+      delegation_candidates: [],
       # R5 (SPEC 07): structured cross-cycle decision ledger, keyed by stable
       # item_id (todo id, insight id — never an ephemeral cycle id). Sibling
       # of the prose `cycle_memory`, never a replacement.
@@ -85,6 +87,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     last_cycle_stats: %{},
     cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
     cycle_memo_generated: false,
+    delegation_candidates: [],
     # R5 (SPEC 07): redundant with SPEC 08's generic init/1-merge on restore,
     # but harmless — kept so ensure_state_keys/1 also back-fills mid-wakeup.
     decision_ledger: %{},
@@ -574,6 +577,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   defp request_cycle_memo(state, _context) do
+    state =
+      Map.put(
+        state,
+        :delegation_candidates,
+        if(cycle_worth_memo?(state), do: DelegationProposals.candidates(state.user_id), else: [])
+      )
+
     case memo_llm_params(state) do
       {:ok, params} ->
         {:effect, {:llm_call, params}, %{state | pending_effect_skill_id: :cycle_memo}}
@@ -584,9 +594,30 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   defp handle_cycle_memo_effect_result({:llm_call, response}, state, context) do
+    decoded = decode_cycle_memo(response)
+
+    proposals =
+      DelegationProposals.persist(
+        state.delegation_candidates,
+        decoded["delegation_proposals"],
+        Map.put(context, :assistant_cycle_id, state.assistant_cycle_id)
+      )
+
+    state =
+      if proposals == [],
+        do: state,
+        else:
+          stash_emit(
+            state,
+            {:insights_recorded,
+             %{count: length(proposals), user_id: state.user_id, categories: ["general"]}},
+            "delegation_proposals",
+            length(state.pending_emits)
+          )
+
     state =
       state
-      |> put_cycle_memo(extract_memo_text(response), context)
+      |> put_cycle_memo(extract_memo_text(decoded["memo"]), context)
       |> mark_cycle_memo_done()
 
     finalize_cycle(state)
@@ -652,6 +683,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         pending_emits: [],
         pending_watermarks: [],
         cycle_memo_generated: false,
+        delegation_candidates: [],
         resume_index: 0
     }
 
@@ -735,7 +767,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       {:ok,
        %{
          "messages" => [%{"role" => "user", "content" => memo_prompt(state)}],
-         "max_tokens" => 800,
+         "max_tokens" => if(state.delegation_candidates == [], do: 800, else: 1_200),
          "temperature" => 0.2,
          # This is bounded summarization, not a reasoning task. Reserving the
          # whole budget for visible text leaves enough room for the requested
@@ -818,7 +850,23 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     Write the memo now. Be concrete and terse: note open threads, anything \
     you decided to hold or suppress, and anything worth watching next \
     cycle. Do not repeat these instructions.
+    #{DelegationProposals.prompt(state.delegation_candidates)}
     """
+  end
+
+  defp decode_cycle_memo(response) do
+    text =
+      case response do
+        %{content: text} -> text
+        %{"content" => text} -> text
+        text when is_binary(text) -> text
+        _ -> ""
+      end
+
+    case is_binary(text) && Jason.decode(text) do
+      {:ok, %{"memo" => memo} = result} when is_binary(memo) -> result
+      _ -> %{"memo" => text}
+    end
   end
 
   defp extract_memo_text(response) do

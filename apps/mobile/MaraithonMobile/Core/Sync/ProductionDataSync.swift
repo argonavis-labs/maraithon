@@ -194,6 +194,7 @@ enum ProductionDataSync {
         let todoBriefData: Data?
         let workflowData: Data?
         let delegationData: Data?
+        let delegationProposalData: Data?
         let canDelegate: Bool?
         let accountCategory: String?
         let hasActionCardField: Bool
@@ -263,6 +264,7 @@ enum ProductionDataSync {
             todoBriefData: encodedBrief(remoteTodo.brief),
             workflowData: remoteTodo.workflow.flatMap { try? JSONEncoder().encode($0) },
             delegationData: remoteTodo.delegation.flatMap { try? JSONEncoder().encode($0) },
+            delegationProposalData: remoteTodo.delegationProposal.flatMap { try? JSONEncoder().encode($0) },
             canDelegate: remoteTodo.canDelegate,
             accountCategory: remoteTodo.accountCategory,
             hasActionCardField: remoteTodo.hasActionCardField,
@@ -342,6 +344,7 @@ enum ProductionDataSync {
         todo.todoBriefData = prepared.todoBriefData
         todo.workflowData = prepared.workflowData
         todo.delegationData = prepared.delegationData
+        todo.delegationProposalData = prepared.delegationProposalData
         todo.canDelegate = prepared.canDelegate
         todo.accountCategory = prepared.accountCategory
         if let contactsByID {
@@ -524,6 +527,7 @@ enum ProductionDataSync {
             todoBriefData: prepared.todoBriefData,
             workflowData: prepared.workflowData,
             delegationData: prepared.delegationData,
+            delegationProposalData: prepared.delegationProposalData,
             canDelegate: prepared.canDelegate,
             accountCategory: prepared.accountCategory,
             sourceSystem: prepared.sourceSystem,

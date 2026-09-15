@@ -17,7 +17,7 @@ struct TodoWorkColumn: View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
             read
             TodoDelegationPanel(todoID: todo.id, summary: todo.delegation,
-                canDelegate: todo.canDelegate == true, request: store.delegationRequest,
+                canDelegate: todo.canDelegate == true, proposal: todo.delegationProposal, request: store.delegationRequest,
                 refreshTodo: { await store.refreshTodo() })
                 .id(todo.id)
             if todo.canMarkDone && todo.delegation == nil { nextAction }

@@ -6,6 +6,7 @@ public struct TodoDelegationPanel: View {
     private let todoID: String
     private let summary: TodoDelegation?
     private let canDelegate: Bool
+    private let proposal: TodoDelegation.Proposal?
     private let request: Transport
     private let refreshTodo: () async -> Void
     @State private var current: TodoDelegation?
@@ -16,8 +17,10 @@ public struct TodoDelegationPanel: View {
     @State private var requestID = UUID().uuidString
 
     public init(todoID: String, summary: TodoDelegation?, canDelegate: Bool,
+                proposal: TodoDelegation.Proposal? = nil,
                 request: @escaping Transport, refreshTodo: @escaping () async -> Void) {
         self.todoID = todoID; self.summary = summary; self.canDelegate = canDelegate
+        self.proposal = proposal
         self.request = request; self.refreshTodo = refreshTodo
         _current = State(initialValue: summary)
     }
@@ -51,7 +54,8 @@ public struct TodoDelegationPanel: View {
                 }.buttonStyle(.borderless)
             }
             if canDelegate && (current == nil || current?.isTerminal == true) {
-                Button("Delegate", systemImage: "person.crop.circle.badge.checkmark") { showsGrant = true }
+                Button(proposal?.label ?? "Delegate", systemImage: "person.crop.circle.badge.checkmark") { showsGrant = true }
+                if let proposal { Text(proposal.reason).font(.callout).foregroundStyle(.secondary) }
             }
             if busy { ProgressView().controlSize(.small).accessibilityLabel("Updating conversation") }
             if let error { Text(error).font(.callout).foregroundStyle(.red) }
@@ -60,7 +64,7 @@ public struct TodoDelegationPanel: View {
         .onChange(of: summary) { _, value in current = value }
         .onChange(of: answer) { _, _ in requestID = UUID().uuidString }
         .sheet(isPresented: $showsGrant) {
-            TodoDelegationSheet(todoID: todoID, request: request) { value in
+            TodoDelegationSheet(todoID: todoID, proposal: proposal, request: request) { value in
                 current = value
                 await refreshTodo()
             }

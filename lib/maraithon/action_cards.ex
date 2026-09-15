@@ -140,6 +140,12 @@ defmodule Maraithon.ActionCards do
   def for_todo(todo, opts \\ [])
 
   def for_todo(%Todo{} = todo, opts) when is_list(opts) do
+    proposal =
+      case Keyword.fetch(opts, :delegation_proposal) do
+        {:ok, value} -> value
+        :error -> Maraithon.ChiefOfStaff.Skills.DelegationProposals.current(todo)
+      end
+
     todo = todo |> polish_todo_copy() |> Maraithon.Todos.Brief.with_current_draft()
     metadata = todo.metadata || %{}
     public_metadata = PublicMetadata.todo(metadata)
@@ -172,6 +178,14 @@ defmodule Maraithon.ActionCards do
         "created_from" => created_from(metadata),
         "quality" => quality
       }
+
+    card =
+      if proposal,
+        do:
+          card
+          |> Map.put("primary_action", Map.put(proposal, "id", "delegate"))
+          |> Map.update!("available_buttons", &["delegate" | &1]),
+        else: card
 
     Map.put(card, "product_score", product_score(card))
   end

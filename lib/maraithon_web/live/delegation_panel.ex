@@ -27,6 +27,7 @@ defmodule MaraithonWeb.DelegationPanel do
      assign(socket,
        delegation: Delegations.summary(delegation),
        available?: available?,
+       proposal: Maraithon.ChiefOfStaff.Skills.DelegationProposals.current(todo),
        assistant?: available? and not is_nil(AssistantIdentities.get(todo.user_id))
      )}
   end
@@ -35,7 +36,8 @@ defmodule MaraithonWeb.DelegationPanel do
   def handle_event("open", _, socket),
     do:
       {:noreply,
-       socket |> assign(open?: true, request_id: Ecto.UUID.generate()) |> preview("as_user")}
+       socket |> assign(open?: true, request_id: Ecto.UUID.generate())
+       |> preview((socket.assigns.proposal || %{})["actor"] || "as_user")}
 
   def handle_event("close", _, socket), do: {:noreply, assign(socket, open?: false)}
 
@@ -117,11 +119,13 @@ defmodule MaraithonWeb.DelegationPanel do
 
   defp preview(socket, actor) do
     todo = socket.assigns.todo
+    kind = (socket.assigns.proposal || %{})["kind"] || "information"
 
     socket
     |> assign(actor: actor, busy?: true, scope: nil, error: nil)
     |> start_async(:preview, fn ->
-      Delegations.preview(todo.user_id, todo.id, %{"actor" => actor})
+      Delegations.preview(todo.user_id, todo.id, %{"actor" => actor,
+        "kind" => kind})
     end)
   end
 
@@ -154,7 +158,8 @@ defmodule MaraithonWeb.DelegationPanel do
         </.form>
       </div>
       <.button :if={@available? && !@open? && (is_nil(@delegation) || @delegation["state"] in ~w(completed stopped expired))}
-        variant="outline" phx-click="open" phx-target={@myself}>Delegate</.button>
+        variant={if(@proposal, do: "solid", else: "outline")} phx-click="open" phx-target={@myself}><%= if @proposal, do: @proposal["label"], else: "Delegate" %></.button>
+      <p :if={@proposal && !@open? && is_nil(@delegation)} class="text-sm/6 text-zinc-600"><%= @proposal["reason"] %></p>
       <div :if={@open?} class="space-y-4 rounded-lg border border-zinc-950/10 p-4" aria-label="Delegate this task">
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-sm/6 font-semibold text-zinc-950">Delegate this task</h2>

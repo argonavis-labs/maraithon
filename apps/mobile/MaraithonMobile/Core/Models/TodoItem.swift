@@ -40,6 +40,7 @@ final class TodoItem {
     var todoBriefData: Data?
     var workflowData: Data?
     var delegationData: Data?
+    var delegationProposalData: Data?
     var canDelegate: Bool?
     /// Optional for lightweight migration; populated by the next account-backed sync.
     var accountCategory: String?
@@ -64,6 +65,11 @@ final class TodoItem {
     var delegation: TodoDelegation? {
         guard let delegationData else { return nil }
         return try? JSONDecoder().decode(TodoDelegation.self, from: delegationData)
+    }
+
+    var delegationProposal: TodoDelegation.Proposal? {
+        guard let delegationProposalData else { return nil }
+        return try? JSONDecoder().decode(TodoDelegation.Proposal.self, from: delegationProposalData)
     }
 
     var priority: TodoPriority {
@@ -130,6 +136,7 @@ final class TodoItem {
         todoBriefData: Data? = nil,
         workflowData: Data? = nil,
         delegationData: Data? = nil,
+        delegationProposalData: Data? = nil,
         canDelegate: Bool? = nil,
         accountCategory: String? = nil,
         sourceSystem: String? = nil,
@@ -176,6 +183,7 @@ final class TodoItem {
         self.todoBriefData = todoBriefData
         self.workflowData = workflowData
         self.delegationData = delegationData
+        self.delegationProposalData = delegationProposalData
         self.canDelegate = canDelegate
         self.accountCategory = accountCategory
         self.sourceSystem = sourceSystem

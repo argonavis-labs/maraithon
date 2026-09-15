@@ -44,6 +44,7 @@ defmodule Maraithon.Delegations.Reports do
       "as_of" => DateTime.to_iso8601(now),
       "window_start" => DateTime.to_iso8601(cutoff),
       "cost" => window,
+      "proposals" => Maraithon.ChiefOfStaff.Skills.DelegationProposals.brief(user_id),
       "more" => length(rows) > @limit,
       "items" =>
         Enum.map(selected, fn {row, title} ->
@@ -87,16 +88,28 @@ defmodule Maraithon.Delegations.Reports do
   end
 
   def section(%{"items" => items, "cost" => cost} = report) do
-    if items == [] and cost["recorded_30d_micro_usd"] == 0 and
+    proposals = report["proposals"] || []
+
+    if items == [] and proposals == [] and cost["recorded_30d_micro_usd"] == 0 and
          cost["unresolved_micro_usd"] == 0 do
       nil
     else
       lines = Enum.map(items, &item_line/1)
+
+      suggestions =
+        if proposals == [],
+          do: [],
+          else: [
+            "Delegation suggestions: " <>
+              Enum.map_join(proposals, "; ", &(text(&1["title"]) <> ": " <> text(&1["label"])))
+          ]
+
       more = if report["more"], do: ["More conversations are available in Tasks."], else: []
 
       Enum.join(
         ["## Delegated conversations"] ++
           lines ++
+          suggestions ++
           more ++
           [
             "Recorded LLM spend, last 30 days: #{money(cost["recorded_30d_micro_usd"])}." <>

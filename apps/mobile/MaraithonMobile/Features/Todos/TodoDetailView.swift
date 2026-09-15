@@ -164,7 +164,7 @@ struct TodoDetailView: View {
                 showWorkflow: { showsWorkflow = true }, sourceSend: sendReply
             )
             TodoDelegationPanel(todoID: todo.id.uuidString, summary: todo.delegation,
-                canDelegate: todo.canDelegate == true, request: delegationRequest,
+                canDelegate: todo.canDelegate == true, proposal: todo.delegationProposal, request: delegationRequest,
                 refreshTodo: refreshDelegatedTodo)
                 .id(todo.id)
         }

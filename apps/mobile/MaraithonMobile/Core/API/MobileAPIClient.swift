@@ -287,6 +287,7 @@ struct MobileAPIClient: Sendable {
         let status: String
         let workflow: TodoWorkflow?
         let delegation: TodoDelegation?
+        let delegationProposal: TodoDelegation.Proposal?
         let canDelegate: Bool?
         let accountCategory: String?
         let snoozedUntil: Date?
@@ -317,6 +318,7 @@ struct MobileAPIClient: Sendable {
             case workflow
             case delegation
             case canDelegate = "can_delegate"
+            case delegationProposal = "delegation_proposal"
             case accountCategory = "account_category"
             case snoozedUntil = "snoozed_until"
             case closedAt = "closed_at"
@@ -346,6 +348,7 @@ struct MobileAPIClient: Sendable {
             status = try container.decode(String.self, forKey: .status)
             workflow = try container.decodeIfPresent(TodoWorkflow.self, forKey: .workflow)
             delegation = try container.decodeIfPresent(TodoDelegation.self, forKey: .delegation)
+            delegationProposal = try container.decodeIfPresent(TodoDelegation.Proposal.self, forKey: .delegationProposal)
             canDelegate = try container.decodeIfPresent(Bool.self, forKey: .canDelegate)
             accountCategory = try container.decodeIfPresent(String.self, forKey: .accountCategory)
             snoozedUntil = try container.decodeIfPresent(Date.self, forKey: .snoozedUntil)
@@ -385,6 +388,7 @@ struct MobileAPIClient: Sendable {
             hasActionCardField: Bool = true,
             workflow: TodoWorkflow? = nil,
             delegation: TodoDelegation? = nil,
+            delegationProposal: TodoDelegation.Proposal? = nil,
             canDelegate: Bool? = nil,
             accountCategory: String? = nil,
             relatedPeople: [RemoteRelatedPerson] = []
@@ -414,6 +418,7 @@ struct MobileAPIClient: Sendable {
             self.relatedPeople = relatedPeople
             self.workflow = workflow
             self.delegation = delegation
+            self.delegationProposal = delegationProposal
             self.canDelegate = canDelegate
             self.accountCategory = accountCategory
         }

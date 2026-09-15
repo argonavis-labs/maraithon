@@ -21,6 +21,13 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
 
     public var isTerminal: Bool { ["completed", "stopped", "expired"].contains(state) }
 
+    public struct Proposal: Codable, Hashable, Sendable {
+        public let actor: String
+        public let kind: String
+        public let label: String
+        public let reason: String
+    }
+
     public struct Failure: LocalizedError {
         public let errorDescription: String?
         public init(_ message: String) { errorDescription = message }

@@ -339,6 +339,10 @@ defmodule Maraithon.Todos do
 
   def sync_many_from_insights(_insights), do: {:error, :invalid_insights}
 
+  # A delegation suggestion belongs to its existing task. Dismissing the
+  # suggestion must neither create nor close a separate todo.
+  def sync_from_insight(%Insight{source: "delegation_proposal"}), do: {:ok, nil}
+
   def sync_from_insight(%Insight{} = insight) do
     case SignalGate.allow_insight?(insight) do
       {:ok, _reason} ->
