@@ -36,6 +36,8 @@ The direct-read audit found that the legacy Gmail connector and Calendar's defau
 
 The server build and all 14 assistant-isolation checks passed. The new cases cover direct Gmail lists, messages, threads and history, Calendar sync and upcoming events, an assistant-only connection, choosing the personal account when both exist, and retaining explicit assistant evidence reads. Four existing leased Gmail send-and-recovery regression cases also passed. These were local provider fixtures with no live messages or model calls. Commit `b30e9ee7` deployed through workflow `35027028412`; revision `maraithon-00371-lxr` is ready. Production still uses Muse Spark Contributor, the Gmail eval restriction, disabled Slack autonomous sends, and active development spending.
 
+Calendar watch renewal also keeps the bound account's token when retiring the old channel. Previously, an assistant or secondary-calendar renewal could create the replacement correctly, then try to stop the old watch with the default personal account. That could leave both channels delivering notifications. The existing renewal checks now include an assistant account alongside a different default account; all three checks and the server build passed.
+
 ## Authored voice samples
 
 Gmail and Slack now share a voice-sample cleaner. Gmail requires Sent mail from the bound mailbox's primary or verified send-as addresses; assistant accounts and the configured assistant alias are excluded. Slack verifies the token's live member and workspace, then checks those fields on every search result. Search terms and caller-supplied sample text cannot substitute for sender evidence.

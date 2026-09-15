@@ -91,7 +91,7 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
     assert summary == %{attempted: 0, renewed: 0, failed: 0}
   end
 
-  test "renewing a Calendar watch stops the previous channel to avoid duplicate webhook deliveries" do
+  test "renewing an assistant Calendar watch stops its previous channel with the same account" do
     bypass = Bypass.open()
 
     Application.put_env(:maraithon, :google,
@@ -113,15 +113,22 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
     user_id = "watch-renewer-cal-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
-    {:ok, _token} =
+    {:ok, _} =
       OAuth.store_tokens(user_id, "google", %{
+        access_token: "personal-token-must-not-be-used",
+        expires_in: 3600
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:assistant@example.invalid", %{
         access_token: "valid_access_token",
         refresh_token: "valid_refresh_token",
         expires_in: 3600,
-        scopes: ["calendar.readonly"]
+        scopes: ["calendar.readonly"],
+        metadata: %{"assistant_account" => true}
       })
 
-    account = ConnectedAccounts.get(user_id, "google")
+    account = ConnectedAccounts.get(user_id, "google:assistant@example.invalid")
 
     expiring_soon = DateTime.add(DateTime.utc_now(), 3_600, :second)
 
@@ -133,6 +140,8 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
     })
 
     Bypass.expect_once(bypass, "POST", "/calendar/v3/calendars/primary/events/watch", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer valid_access_token"]
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
@@ -146,6 +155,7 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
     end)
 
     Bypass.expect_once(bypass, "POST", "/calendar/v3/channels/stop", fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer valid_access_token"]
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       params = Jason.decode!(body)
       assert params["id"] == "old-channel-id"

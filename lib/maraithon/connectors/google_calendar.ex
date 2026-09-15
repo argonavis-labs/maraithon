@@ -76,8 +76,8 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   Should be called when a user disconnects their calendar.
   """
-  def stop_watch(user_id, channel_id, resource_id) do
-    case OAuth.get_valid_access_token(user_id, "google") do
+  def stop_watch(user_id, channel_id, resource_id, access_token \\ nil) do
+    case get_access_token(user_id, access_token) do
       {:ok, token} ->
         url = "#{api_base_url()}/channels/stop"
 

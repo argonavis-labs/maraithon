@@ -163,7 +163,7 @@ defmodule Maraithon.Runtime.WatchRenewer do
         # explicitly - otherwise both channels fire, producing duplicate
         # webhook jobs (different channel_id -> different dedupe key). Best
         # effort: a failure here must not fail the renewal itself.
-        stop_previous_calendar_watch(user_id, cursor, watch)
+        stop_previous_calendar_watch(user_id, cursor, watch, token)
 
         report_watch_recovery(user_id, account.provider)
 
@@ -178,13 +178,13 @@ defmodule Maraithon.Runtime.WatchRenewer do
   defp renew_watch(_kind, _cursor, _account, _user_id, _token),
     do: {:error, :unsupported_cursor_kind}
 
-  defp stop_previous_calendar_watch(user_id, %SourceCursor{} = cursor, new_watch) do
+  defp stop_previous_calendar_watch(user_id, %SourceCursor{} = cursor, new_watch, token) do
     channel_id = cursor.watch_channel_id
     resource_id = cursor.watch_resource_id
 
     if is_binary(channel_id) and channel_id != "" and is_binary(resource_id) and
          resource_id != "" and channel_id != new_watch.id do
-      case GoogleCalendar.stop_watch(user_id, channel_id, resource_id) do
+      case GoogleCalendar.stop_watch(user_id, channel_id, resource_id, token) do
         :ok ->
           :ok
 
