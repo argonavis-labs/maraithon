@@ -48,11 +48,14 @@ defmodule Maraithon.Delegations.PeopleContext do
                 :relationship,
                 :preferred_communication_method,
                 :contact_details,
+                :metadata,
                 :updated_at
               ])
         )
 
       if length(people) <= limit do
+        people = Maraithon.RelationshipIntelligence.Sources.personal_context(user_id, people)
+
         Enum.flat_map(contacts, fn contact ->
           case Enum.filter(people, &matches?(&1, key, contact)) do
             [person] -> [entry(person, contact)]

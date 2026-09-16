@@ -50,6 +50,7 @@ defmodule Maraithon.Memory.Recall do
       |> candidates_query(filters, now, Keyword.get(opts, :include_superseded, false))
       |> limit(^candidate_limit)
       |> Repo.all()
+      |> then(&Maraithon.RelationshipIntelligence.Sources.personal_context(user_id, &1))
       |> Enum.map(&{&1, score(&1, query, filters, now, embedding_similarities)})
       |> Enum.sort_by(fn {_item, score} -> score end, :desc)
 

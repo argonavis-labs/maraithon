@@ -671,6 +671,10 @@ The save and assistant-account recheck share the user write lock used when desig
 
 Inspection also found that CRM observations lacked the three keys used for deduplication, so distinct records collapsed into one input. Normalization now removes exact duplicates and preserves up to the existing 16-observation limit. `make build` passed with warnings treated as errors. No automated tests or new live model calls ran for this change.
 
+Commit `e2ca0be2` deployed through successful workflow `35124043521` to revision `maraithon-00426-vcx`, serving all traffic.
+
+The central memory recall path and delegated People context now omit records whose saved provenance names a currently dedicated assistant account. The filter uses the authenticated user's account IDs and runs before records enter a model prompt. It keeps the existing candidate bounds and People ambiguity check. Stored records remain available for review; none are deleted. The server build passed.
+
 This is input provenance, not proof of each generated claim. It does not reconstruct older learning, preserve a complete history for every merged People field, or exclude every previously learned field after a later assistant designation. Those remain part of the isolation audit. Unknown input account identity stays unknown; no old records were deleted or rewritten.
 
 ## Remaining work

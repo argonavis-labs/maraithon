@@ -4,6 +4,32 @@ defmodule Maraithon.RelationshipIntelligence.Sources do
   alias Maraithon.{AssistantIdentities, ConnectedAccounts, Repo}
   alias Maraithon.Crm.Observation
 
+  @doc "Omit known assistant-derived records from personal prompt context without deleting them."
+  def personal_context(user_id, records) do
+    assistants = MapSet.new(AssistantIdentities.assistant_account_ids(user_id))
+
+    if MapSet.size(assistants) == 0 do
+      records
+    else
+      Enum.reject(records, fn record ->
+        record.metadata
+        |> source_inputs()
+        |> Enum.any?(fn
+          %{"connected_account_id" => id} -> MapSet.member?(assistants, id)
+          _ -> false
+        end)
+      end)
+    end
+  end
+
+  defp source_inputs(%{"source_provenance" => %{"inputs" => inputs}}) when is_list(inputs),
+    do: inputs
+
+  defp source_inputs(%{"relationship_intelligence" => %{} = learning}),
+    do: source_inputs(learning)
+
+  defp source_inputs(_), do: []
+
   # Callers pass the same bounded observations used in the prompt. This records
   # input provenance, not proof that every generated claim follows from a source.
   def capture(user_id, observations) do
