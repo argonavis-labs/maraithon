@@ -18,6 +18,8 @@ Composition and independent review receive the same instruction: this is private
 
 `make build` passed with warnings treated as errors. Automated tests were not run under the manual-first policy. This addition still needs live verification of the selected context and its use in a decision.
 
+Commit `e7ed426f` deployed through successful workflow `35097197940`. Revision `maraithon-00415-mdn` serves all traffic. No migration or native release was needed.
+
 ## Thanks-only replies without model calls
 
 Gmail and Slack now share a whole-message classifier for short thanks-only replies. An acknowledgement stays in the event ledger and history, but does not advance the source revision, start a decision turn, complete the todo or reset its follow-up schedule. Sender, participant, takeover, stop and delivery-error checks run first. Agreement such as "yes", completion claims and requests such as "Thanks, book the first time" remain substantive.
