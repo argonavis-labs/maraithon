@@ -176,22 +176,23 @@ defmodule Maraithon.OAuth.Google do
         request_opts \\ []
       ) do
     headers = [{"Authorization", "Bearer #{access_token}"} | extra_headers]
+    request_opts = Keyword.put(request_opts, :google_errors?, true)
 
     case method do
       :get ->
         HTTP.get(url, headers, request_opts)
 
       :post ->
-        HTTP.post_json(url, body || %{}, headers)
+        HTTP.post_json(url, body || %{}, headers, request_opts)
 
       :put ->
-        HTTP.put_json(url, body || %{}, headers)
+        HTTP.put_json(url, body || %{}, headers, request_opts)
 
       :patch ->
-        HTTP.patch_json(url, body || %{}, headers)
+        HTTP.patch_json(url, body || %{}, headers, request_opts)
 
       :delete ->
-        HTTP.delete(url, headers)
+        HTTP.delete(url, headers, request_opts)
     end
   end
 

@@ -45,8 +45,8 @@ defmodule Maraithon.HTTP do
   Makes a POST request with JSON body.
   """
   @spec post_json(String.t(), map(), headers()) :: response()
-  def post_json(url, body, headers \\ []) when is_map(body) do
-    request(:post, url, headers, json: body)
+  def post_json(url, body, headers \\ [], opts \\ []) when is_map(body) do
+    request(:post, url, headers, [json: body], opts)
   end
 
   @doc """
@@ -74,8 +74,8 @@ defmodule Maraithon.HTTP do
   Makes a DELETE request.
   """
   @spec delete(String.t(), headers()) :: response()
-  def delete(url, headers \\ []) do
-    request(:delete, url, headers, [])
+  def delete(url, headers \\ [], opts \\ []) do
+    request(:delete, url, headers, [], opts)
   end
 
   @doc """
@@ -90,16 +90,16 @@ defmodule Maraithon.HTTP do
   Makes a PUT request with JSON body.
   """
   @spec put_json(String.t(), map(), headers()) :: response()
-  def put_json(url, body, headers \\ []) when is_map(body) do
-    request(:put, url, headers, json: body)
+  def put_json(url, body, headers \\ [], opts \\ []) when is_map(body) do
+    request(:put, url, headers, [json: body], opts)
   end
 
   @doc """
   Makes a PATCH request with JSON body.
   """
   @spec patch_json(String.t(), map(), headers()) :: response()
-  def patch_json(url, body, headers \\ []) when is_map(body) do
-    request(:patch, url, headers, json: body)
+  def patch_json(url, body, headers \\ [], opts \\ []) when is_map(body) do
+    request(:patch, url, headers, [json: body], opts)
   end
 
   # ===========================================================================
@@ -270,13 +270,39 @@ defmodule Maraithon.HTTP do
   end
 
   defp handle_response(%Response{status: 429} = response, _url, _opts) do
+    rate_limited(response)
+  end
+
+  defp handle_response(%Response{status: 403} = response, url, opts) do
+    if opts[:google_errors?] && google_rate_limit?(response.body),
+      do: rate_limited(response),
+      else: http_status_error(response, url, opts)
+  end
+
+  defp handle_response(response, url, opts), do: http_status_error(response, url, opts)
+
+  defp google_rate_limit?(%{"error" => %{"errors" => errors}}) when is_list(errors) do
+    errors != [] and
+      Enum.all?(errors, fn
+        %{"domain" => "usageLimits", "reason" => reason}
+        when reason in ["rateLimitExceeded", "userRateLimitExceeded"] ->
+          true
+
+        _ ->
+          false
+      end)
+  end
+
+  defp google_rate_limit?(_), do: false
+
+  defp rate_limited(response) do
     case retry_after_seconds(response) do
       nil -> {:error, {:rate_limited, :provider_limited}}
       seconds -> {:error, {:rate_limited, seconds, :provider_limited}}
     end
   end
 
-  defp handle_response(%Response{status: status, body: body}, _url, opts) do
+  defp http_status_error(%Response{status: status, body: body}, _url, opts) do
     body_string = response_body_to_string(body)
 
     unless status in Keyword.get(opts, :expected_statuses, []) or
@@ -305,9 +331,8 @@ defmodule Maraithon.HTTP do
     _kind, _reason -> false
   end
 
-  # `Retry-After` is either delta-seconds (what Google/Slack send in practice)
-  # or an HTTP-date; we only parse the numeric form and fall back to letting
-  # the caller apply its own default backoff.
+  # Both RFC 9110 forms are supported. Round dates up so a subsecond clock
+  # difference never permits a request before the provider's deadline.
   defp retry_after_seconds(%Response{} = response) do
     case Response.get_header(response, "retry-after") do
       [value | _] -> parse_retry_after(value)
@@ -319,8 +344,17 @@ defmodule Maraithon.HTTP do
        when is_binary(value) and byte_size(value) <= 64 do
     if String.valid?(value) do
       case Integer.parse(String.trim(value)) do
-        {seconds, ""} when seconds >= 0 -> seconds
-        _ -> nil
+        {seconds, ""} when seconds >= 0 ->
+          seconds
+
+        _ ->
+          case Req.Utils.parse_http_date(String.trim(value)) do
+            {:ok, date} ->
+              max(0, div(DateTime.diff(date, DateTime.utc_now(), :millisecond) + 999, 1_000))
+
+            _ ->
+              nil
+          end
       end
     end
   end

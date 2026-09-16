@@ -83,6 +83,39 @@ defmodule Maraithon.HTTPTest do
                HTTP.get("http://localhost:#{bypass.port}/rate-limited-with-header")
     end
 
+    test "honours an HTTP-date Retry-After without retrying before its deadline" do
+      bypass = Bypass.open()
+      before = DateTime.utc_now()
+      deadline = before |> DateTime.add(120) |> DateTime.truncate(:second)
+
+      Bypass.expect_once(bypass, "GET", "/date-limited", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", Req.Utils.format_http_date(deadline))
+        |> Plug.Conn.resp(429, "private provider detail")
+      end)
+
+      assert {:error, {:rate_limited, seconds, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/date-limited")
+
+      assert DateTime.compare(DateTime.add(DateTime.utc_now(), seconds), deadline) != :lt
+      assert DateTime.compare(DateTime.add(before, seconds), DateTime.add(deadline, 1)) != :gt
+    end
+
+    test "past dates allow an immediate retry and malformed dates use caller backoff" do
+      bypass = Bypass.open()
+
+      for {path, value, result} <- [
+            {"/past", "Mon, 01 Jan 2024 09:00:00 GMT", {:rate_limited, 0, :provider_limited}},
+            {"/invalid", "tomorrow at lunch", {:rate_limited, :provider_limited}}
+          ] do
+        Bypass.expect_once(bypass, "GET", path, fn conn ->
+          conn |> Plug.Conn.put_resp_header("retry-after", value) |> Plug.Conn.resp(429, "wait")
+        end)
+
+        assert {:error, ^result} = HTTP.get("http://localhost:#{bypass.port}#{path}")
+      end
+    end
+
     test "preserves closed 401 semantics when the diagnostic body overflows" do
       bypass = Bypass.open()
 
