@@ -1,0 +1,18 @@
+{
+  "scenario": "requested_scheduling",
+  "actor": "as_assistant",
+  "job_id": "42b77f9f-f81b-46f3-be90-9e38ffa78424",
+  "live_eval_passed": false,
+  "launch": {
+    "workflow_id": 35125144462,
+    "report": {
+      "scheduled_at": "2026-09-16T16:59:54.001944Z",
+      "job_id": "42b77f9f-f81b-46f3-be90-9e38ffa78424",
+      "phase": "queued",
+      "scenario": "requested_scheduling"
+    }
+  },
+  "limits": [
+    "Queued successfully; final result pending."
+  ]
+}

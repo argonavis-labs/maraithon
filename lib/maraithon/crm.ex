@@ -768,6 +768,7 @@ defmodule Maraithon.Crm do
 
     (family_people ++ list_people(user_id, limit: limit))
     |> Enum.uniq_by(& &1.id)
+    |> then(&Maraithon.RelationshipIntelligence.Sources.personal_context(user_id, &1))
     |> Enum.take(limit)
     |> Enum.map(&serialize_for_prompt/1)
   end
