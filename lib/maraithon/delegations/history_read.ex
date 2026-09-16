@@ -26,7 +26,10 @@ defmodule Maraithon.Delegations.HistoryRead do
     d = context.delegation
 
     recent =
-      Enum.map(context.run.prompt_snapshot["sources"]["messages"] || [], & &1["message_id"])
+      context.run.prompt_snapshot["sources"]["messages"]
+      |> List.wrap()
+      |> Enum.take(-6)
+      |> Enum.map(& &1["message_id"])
 
     rows =
       Repo.all(
