@@ -1,0 +1,30 @@
+{
+  "scenario": "proposed_information_reply",
+  "actor": "as_assistant",
+  "job_id": "fade27a9-e362-484b-b160-f26bf8507dab",
+  "launcher_workflow": 35137918032,
+  "observations": [
+    {
+      "workflow": 35138589359,
+      "reported_at": "2026-09-16T19:11:53Z",
+      "status": "failed",
+      "error": "background_job_error",
+      "phase": "waiting_for_initial_email",
+      "actions": [
+        {
+          "id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+          "status": "executed",
+          "action_type": "gmail_send",
+          "failure": null,
+          "delegation_id": null
+        }
+      ]
+    }
+  ],
+  "verdict": "pending_recovery",
+  "limitations": [
+    "The failed attempt retained no exception detail.",
+    "A provider-free calculation reproduced an invalid fixture workflow; this does not prove it was the only failure.",
+    "No Chief of Staff proposal or UI acceptance has been verified yet."
+  ]
+}
