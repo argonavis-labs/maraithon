@@ -15,7 +15,8 @@
   "limits": [
     "The job ended with eval_send_failed before recording a delegation.",
     "This result does not prove whether the fixture message was delivered.",
-    "The revised scheduling decisions were not exercised by this attempt."
+    "The revised scheduling decisions were not exercised by this attempt.",
+    "The saved action is failed with transient/unknown_error; neither local contention nor provider delivery can be established from that checkpoint. No action or job was reopened."
   ],
   "status": {
     "workflow_id": 35125515701,
@@ -30,6 +31,39 @@
           "reason": "eval_send_failed"
         },
         "details": null,
+        "scheduled_at": "2026-09-16T16:59:54.001944Z",
+        "observation": null,
+        "job_id": "42b77f9f-f81b-46f3-be90-9e38ffa78424"
+      }
+    ]
+  },
+  "action_diagnostic": {
+    "workflow_id": 35126829237,
+    "report": [
+      {
+        "error": null,
+        "status": "completed",
+        "result": {
+          "calendar_cleanup": "completed",
+          "cleanup_checks": 1,
+          "phase": "failed",
+          "reason": "eval_send_failed"
+        },
+        "details": {
+          "actions": [
+            {
+              "id": "f40c1e7e-77fe-2361-76d6-c02ef2f4be03",
+              "status": "failed",
+              "failure": {
+                "class": "transient",
+                "code": "unknown_error"
+              },
+              "inserted_at": "2026-09-16T16:59:56.030110Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ]
+        },
         "scheduled_at": "2026-09-16T16:59:54.001944Z",
         "observation": null,
         "job_id": "42b77f9f-f81b-46f3-be90-9e38ffa78424"

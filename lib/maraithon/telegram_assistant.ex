@@ -2474,9 +2474,12 @@ defmodule Maraithon.TelegramAssistant do
             deferral = Maraithon.HTTP.Admission.local_deferral(reason)
 
             cond do
-              deferral && action.authorization_kind == "delegation_grant" &&
-                  action.action_type in ~w(gmail_send slack_post) ->
-                Maraithon.Delegations.Receipts.deferred!(action, token, deferral)
+              deferral && action.action_type in ~w(gmail_send slack_post) ->
+                # Admission rejected this request before provider entry. Keep
+                # the frozen action for its caller's bounded retry, including
+                # human-confirmed actions executed by the durable eval job.
+                if action.authorization_kind == "delegation_grant",
+                  do: Maraithon.Delegations.Receipts.deferred!(action, token, deferral)
 
                 payload =
                   action.payload
@@ -2799,6 +2802,9 @@ defmodule Maraithon.TelegramAssistant do
       "unknown_error"
     end
   end
+
+  defp prepared_action_error_code({:provider_error, _provider, reason, _copy}),
+    do: prepared_action_error_code(reason)
 
   defp prepared_action_error_code({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
 

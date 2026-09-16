@@ -663,7 +663,7 @@ The server build passed. The focused local checks covered 19 assistant-isolation
 
 Commit `c5fa81d3` deployed through workflow `35055281619`. Revision `maraithon-00386-znv` is ready and serves all traffic. The production query found one dedicated assistant account and 18,776 observations, with none attributable to that mailbox, so it made no cache change and enqueued no rebuild. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. The existing live memory eval is still pending for September 16 at 8:00 a.m. Toronto. [Isolation evidence](evidence/delegated-conversations/2026-09-16-assistant-history-isolation.json).
 
-The selected-job status report now includes the fixture's prepared actions even when no delegation was created. It returns only action IDs, states, timestamps and the saved failure class, code and HTTP status, never payload bodies. A still-confirmed action's retryable error also reaches the existing eval wait handler; failed actions remain terminal. The build passed. The saved initial-send failure still needs inspection with this diagnostic. No replacement conversation was launched.
+The selected-job status report now includes the fixture's prepared actions even when no delegation was created. It returns only action IDs, states, timestamps and the saved failure class, code and HTTP status, never payload bodies. A still-confirmed action's retryable error also reaches the existing eval wait handler; failed actions remain terminal. The build passed.
 
 ## Relationship learning source provenance
 
@@ -678,6 +678,16 @@ Commit `e2ca0be2` deployed through successful workflow `35124043521` to revision
 The central memory recall path and delegated People context now omit records whose saved provenance names a currently dedicated assistant account. The filter uses the authenticated user's account IDs and runs before records enter a model prompt. It keeps the existing candidate bounds and People ambiguity check. Stored records remain available for review; none are deleted. The server build passed. The regular memory-list path now applies the same exclusion, covering model tools, todo and briefing context, and voice context. The authenticated Memories management page explicitly includes these records for inspection. The shared People prompt summary also applies the filter, including relationship-learning context, morning briefs, goals and commitment tracking. These follow-ups passed the server build.
 
 This is input provenance, not proof of each generated claim. It does not reconstruct older learning, preserve a complete history for every merged People field, or exclude every previously learned field after a later assistant designation. Those remain part of the isolation audit. Unknown input account identity stays unknown; no old records were deleted or rewritten.
+
+These memory and People filters, plus the fixture action diagnostic, deployed through successful workflow `35126348398` to revision `maraithon-00428-m7b`, serving all traffic.
+
+## Initial fixture send recovery
+
+Read-only workflow `35126829237` inspected job `42b77f9f-f81b-46f3-be90-9e38ffa78424`. Its initial Gmail action is terminally failed with class `transient` and code `unknown_error`. No HTTP status or local-admission subtype was retained. This does not establish delivery or prove local contention caused the failure. The job and action remain unchanged; no replacement conversation was launched. [Saved action evidence](evidence/delegated-conversations/2026-09-16-requested-scheduling-reviewed.json).
+
+Code inspection found that a closed local admission rejection preserved delegated sends for retry but failed human-confirmed fixture sends. Both now keep the same confirmed action, frozen payload and message identity when Gmail or Slack admission proves that the request did not enter the provider. The caller retains its existing retry schedule and deadline. Provider errors and ambiguous delivery still follow their existing failure or reconciliation paths. Saved provider error codes now unwrap the structured provider envelope, so future failures retain the inner code without logging response bodies.
+
+`make build` passed with warnings treated as errors. Automated tests were not run under the current development policy. This change does not recover the missing cause of the old failure or prove that the live scheduling scenario passes.
 
 ## Remaining work
 
