@@ -12,6 +12,8 @@ Logs are best effort. Process death, a full buffer or a failed log read can leav
 
 `make build` passed with warnings treated as errors. Tests were not run under the manual-first policy. This change has not yet been exercised through a fresh live conversation or a worker-loss scenario. Earlier event rows are readable but are not backfilled with metadata that was never recorded. Local Google Cloud reauthentication is expired; the existing keyless deployment workflow remains available.
 
+Commit `84d89b83` deployed through successful workflow `35086410229`. Revision `maraithon-00409-pnb` serves all traffic. No new message, calendar event or eval was started for this release. The scheduled September 16 memory eval was left in place.
+
 ## Conversation history on web, Mac and iPhone
 
 Tasks now expose a read-only conversation history from the existing encrypted events and fact ledger. It shows user controls, received messages, planned actions, confirmed receipts, uncertain delivery, holds, and saved facts with their source links. Pages contain at most 30 events and use a sequence cursor scoped to the authenticated user and delegation. Opening history makes no provider or model calls. The same server copy and response drive both native apps and the web view.
@@ -119,6 +121,8 @@ Server workflow `35062580948` succeeded; revision `maraithon-00396-n6q` serves a
 The native detail check found a separate Mac URL bug: pre-encoded UUID hyphens were encoded again by the request builder, producing `%252D` and a missing-person response. Commit `10edf3f1` appends the opaque ID as a single URL component. The signed companion build passed and was installed in place. Charlie's meetings, relationship, and recent history then loaded successfully in the native app. This Mac-only follow-up required no server redeployment.
 
 The corrected Mac build was checked again after revision `maraithon-00403-7h5` deployed. People still loaded 60 ranked contacts from 2,276 known people. The iPhone request builder preserves percent-encoded path components and does not have the Mac detail URL bug. Physical iPhone verification remains unperformed.
+
+After the September 16 trace deployment, refreshing People in the signed Mac app loaded 60 ranked contacts from 2,281 known people, including Charlie. This confirms the shared native API still loads; it is not a physical iPhone check. The fix is also included in TestFlight 1.0.1 (`20260916092859`).
 
 ## Calendar emphasis through the day
 
