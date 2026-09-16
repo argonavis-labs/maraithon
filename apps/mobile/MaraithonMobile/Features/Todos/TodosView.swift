@@ -13,6 +13,7 @@ struct TodosView: View {
     @State private var searchText = ""
     @State private var isAddingTodo = false
     @State private var editingTodo: TodoItem?
+    @State private var linkedTodo: TodoItem?
     @State private var actionErrorMessage: String?
     @State private var refreshErrorMessage: String?
     @State private var isRefreshing = false
@@ -211,6 +212,12 @@ struct TodosView: View {
             .sheet(item: $editingTodo) { todo in
                 TodoEditorView(todo: todo)
             }
+            .navigationDestination(item: $linkedTodo) { todo in
+                TodoDetailView(todo: todo)
+            }
+            .task(id: appNavigation.requestedTodoID) {
+                await openRequestedTodoIfNeeded()
+            }
             .onChange(of: todoSignature) { _, _ in
                 rebuildWorkLists()
             }
@@ -398,6 +405,31 @@ struct TodosView: View {
         guard let requestedFilter = appNavigation.requestedTodoFilter else { return }
         filter = requestedFilter
         appNavigation.requestedTodoFilter = nil
+    }
+
+    private func openRequestedTodoIfNeeded() async {
+        guard let id = appNavigation.requestedTodoID else { return }
+        do {
+            var descriptor = FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 1
+            let todo: TodoItem
+            if let saved = try modelContext.fetch(descriptor).first {
+                todo = saved
+            } else {
+                guard let token = sessionStore.user?.sessionToken else { return }
+                let remote = try await MobileAPIClient().getTodo(sessionToken: token, id: id)
+                todo = TodoItem(id: id, title: remote.title)
+                ProductionDataSync.apply(remote, to: todo)
+                modelContext.insert(todo)
+                try modelContext.save()
+            }
+            guard appNavigation.requestedTodoID == id else { return }
+            linkedTodo = todo
+            appNavigation.requestedTodoID = nil
+        } catch is CancellationError {
+        } catch {
+            actionErrorMessage = MobileErrorCopy.message(for: error)
+        }
     }
 
     private func todoActionMessage(_ prefix: String, error: Error) -> String {

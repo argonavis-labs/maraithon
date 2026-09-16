@@ -136,11 +136,17 @@ defmodule MaraithonWeb.ChatLive do
   defp select_thread(socket, thread_id) do
     case AssistantChat.get_thread(socket.assigns.current_user.id, thread_id) do
       {:ok, thread} ->
-        socket = assign_reply_state(socket, thread)
+        if todo_id = TelegramConversations.linked_todo_id(thread) do
+          socket
+          |> assign(:thread, nil)
+          |> push_navigate(to: ~p"/todos/#{todo_id}")
+        else
+          socket = assign_reply_state(socket, thread)
 
-        socket
-        |> assign(:polls_left, if(socket.assigns.awaiting_reply, do: @max_polls, else: 0))
-        |> maybe_schedule_poll()
+          socket
+          |> assign(:polls_left, if(socket.assigns.awaiting_reply, do: @max_polls, else: 0))
+          |> maybe_schedule_poll()
+        end
 
       {:error, _reason} ->
         socket

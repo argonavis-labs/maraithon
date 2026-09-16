@@ -39,9 +39,8 @@ defmodule Maraithon.AssistantChat do
   does the same — so new or deleted messages bump the thread's updated_at
   without needing a join over turns.
   """
-  def collection_version(user_id) when is_binary(user_id) do
-    Conversation
-    |> where([c], c.user_id == ^user_id and c.surface == "mobile")
+  def collection_version(user_id, opts \\ []) when is_binary(user_id) do
+    TelegramConversations.mobile_threads_query(user_id, opts)
     |> select([c], {count(c.id), max(c.updated_at)})
     |> Repo.one()
   end

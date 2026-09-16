@@ -168,13 +168,46 @@ defmodule Maraithon.TelegramConversations do
   def list_mobile_threads(user_id, opts \\ []) when is_binary(user_id) do
     limit = opts |> Keyword.get(:limit, 50) |> max(1) |> min(100)
 
-    Conversation
-    |> where([c], c.user_id == ^user_id and c.surface == "mobile")
+    mobile_threads_query(user_id, opts)
     |> order_by([c], desc_nulls_last: c.last_turn_at, desc: c.updated_at)
     |> limit(^limit)
     |> preload(:turns)
     |> Repo.all()
     |> Enum.map(&Conversation.hydrate/1)
+  end
+
+  @doc false
+  def mobile_threads_query(user_id, opts \\ []) when is_binary(user_id) do
+    query = where(Conversation, [c], c.user_id == ^user_id and c.surface == "mobile")
+
+    if Keyword.get(opts, :include_todo_threads, false) do
+      query
+    else
+      query
+      |> where([c], fragment("COALESCE(?->>'thread_kind', '') <> 'todo_detail'", c.metadata))
+      |> where([c], fragment("COALESCE(?->>'linked_todo_id', '') = ''", c.metadata))
+      |> where([c], fragment("COALESCE(?, '') NOT LIKE 'todo:%'", c.root_message_id))
+    end
+  end
+
+  @doc false
+  def todo_thread?(%Conversation{} = conversation) do
+    (conversation.metadata || %{})["thread_kind"] == "todo_detail" or
+      not is_nil(linked_todo_id(conversation))
+  end
+
+  @doc false
+  def linked_todo_id(%Conversation{} = conversation) do
+    case (conversation.metadata || %{})["linked_todo_id"] do
+      id when is_binary(id) and id != "" ->
+        id
+
+      _ ->
+        case conversation.root_message_id do
+          "todo:" <> id -> id
+          _ -> nil
+        end
+    end
   end
 
   def get_mobile_thread(user_id, conversation_id)

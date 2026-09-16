@@ -6,6 +6,7 @@ defmodule MaraithonWeb.MobileChatJSON do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.WorkSummary
   alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.TelegramConversations
   alias Maraithon.Todos.{PublicPayload, Todo, UserFacingCopy}
   alias Maraithon.AssistantChat.ThreadNaming
   alias Maraithon.{CalendarLinks, Crm, LocalCalendar, LocalMessages, Timezones}
@@ -176,6 +177,9 @@ defmodule MaraithonWeb.MobileChatJSON do
     %{
       id: conversation.id,
       title: thread_title(conversation),
+      thread_kind:
+        if(TelegramConversations.todo_thread?(conversation), do: "todo_detail", else: "chat"),
+      linked_todo_id: TelegramConversations.linked_todo_id(conversation),
       status: conversation.status,
       last_turn_at: json_value(conversation.last_turn_at),
       updated_at: json_value(conversation.updated_at),
@@ -190,6 +194,9 @@ defmodule MaraithonWeb.MobileChatJSON do
     %{
       id: conversation.id,
       title: thread_title(conversation),
+      thread_kind:
+        if(TelegramConversations.todo_thread?(conversation), do: "todo_detail", else: "chat"),
+      linked_todo_id: TelegramConversations.linked_todo_id(conversation),
       status: conversation.status,
       pending_run: active_run && run(active_run),
       linked_todo: current_linked_todo(conversation),

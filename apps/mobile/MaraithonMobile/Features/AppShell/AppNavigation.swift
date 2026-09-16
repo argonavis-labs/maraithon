@@ -6,6 +6,7 @@ import Observation
 final class AppNavigation {
     var selectedTab: AppTab = .today
     var requestedTodoFilter: TodoFilter?
+    var requestedTodoID: UUID?
     var requestedPeopleFilter: CRMStatusFilter?
     var requestedChatPrompt: String?
     var requestedChatThreadID: String?
@@ -32,6 +33,7 @@ final class AppNavigation {
             selectedTab = .people
         case "todos", "stream":
             // Older links to retired tabs still land on the main list.
+            requestedTodoID = url.pathComponents.count > 1 ? UUID(uuidString: url.lastPathComponent) : nil
             selectedTab = .todos
         case "chat":
             requestedChatThreadID = url.pathComponents.count > 1 ? url.lastPathComponent : nil
@@ -43,6 +45,11 @@ final class AppNavigation {
 
     func showTodos(_ filter: TodoFilter) {
         requestedTodoFilter = filter
+        selectedTab = .todos
+    }
+
+    func showTodo(_ id: UUID) {
+        requestedTodoID = id
         selectedTab = .todos
     }
 

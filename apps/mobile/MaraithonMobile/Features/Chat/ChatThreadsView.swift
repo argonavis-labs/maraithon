@@ -14,8 +14,12 @@ struct ChatThreadsView: View {
 
     private let chatSyncService = ChatSyncService()
 
+    private var standaloneThreads: [ChatThread] {
+        threads.filter(\.isStandaloneChat)
+    }
+
     private var filteredThreads: [ChatThread] {
-        ChatThreadFiltering.filter(threads, searchText: searchText)
+        ChatThreadFiltering.filter(standaloneThreads, searchText: searchText)
     }
 
     var body: some View {
@@ -60,7 +64,7 @@ struct ChatThreadsView: View {
 
                 if filteredThreads.isEmpty {
                     Group {
-                        if threads.isEmpty {
+                        if standaloneThreads.isEmpty {
                             emptyChatState
                         } else {
                             RunnerEmptyState(
@@ -103,12 +107,11 @@ struct ChatThreadsView: View {
             .onChange(of: appNavigation.requestedChatPrompt) { _, _ in
                 consumeRequestedPromptIfNeeded()
             }
-            .onAppear(perform: consumeRequestedThreadIfNeeded)
-            .onChange(of: appNavigation.requestedChatThreadID) { _, _ in
-                consumeRequestedThreadIfNeeded()
+            .task(id: appNavigation.requestedChatThreadID) {
+                await consumeRequestedThreadIfNeeded()
             }
             .navigationDestination(for: UUID.self) { threadID in
-                if let thread = threads.first(where: { $0.id == threadID }) {
+                if let thread = standaloneThreads.first(where: { $0.id == threadID }) {
                     let pendingPrompt = pendingPromptByThreadID[threadID]
                     ChatDetailView(
                         thread: thread,
@@ -139,7 +142,7 @@ struct ChatThreadsView: View {
             RunnerPageHeader(
                 eyebrow: "Your workspace",
                 title: "Chat",
-                count: threads.count,
+                count: standaloneThreads.count,
                 subtitle: "Ask your chief of staff anything about your work."
             ) {
                 HStack(spacing: Runner.Spacing.small) {
@@ -193,19 +196,26 @@ struct ChatThreadsView: View {
         }
     }
 
-    /// Opens the thread a push notification deep-linked to. The link carries
-    /// the server conversation id, matched against each thread's `remoteID`;
-    /// an unknown id (thread not synced yet) leaves the user on the list,
-    /// where the refreshed threads surface the new reply on top.
-    private func consumeRequestedThreadIfNeeded() {
-        guard let requestedID = appNavigation.requestedChatThreadID else { return }
-
-        if let remoteID = UUID(uuidString: requestedID),
-           let thread = threads.first(where: { $0.remoteID == remoteID }) {
-            path.append(thread.id)
+    /// Old task reply notifications used chat links. Resolve their persisted
+    /// task identity and open Todos instead of leaking them into standalone chat.
+    private func consumeRequestedThreadIfNeeded() async {
+        guard let requestedID = appNavigation.requestedChatThreadID,
+              let remoteID = UUID(uuidString: requestedID) else { return }
+        do {
+            let thread = try await chatSyncService.openThread(
+                id: remoteID, modelContext: modelContext, sessionStore: sessionStore
+            )
+            guard appNavigation.requestedChatThreadID == requestedID else { return }
+            if let todoID = thread.linkedTodoID {
+                appNavigation.showTodo(todoID)
+            } else if thread.isStandaloneChat {
+                path.append(thread.id)
+            }
+            appNavigation.requestedChatThreadID = nil
+        } catch is CancellationError {
+        } catch {
+            actionErrorMessage = MobileErrorCopy.message(for: error)
         }
-
-        appNavigation.requestedChatThreadID = nil
     }
 
     @discardableResult

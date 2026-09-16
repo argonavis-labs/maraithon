@@ -10,6 +10,7 @@ defmodule Maraithon.AssistantChat.MobileDelivery do
   alias Maraithon.Push.Notifier, as: MobilePush
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramConversations.Conversation
+  alias Maraithon.TelegramConversations
 
   require Logger
 
@@ -44,7 +45,7 @@ defmodule Maraithon.AssistantChat.MobileDelivery do
         MobilePush.notify(user_id, %{
           title: "Maraithon",
           body: text,
-          deeplink: "maraithon://chat/#{conversation.id}",
+          deeplink: conversation_deeplink(conversation),
           thread_id: "chat:#{conversation.id}",
           collapse_id: "chat:#{conversation.id}"
         })
@@ -62,4 +63,11 @@ defmodule Maraithon.AssistantChat.MobileDelivery do
   end
 
   defp notify_device(_conversation, _text), do: :ok
+
+  defp conversation_deeplink(conversation) do
+    case TelegramConversations.linked_todo_id(conversation) do
+      nil -> "maraithon://chat/#{conversation.id}"
+      todo_id -> "maraithon://todos/#{todo_id}"
+    end
+  end
 end

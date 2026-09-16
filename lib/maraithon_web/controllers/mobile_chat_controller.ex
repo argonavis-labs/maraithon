@@ -9,16 +9,23 @@ defmodule MaraithonWeb.MobileChatController do
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
+    # Older clients treat an absent row as deleted, including its local outbox.
+    # Keep their full collection until they opt into standalone chat scope.
+    include_todos? = params["scope"] != "chat"
+    opts = [limit: limit(params), include_todo_threads: include_todos?]
 
     # Collection ETag over the user's mobile threads, computed before the
     # expensive list query (with turns preloaded) so a 304 never runs it.
     # New messages bump the thread's updated_at (see
     # AssistantChat.collection_version/1), so this invalidates on new turns.
     etag =
-      MobileConditional.collection_etag("chat-threads", AssistantChat.collection_version(user_id))
+      MobileConditional.collection_etag(
+        "chat-threads-v3-#{if include_todos?, do: "all", else: "chat"}",
+        AssistantChat.collection_version(user_id, opts)
+      )
 
     MobileConditional.with_collection_etag(conn, etag, fn conn ->
-      {:ok, threads} = AssistantChat.list_threads(user_id, limit: limit(params))
+      {:ok, threads} = AssistantChat.list_threads(user_id, opts)
       json(conn, MobileChatJSON.thread_index(threads))
     end)
   end

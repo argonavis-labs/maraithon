@@ -116,6 +116,8 @@ extension MobileAPIClient: MobileChatAPI {
         let pendingRun: RemoteChatRun?
         let messages: [RemoteChatMessage]
         let linkedTodo: JSONValue?
+        let threadKind: String?
+        let linkedTodoID: UUID?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -128,6 +130,8 @@ extension MobileAPIClient: MobileChatAPI {
             case pendingRun = "pending_run"
             case messages
             case linkedTodo = "linked_todo"
+            case threadKind = "thread_kind"
+            case linkedTodoID = "linked_todo_id"
         }
 
         init(
@@ -140,7 +144,9 @@ extension MobileAPIClient: MobileChatAPI {
             latestMessage: RemoteChatMessage? = nil,
             pendingRun: RemoteChatRun? = nil,
             messages: [RemoteChatMessage] = [],
-            linkedTodo: JSONValue? = nil
+            linkedTodo: JSONValue? = nil,
+            threadKind: String? = nil,
+            linkedTodoID: UUID? = nil
         ) {
             self.id = id
             self.title = title
@@ -152,6 +158,8 @@ extension MobileAPIClient: MobileChatAPI {
             self.pendingRun = pendingRun
             self.messages = messages
             self.linkedTodo = linkedTodo
+            self.threadKind = threadKind
+            self.linkedTodoID = linkedTodoID
         }
 
         init(from decoder: Decoder) throws {
@@ -166,6 +174,8 @@ extension MobileAPIClient: MobileChatAPI {
             pendingRun = try container.decodeIfPresent(RemoteChatRun.self, forKey: .pendingRun)
             messages = try container.decodeIfPresent([RemoteChatMessage].self, forKey: .messages) ?? []
             linkedTodo = try container.decodeIfPresent(JSONValue.self, forKey: .linkedTodo)
+            threadKind = try container.decodeIfPresent(String.self, forKey: .threadKind)
+            linkedTodoID = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoID)
         }
     }
 
@@ -332,7 +342,7 @@ extension MobileAPIClient: MobileChatAPI {
         conditional: Bool
     ) async throws -> [RemoteChatThread] {
         let response: ChatThreadsResponse = try await send(
-            path: "/chat/threads?limit=\(Self.chatThreadsPageLimit)",
+            path: "/chat/threads?limit=\(Self.chatThreadsPageLimit)&scope=chat",
             sessionToken: sessionToken,
             etagKey: conditional ? ETagKey.chatThreads : nil,
             responseType: ChatThreadsResponse.self

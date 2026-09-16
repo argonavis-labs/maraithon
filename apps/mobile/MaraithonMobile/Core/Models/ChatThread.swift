@@ -8,6 +8,10 @@ final class ChatThread {
     var createdAt: Date
     var updatedAt: Date
     var remoteID: UUID?
+    // Optional fields allow lightweight migration. Existing remote threads are
+    // classified on sync before appearing in the standalone Chat list.
+    var kindRawValue: String?
+    var linkedTodoID: UUID?
     var remoteStatusRawValue: String?
     var syncStatusRawValue: String?
     var pendingRunID: UUID?
@@ -17,6 +21,10 @@ final class ChatThread {
 
     var sortedMessages: [ChatMessage] {
         messages.sorted { $0.sentAt < $1.sentAt }
+    }
+
+    var isStandaloneChat: Bool {
+        kindRawValue == "chat" && linkedTodoID == nil
     }
 
     var syncStatus: ChatSyncStatus {
@@ -68,6 +76,7 @@ final class ChatThread {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.remoteID = remoteID
+        self.kindRawValue = "chat"
         self.remoteStatusRawValue = remoteStatusRawValue
         self.syncStatusRawValue = syncStatus.rawValue
         self.pendingRunID = pendingRunID

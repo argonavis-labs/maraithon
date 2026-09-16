@@ -89,13 +89,14 @@ struct ChatSyncService {
             )
         }
 
-        // A short (non-truncated) page is the complete remote list, so local
-        // threads that vanished remotely should be removed. A full page may be
-        // truncated and omit live threads beyond it; never delete on that
-        // evidence alone. Threads without a remoteID are local-only drafts.
+        // The collection contains standalone chats only. Keep task histories,
+        // unclassified legacy caches, and unacknowledged user messages intact.
+        // A full page can omit live chats, so it cannot prove their deletion.
         if remoteThreads.count < MobileAPIClient.chatThreadsPageLimit {
             let remoteIDs = Set(remoteThreads.map(\.id))
-            for (remoteID, thread) in localThreads where !remoteIDs.contains(remoteID) {
+            for (remoteID, thread) in localThreads where !remoteIDs.contains(remoteID)
+                && thread.isStandaloneChat && thread.pendingRunID == nil
+                && !thread.messages.contains(where: { $0.role == .user && $0.remoteID == nil }) {
                 modelContext.delete(thread)
             }
         }
@@ -212,6 +213,19 @@ struct ChatSyncService {
             modelContext: modelContext,
             reconcileMessages: true
         )
+        thread.kindRawValue = "todo_detail"
+        thread.linkedTodoID = todo.id
+        try modelContext.save()
+        return thread
+    }
+
+    func openThread(
+        id: UUID,
+        modelContext: ModelContext,
+        sessionStore: SessionStore
+    ) async throws -> ChatThread {
+        let remote = try await api.getChatThread(sessionToken: sessionToken(from: sessionStore), id: id)
+        let thread = try merge(remote, modelContext: modelContext, reconcileMessages: true)
         try modelContext.save()
         return thread
     }
@@ -513,6 +527,11 @@ struct ChatSyncService {
         )
 
         thread.remoteID = remoteThread.id
+        thread.linkedTodoID = remoteThread.linkedTodoID
+            ?? remoteThread.linkedTodo?.object?["id"]?.string.flatMap(UUID.init(uuidString:))
+            ?? thread.linkedTodoID
+        thread.kindRawValue = remoteThread.threadKind
+            ?? (thread.linkedTodoID == nil ? "chat" : "todo_detail")
         thread.title = remoteThread.title.isEmpty ? thread.title : remoteThread.title
         thread.remoteStatusRawValue = remoteThread.status
         thread.syncStatus = .synced
