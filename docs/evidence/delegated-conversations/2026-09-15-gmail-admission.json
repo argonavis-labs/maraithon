@@ -1,0 +1,101 @@
+{
+  "date": "2026-09-15",
+  "normalization_commit": "0f3f01f7ecccc77993b080121ece871181e8a54d",
+  "admission_commit": "4a8a17f17def08b28babb6c55a33b132451512b8",
+  "deployment": {
+    "workflow": 35040624836,
+    "status": "success",
+    "revision": "maraithon-00381-gxc",
+    "traffic_percent": 100,
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:63dcda0d6603b5628aa9b5289f08db1b12971a175e5b11ef006bfda32435d981"
+  },
+  "validation": {
+    "build": "make build passed",
+    "focused_tests": 114,
+    "failures": 0,
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0
+  },
+  "executions": [
+    {
+      "name": "maraithon-todo-validation-6wkhz",
+      "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:63dcda0d6603b5628aa9b5289f08db1b12971a175e5b11ef006bfda32435d981",
+      "completed_at": "2026-09-16T00:41:50.759081Z",
+      "succeeded": true
+    },
+    {
+      "name": "maraithon-todo-validation-xgrl8",
+      "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:63dcda0d6603b5628aa9b5289f08db1b12971a175e5b11ef006bfda32435d981",
+      "completed_at": "2026-09-16T00:44:41.152339Z",
+      "succeeded": true
+    }
+  ],
+  "initial_read_only_probe": {
+    "module_loaded": true,
+    "probe": {
+      "model_calls": 0,
+      "messages_sent": 0,
+      "calendar_writes": 0,
+      "new_evals": 0
+    },
+    "checked_at": "2026-09-16T00:41:46.418129Z",
+    "mailboxes": [
+      {
+        "status": "passed",
+        "mailbox": "kent@runner.now",
+        "identity_matches": true,
+        "stable_key_matches_profile": true
+      },
+      {
+        "reason": "rate_limited",
+        "status": "held",
+        "mailbox": "kent.fenwick@gmail.com"
+      },
+      {
+        "status": "passed",
+        "mailbox": "october@ewakened.com",
+        "identity_matches": true,
+        "stable_key_matches_profile": true
+      }
+    ],
+    "persisted_cooldowns": [
+      [
+        0
+      ]
+    ],
+    "queued_memory_eval": {
+      "id": "04a64f25-c24a-42ee-a819-a94cbe07e917",
+      "status": "pending",
+      "scheduled_at": "2026-09-16T12:00:00.000000Z"
+    },
+    "settings": {
+      "model": "meta/muse-spark-1.3-contributor",
+      "development_spending": true,
+      "eval_only": true,
+      "gmail_sends": true,
+      "slack_sends": false
+    }
+  },
+  "personal_mailbox_followup": {
+    "probe": {
+      "model_calls": 0,
+      "messages_sent": 0,
+      "calendar_writes": 0,
+      "new_evals": 0
+    },
+    "result": {
+      "status": "passed",
+      "attempt": 1,
+      "identity_matches": true,
+      "stable_key_matches_profile": true
+    },
+    "checked_at": "2026-09-16T00:44:37.474436Z",
+    "mailbox": "kent.fenwick@gmail.com"
+  },
+  "limits": [
+    "The first personal mailbox probe returned a rate_limited class; its subtype was not recorded. The follow-up passed on its first attempt.",
+    "Live checks verify account binding and successful reads. Contention, cooldown persistence, token rotation and caller death use local PostgreSQL and provider fixtures.",
+    "The queued October memory eval remains pending for September 16 at 08:00 Eastern.",
+    "Whole-app recovery, a real longevity canary and live Slack evals are not claimed by this evidence."
+  ]
+}
