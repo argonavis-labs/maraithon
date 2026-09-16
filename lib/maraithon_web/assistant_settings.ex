@@ -50,15 +50,26 @@ defmodule MaraithonWeb.AssistantSettings do
         end
 
       data = if identity, do: Map.drop(identity.data, ["_bound"]), else: %{"disclose_ai" => true}
+      preferences = Preferences.get(user_id)
+
+      calendars =
+        Enum.map(
+          Preferences.calendar_accounts(user_id),
+          &%{id: &1.id, label: SourceLabels.account(&1)}
+        )
+
+      unavailable = Preferences.calendar_ids(preferences) -- Enum.map(calendars, & &1.id)
 
       %{
         enabled: true,
         accounts: accounts,
+        calendar_accounts:
+          calendars ++ Enum.map(unavailable, &%{id: &1, label: "Unavailable account"}),
         selected_account: selected,
         aliases: aliases,
         error: error,
         identity: Map.put(data, "gmail_mode", (identity && identity.gmail_mode) || "account"),
-        preferences: Preferences.get(user_id),
+        preferences: preferences,
         timezones: Maraithon.Timezones.options(),
         numeric_preferences:
           Enum.map(numeric_preferences(), fn {key, label, min, max} ->
@@ -94,6 +105,9 @@ defmodule MaraithonWeb.AssistantSettings do
 
           normalized =
             cond do
+              key == "booking_calendar_account_id" ->
+                if value in [nil, ""], do: nil, else: integer(value) || value
+
               is_integer(default) ->
                 integer(value)
 

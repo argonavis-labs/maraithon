@@ -45,18 +45,33 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
         </div>
         <div class="flex justify-end"><.button type="submit">Save assistant</.button></div>
       </.form>
-      <.preferences preferences={@settings.preferences} />
+      <.preferences preferences={@settings.preferences} calendar_accounts={@settings.calendar_accounts} />
     </section>
     """
   end
 
   attr :preferences, :map, required: true
+  attr :calendar_accounts, :list, required: true
 
   defp preferences(assigns) do
     ~H"""
     <details class="border-t border-zinc-950/10 pt-3">
       <summary class="cursor-pointer text-sm/6 font-medium text-zinc-700">Scheduling and follow-up preferences</summary>
       <.form for={%{}} action={~p"/settings/delegation-preferences"} method="post" class="mt-4 space-y-4">
+        <.field label="Book meetings on" for="delegation-booking-calendar">
+          <.c_select id="delegation-booking-calendar" name="delegation_preferences[booking_calendar_account_id]">
+            <option value="" selected={is_nil(@preferences["booking_calendar_account_id"])}>Task's Google account</option>
+            <option :for={account <- @calendar_accounts} value={account.id} selected={account.id == @preferences["booking_calendar_account_id"]}><%= account.label %></option>
+          </.c_select>
+        </.field>
+        <fieldset><legend class="text-sm/6 font-medium text-zinc-950">Also check for conflicts</legend>
+          <input type="hidden" name="delegation_preferences[calendar_account_ids][]" value="" />
+          <div class="mt-2 space-y-2">
+            <.checkbox_field :for={account <- @calendar_accounts} label={account.label}
+              name="delegation_preferences[calendar_account_ids][]" value={to_string(account.id)} unchecked_value="" checked={account.id in @preferences["calendar_account_ids"]} />
+          </div>
+          <p class="mt-2 text-sm/6 text-zinc-500">Checks each account's primary calendar, including the booking account.</p>
+        </fieldset>
         <.field label="Timezone" for="delegation-timezone">
           <.c_select id="delegation-timezone" name="delegation_preferences[timezone]">
             <option :for={zone <- Maraithon.Timezones.options()} value={zone.value} selected={zone.value == @preferences["timezone"]}><%= zone.label %></option>

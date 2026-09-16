@@ -1,6 +1,5 @@
 defmodule Maraithon.Delegations.Scheduling do
   @moduledoc "Bounded calendar reads and deterministic slots shared by proposals and booking."
-  alias Maraithon.{AssistantIdentities, ConnectedAccounts}
   alias Maraithon.Calendar.FreeBlocks
   alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.Delegations.Preferences
@@ -115,22 +114,12 @@ defmodule Maraithon.Delegations.Scheduling do
   end
 
   defp account_ids(user_id, prefs, default_id) do
-    excluded = AssistantIdentities.assistant_account_ids(user_id)
+    available = Preferences.calendar_accounts(user_id) |> Enum.map(& &1.id)
+    default = if default_id in available, do: default_id, else: List.first(available)
+    booking = prefs["booking_calendar_account_id"] || default
+    ids = Enum.uniq(List.wrap(booking) ++ prefs["calendar_account_ids"])
 
-    available =
-      ConnectedAccounts.list_for_user(user_id)
-      |> Enum.filter(fn a ->
-        a.status == "connected" and a.id not in excluded and
-          (a.provider == "google" or String.starts_with?(a.provider, "google:"))
-      end)
-      |> Enum.sort_by(&{&1.provider != "google", &1.id})
-      |> Enum.map(& &1.id)
-
-    selected = prefs["calendar_account_ids"]
-    default = if default_id in available, do: [default_id], else: Enum.take(available, 1)
-    ids = if selected == [], do: default, else: selected
-
-    if ids != [] and Enum.all?(ids, &(&1 in available)),
+    if length(ids) in 1..10 and Enum.all?(ids, &(&1 in available)),
       do: {:ok, ids},
       else: {:error, :invalid_calendar_accounts}
   end

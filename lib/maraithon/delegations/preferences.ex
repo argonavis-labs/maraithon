@@ -1,7 +1,8 @@
 defmodule Maraithon.Delegations.Preferences do
   @moduledoc "Shared scheduling, actor, and rolling-budget defaults."
   import Ecto.Query
-  alias Maraithon.{BriefingSchedules, Repo, Timezones}
+  alias Maraithon.{AssistantIdentities, BriefingSchedules, Repo, Timezones}
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Delegations.Preference
   alias Maraithon.PrivacyErasure.WriteFence
 
@@ -15,6 +16,7 @@ defmodule Maraithon.Delegations.Preferences do
     "lead_time_hours" => 24,
     "max_meetings_per_day" => 6,
     "calendar_account_ids" => [],
+    "booking_calendar_account_id" => nil,
     "video_link" => nil,
     "calendar_link_id" => nil,
     "as_user_undo_seconds" => 120,
@@ -47,7 +49,7 @@ defmodule Maraithon.Delegations.Preferences do
   def get(user_id) do
     case Repo.get_by(Preference, user_id: user_id) |> Preference.hydrate() do
       nil -> Map.put(@defaults, "timezone", user_timezone(user_id))
-      row -> Map.merge(@defaults, Map.take(row.data || %{}, Map.keys(@defaults)))
+      row -> stored_preferences(row.data || %{})
     end
   end
 
@@ -56,44 +58,60 @@ defmodule Maraithon.Delegations.Preferences do
       Maraithon.DurablePayload.require_current_mutation!()
       WriteFence.lock_user_writable!(user_id)
       row = Repo.get_by(Preference, user_id: user_id) |> Preference.hydrate()
-      data = Map.merge((row && row.data) || @defaults, Map.take(attrs, Map.keys(@defaults)))
 
-      case {validate(data),
-            owned_calendars?(user_id, data["calendar_account_ids"]) and
-              owned_link?(user_id, data["calendar_link_id"])} do
-        {:ok, true} ->
-          (row || %Preference{user_id: user_id})
-          |> Preference.changeset(%{data: data})
-          |> Repo.insert_or_update!()
+      data =
+        Map.merge(
+          stored_preferences((row && row.data) || %{}),
+          Map.take(attrs, Map.keys(@defaults))
+        )
 
-        {:ok, false} ->
-          Repo.rollback(:invalid_calendar_accounts)
-
-        {error, _} ->
-          Repo.rollback(error)
+      with :ok <- validate(data),
+           true <-
+             owned_calendars?(user_id, calendar_ids(data)) and
+               owned_link?(user_id, data["calendar_link_id"]) do
+        (row || %Preference{user_id: user_id})
+        |> Preference.changeset(%{data: data})
+        |> Repo.insert_or_update!()
+      else
+        false -> Repo.rollback(:invalid_calendar_accounts)
+        error -> Repo.rollback(error)
       end
     end)
   end
 
-  defp owned_calendars?(_, []), do: true
+  def calendar_accounts(user_id) do
+    assistant_ids = AssistantIdentities.assistant_account_ids(user_id)
 
-  defp owned_calendars?(user_id, ids) when is_list(ids) do
-    assistant_ids = Maraithon.AssistantIdentities.assistant_account_ids(user_id)
-
-    valid_accounts?(ids) and
-      Repo.aggregate(
-        from(a in Maraithon.Accounts.ConnectedAccount,
-          where:
-            a.user_id == ^user_id and a.id in ^ids and a.status == "connected" and
-              (a.provider == "google" or like(a.provider, "google:%"))
-        ),
-        :count,
-        :id
-      ) == length(Enum.uniq(ids)) and
-      Enum.all?(ids, &(&1 not in assistant_ids))
+    Repo.all(
+      from a in ConnectedAccount,
+        where: a.user_id == ^user_id and a.status == "connected" and a.id not in ^assistant_ids,
+        where: a.provider == "google" or like(a.provider, "google:%"),
+        order_by: [asc: fragment("? <> 'google'", a.provider), asc: a.id]
+    )
   end
 
-  defp owned_calendars?(_, _), do: false
+  def calendar_ids(prefs),
+    do:
+      Enum.uniq(List.wrap(prefs["booking_calendar_account_id"]) ++ prefs["calendar_account_ids"])
+
+  defp owned_calendars?(_, []), do: true
+
+  defp owned_calendars?(user_id, ids) do
+    available = MapSet.new(calendar_accounts(user_id), & &1.id)
+    Enum.all?(ids, &MapSet.member?(available, &1))
+  end
+
+  # Before an explicit booking setting existed, the first selected account organized invites.
+  defp stored_preferences(data) do
+    data =
+      Map.put_new(
+        data,
+        "booking_calendar_account_id",
+        List.first(data["calendar_account_ids"] || [])
+      )
+
+    Map.merge(@defaults, Map.take(data, Map.keys(@defaults)))
+  end
 
   defp owned_link?(_, id) when id in [nil, ""], do: true
 
@@ -122,7 +140,11 @@ defmodule Maraithon.Delegations.Preferences do
       not is_boolean(data["proposals_enabled"]) ->
         :invalid_proposals_setting
 
-      not valid_accounts?(data["calendar_account_ids"]) ->
+      not valid_accounts?(data["calendar_account_ids"]) or
+        not (is_nil(data["booking_calendar_account_id"]) or
+                 (is_integer(data["booking_calendar_account_id"]) and
+                    data["booking_calendar_account_id"] > 0)) or
+          length(calendar_ids(data)) > 10 ->
         :invalid_calendar_accounts
 
       not valid_link?(data["video_link"]) ->
