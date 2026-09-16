@@ -23,11 +23,10 @@ defmodule Maraithon.Repo.Migrations.AddLocalCalendarSourceState do
 
     # Admit only this table's reviewed addition. The final proofs also compare
     # every unchanged function, trigger, role, ACL and table. Any drift rolls
-    # back the column and both manifest updates in this same transaction.
+    # back the column and its manifest update in this same transaction.
     execute("""
     DO $refresh$
     DECLARE prior jsonb; current_snapshot jsonb; reviewed jsonb;
-      catalogs jsonb; functions jsonb; triggers jsonb;
     BEGIN
       SELECT catalog_manifest INTO STRICT prior
       FROM public.durable_payload_protocol_manifests
@@ -49,27 +48,8 @@ defmodule Maraithon.Repo.Migrations.AddLocalCalendarSourceState do
           updated_at = timezone('UTC', clock_timestamp())
       WHERE name = 'durable_payload_140005' AND migration_version = 20260810140005;
 
-      SELECT catalog_fingerprints, function_fingerprints, trigger_fingerprints
-      INTO STRICT catalogs, functions, triggers
-      FROM public.privacy_protocol_manifests
-      WHERE name = 'operational_privacy_140007' AND migration_version = 20260810140007
-      FOR UPDATE;
-      IF NOT (catalogs ? 'local_calendar_events') THEN
-        RAISE EXCEPTION 'Calendar source state privacy catalog entry is missing';
-      END IF;
-      catalogs := jsonb_set(catalogs, '{local_calendar_events}',
-        to_jsonb(public.runtime_catalog_table_fingerprint('public.local_calendar_events'::regclass)), false);
-      ALTER TABLE public.privacy_protocol_manifests
-        DISABLE TRIGGER reject_privacy_protocol_manifest_mutation_trigger;
-      UPDATE public.privacy_protocol_manifests
-      SET catalog_fingerprints = catalogs,
-          manifest_digest = public.digest(convert_to(jsonb_build_object(
-            'functions', functions, 'triggers', triggers, 'catalogs', catalogs
-          )::text, 'UTF8'), 'sha256'),
-          updated_at = timezone('UTC', clock_timestamp())
-      WHERE name = 'operational_privacy_140007' AND migration_version = 20260810140007;
-      ALTER TABLE public.privacy_protocol_manifests
-        ENABLE TRIGGER reject_privacy_protocol_manifest_mutation_trigger;
+      -- This table belongs to the durable-payload catalog, not the
+      -- operational-privacy catalog. Prove the latter remains unchanged.
       IF NOT public.privacy_protocol_catalog_ready() OR
          NOT public.durable_payload_catalog_ready() OR
          public.runtime_coordination_catalog_ready_count() <> 120 THEN
