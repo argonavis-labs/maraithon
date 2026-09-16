@@ -1,4 +1,4 @@
-/// A next step from the brief, as an open card with a Prepare action or as a
+/// A next step from the brief, as an open card with a chat action or as a
 /// compact row. Each sends its specific request into the task conversation.
 import SwiftUI
 
@@ -36,10 +36,10 @@ struct TodoSuggestionCard: View {
                 }
                 HStack {
                     Spacer()
-                    Button("Prepare") { send() }
+                    Button("Ask Maraithon") { send() }
                         .buttonStyle(RunnerButtonStyle(.primary, compact: true))
                         .disabled(disabled)
-                        .help("Have Maraithon prepare this for review")
+                        .help("Send this instruction to Maraithon")
                 }
             }
             .runnerCardRow()
@@ -62,7 +62,7 @@ struct TodoSuggestionCard: View {
                 }
                 Spacer(minLength: Tokens.Spacing.small)
                 HStack(spacing: Tokens.Spacing.xsmall) {
-                    Text("Prepare")
+                    Text("Ask Maraithon")
                     Image(systemName: "arrow.up.right")
                         .font(Tokens.Typography.caption)
                         .accessibilityHidden(true)
@@ -86,7 +86,7 @@ struct TodoSuggestionCard: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .help(action.purpose)
-        .accessibilityLabel("Prepare: \(action.label)")
+        .accessibilityLabel("Ask Maraithon: \(action.label)")
     }
 
     private func send() {
