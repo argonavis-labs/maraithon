@@ -473,6 +473,7 @@ defmodule Maraithon.TelegramAssistant.ActionReconciliation do
              source: "google_calendar",
              event_id: id,
              event: %{event_id: id},
+             html_link: event[:html_link],
              message: "Verified the approved calendar change.",
              reconciled: true
            }}

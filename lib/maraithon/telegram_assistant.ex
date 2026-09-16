@@ -2723,6 +2723,15 @@ defmodule Maraithon.TelegramAssistant do
   defp prepared_execution_checkpoint(result) do
     result = serialize_result(result)
 
+    result =
+      case result do
+        %{"event" => %{"html_link" => link}} when is_binary(link) ->
+          Map.put(result, "html_link", link)
+
+        _ ->
+          result
+      end
+
     message =
       case result["message"] do
         message when is_binary(message) and message != "" -> message

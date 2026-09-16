@@ -8,7 +8,7 @@ defmodule Maraithon.Delegations.Receipts do
   @result "_maraithon_execution_result"
   @hash "_maraithon_confirmed_payload_sha256"
   @receipt "_maraithon_reconciliation_receipt"
-  @fields ~w(source message_id thread_id event_id team_id channel ts user bot_id text_sha256 reconciled)
+  @fields ~w(source message_id thread_id event_id team_id channel ts user bot_id text_sha256 reconciled html_link)
 
   def proof_fields, do: @fields
 

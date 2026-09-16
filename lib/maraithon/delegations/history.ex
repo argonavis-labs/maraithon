@@ -3,7 +3,6 @@ defmodule Maraithon.Delegations.History do
   import Ecto.Query
   alias Maraithon.{Delegations, Repo}
   alias Maraithon.Delegations.{Event, EvidenceLinks}
-  alias Maraithon.TelegramAssistant.PreparedAction
 
   @page_size 30
   @kinds ~w(user_action inbound_message decision send_receipt send_unknown send_deferred
@@ -26,7 +25,6 @@ defmodule Maraithon.Delegations.History do
       accounts = EvidenceLinks.accounts(user_id)
       scope = Delegations.current_grant(d).data["scope"]
       team = scope["team_id"]
-      calendar_links = calendar_links(d, events)
       facts = get_in(d.data, ["ledger", "facts"]) || %{}
 
       {:ok,
@@ -40,9 +38,7 @@ defmodule Maraithon.Delegations.History do
                occurred_at: DateTime.to_iso8601(event.occurred_at),
                title: title,
                detail: detail,
-               links:
-                 event_links(event, d, accounts, team) ++
-                   Map.get(calendar_links, event.data["action_id"], [])
+               links: event_links(event, d, accounts, team)
              }
            end),
          next_before: if(length(rows) > @page_size, do: to_string(List.last(events).seq)),
@@ -105,35 +101,11 @@ defmodule Maraithon.Delegations.History do
       |> Map.put("provider", d.provider)
 
     if data["action_type"] == "calendar_create_event",
-      do: [],
+      do: EvidenceLinks.calendar(get_in(data, ["receipt", "html_link"])),
       else: EvidenceLinks.links([ref], accounts, team)
   end
 
   defp event_links(_, _, _, _), do: []
-
-  # Older receipts retained the provider's event URL only on the prepared action.
-  defp calendar_links(d, events) do
-    ids =
-      for e <- events,
-          e.kind == "send_receipt",
-          e.data["action_type"] == "calendar_create_event",
-          do: e.data["action_id"]
-
-    if ids == [],
-      do: %{},
-      else:
-        Repo.all(
-          from a in PreparedAction,
-            where:
-              a.user_id == ^d.user_id and
-                a.delegation_id == ^d.id and a.id in ^ids and a.status == "executed"
-        )
-        |> Map.new(fn row ->
-          action = PreparedAction.hydrate_payload(row)
-          result = action.payload["_maraithon_execution_result"] || %{}
-          {action.id, EvidenceLinks.calendar(get_in(result, ["event", "html_link"]))}
-        end)
-  end
 
   defp describe(%{kind: "user_action", data: data}) do
     title =
