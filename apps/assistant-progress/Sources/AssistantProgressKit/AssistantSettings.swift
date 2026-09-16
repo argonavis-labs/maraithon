@@ -13,14 +13,16 @@ public enum AssistantSettings {
         let aliases: [Address]?
         let identity: [String: Value]?
         let preferences: [String: Value]?
-        let timezones: [Timezone]?
+        let timezones: [Choice]?
         let numericPreferences: [NumericPreference]?
+        let choicePreferences: [ChoicePreference]?
         let error: String?
         enum CodingKeys: String, CodingKey {
             case enabled, accounts, aliases, identity, preferences, timezones, error
             case selectedAccount = "selected_account", numericPreferences = "numeric_preferences"
             case calendarAccounts = "calendar_accounts"
             case bookingLinks = "booking_links"
+            case choicePreferences = "choice_preferences"
         }
     }
     struct Account: Decodable, Identifiable, Sendable {
@@ -29,9 +31,12 @@ public enum AssistantSettings {
     }
     struct Address: Decodable, Sendable { let email: String; let primary: Bool }
     struct BookingLink: Decodable, Identifiable, Sendable { let id: String; let label: String }
-    struct Timezone: Decodable, Sendable { let value: String; let label: String }
+    struct Choice: Decodable, Sendable { let value: String; let label: String }
     struct NumericPreference: Decodable, Sendable {
         let key: String; let label: String; let min: Int; let max: Int
+    }
+    struct ChoicePreference: Decodable, Sendable {
+        let key: String; let label: String; let options: [Choice]
     }
     public enum Value: Codable, Sendable {
         case string(String), integer(Int), bool(Bool), integers([Int]), null

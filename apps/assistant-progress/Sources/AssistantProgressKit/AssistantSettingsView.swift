@@ -102,6 +102,11 @@ public struct AssistantSettingsView: View {
             }
             TextField("Start of day (HH:mm)", text: preferenceText("work_start"))
             TextField("End of day (HH:mm)", text: preferenceText("work_end"))
+            ForEach(settings.choicePreferences ?? [], id: \.key) { field in
+                Picker(field.label, selection: preferenceText(field.key)) {
+                    ForEach(field.options, id: \.value) { Text($0.label).tag($0.value) }
+                }
+            }
             ForEach(settings.numericPreferences ?? [], id: \.key) { field in
                 Stepper(value: preferenceNumber(field.key), in: field.min...field.max) {
                     LabeledContent(field.label, value: "\(preferences[field.key]?.integer ?? 0)")
@@ -161,6 +166,7 @@ public struct AssistantSettingsView: View {
     @MainActor private func savePreferences() async {
         let keys = ["timezone", "work_days", "work_start", "work_end", "video_link", "proposals_enabled"]
             + (settings?.numericPreferences ?? []).map(\.key)
+            + (settings?.choicePreferences ?? []).map(\.key)
             + (settings?.calendarAccounts == nil ? [] : ["booking_calendar_account_id", "calendar_account_ids"])
             + (settings?.bookingLinks == nil ? [] : ["calendar_link_id"])
         await perform(path: "delegation-settings/preferences", fields: preferences.filter { keys.contains($0.key) })
