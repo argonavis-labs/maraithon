@@ -2,6 +2,14 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Slack display names
+
+Slack discovery now keeps its workspace credential attached through conversation, history, search, thread, and directory requests. Dropping that context had caused requests to fail before reaching Slack. Task preparation also resolves IDs copied into titles, summaries, notes, and participant labels. It saves verified names per task and workspace, uses a credential with directory permission, and checks the task version before saving. Task lists perform no provider lookup. Links, message destinations, prepared drafts, ownership, and status retain their original values.
+
+Slack confirmed that `U0A7JQ8V5NH` is Paolo. The saved task now reads “Reply to Paolo on Brett note workaround.” Production execution `maraithon-todo-validation-hdvqv` repaired nine of 21 Slack tasks and verified the shared task projection. Existing open task briefs were queued for regeneration from the corrected copy. The repair made no direct model calls and sent no Slack messages. Message action labels also use the saved names while retaining the underlying Slack recipient ID.
+
+The server build and 19 focused checks passed. They cover directory permissions, workspace isolation, stale edits, replay without another lookup, preserved links and recipients, source acquisition, and brief generation. Commits `80fe77f0` and `112f0764` deployed successfully; revision `maraithon-00391-fjn` serves all traffic. Web, Mac, and iPhone consume the shared task data; no native binary changed. Muse Spark Contributor, active development spending, and disabled Slack sends remain configured. [Slack name evidence](evidence/delegated-conversations/2026-09-16-slack-display-names.json).
+
 ## Todo chat reliability
 
 The failed “Mohit is getting this for me” turn never changed the task. Muse rejected its first request because the chat harness required a function call; this provider accepts only automatic tool selection. The harness now uses that supported setting and accepts either a function call or a plain final reply. Failed requests are recorded as failed, and chat plus API error copy explain what did not complete without claiming that evidence was saved.

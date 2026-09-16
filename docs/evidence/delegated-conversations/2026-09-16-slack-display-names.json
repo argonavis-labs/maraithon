@@ -1,0 +1,144 @@
+{
+  "checked_at": "2026-09-16T05:19:06.452367Z",
+  "implementation_commits": [
+    "80fe77f0135d197d11cb92e396d2e216e99395cd",
+    "112f076429f00957280d392708053aeb89dde4a6"
+  ],
+  "verification": {
+    "server_build": "passed",
+    "focused_checks": 19,
+    "focused_check_files": [
+      "test/maraithon/todos/slack_names_test.exs",
+      "test/maraithon/todos/brief_test.exs",
+      "test/maraithon/chief_of_staff/acquisition_test.exs:138",
+      "test/maraithon/chief_of_staff/acquisition_test.exs:1141",
+      "test/maraithon/chief_of_staff/acquisition_test.exs:1263",
+      "test/maraithon/chief_of_staff/acquisition_test.exs:1390"
+    ],
+    "native_code_changed": false
+  },
+  "lookup_execution": "maraithon-todo-validation-nxfh4",
+  "repair_execution": "maraithon-todo-validation-hdvqv",
+  "repair": {
+    "changed": [
+      {
+        "id": "abf1d27b-0067-461f-9203-bf82ea489376",
+        "status": "open",
+        "title": "Turn on DB protection for Uride and Dozr databases",
+        "names": {
+          "U0B6W8FPRQF": "Steven Li"
+        },
+        "shared_surface_title": "Turn on DB protection for Uride and Dozr databases",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "45997fac-b07b-43b7-9ae4-8510140bb3e5",
+        "status": "open",
+        "title": "Reply to weekly 30-min engineering call invite",
+        "names": {
+          "U0B6W8FPRQF": "Steven Li"
+        },
+        "shared_surface_title": "Reply to weekly 30-min engineering call invite",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "13e2c873-1f30-42cf-853b-372845476dd8",
+        "status": "open",
+        "title": "Decide if Dozr owes admin fee on already-paid chases",
+        "names": {
+          "U0BP75L8G2U": "tal"
+        },
+        "shared_surface_title": "Decide if Dozr owes admin fee on already-paid chases",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "b05d3300-50e5-4f9f-82c0-6dfc5f1f6f65",
+        "status": "open",
+        "title": "Reply to Paolo on Brett note workaround",
+        "names": {
+          "U0A7JQ8V5NH": "Paolo"
+        },
+        "shared_surface_title": "Reply to Paolo on Brett note workaround",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "ebdda023-2de1-4cc8-89b5-effe09c9c989",
+        "status": "done",
+        "title": "Send list of 130 approved drivers",
+        "names": {
+          "U0BUV2XQBT3": "MV"
+        },
+        "shared_surface_title": "Send list of 130 approved drivers",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "a5978fad-7247-4ec7-8eef-d0962f18581a",
+        "status": "done",
+        "title": "Reply with Twilio login details to unblock admin fix",
+        "names": {
+          "U0A7JQ8V5NH": "Paolo"
+        },
+        "shared_surface_title": "Reply with Twilio login details to unblock admin fix",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "a4e25177-03e0-4b25-b7dc-0b1b4203c599",
+        "status": "done",
+        "title": "Share your impact ranking on the ticket projects",
+        "names": {
+          "U0B78AN9YER": "Yitong"
+        },
+        "shared_surface_title": "Share your impact ranking on the ticket projects",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "343aa63d-6818-4d26-8709-f81613ca054c",
+        "status": "done",
+        "title": "Reply with how many leads Runner has catered to so far",
+        "names": {
+          "U0BUV2XQBT3": "MV"
+        },
+        "shared_surface_title": "Reply with how many leads Runner has catered to so far",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      },
+      {
+        "id": "b0cca8b5-838b-46db-877c-a4aa3552723d",
+        "status": "open",
+        "title": "Send Dozr what you need to unblock the $329K",
+        "names": {
+          "U08F0N6NXV4": "Brett Liu"
+        },
+        "shared_surface_title": "Send Dozr what you need to unblock the $329K",
+        "routing_preserved": true,
+        "ownership_preserved": true
+      }
+    ],
+    "checked_at": "2026-09-16T05:19:06.452367Z",
+    "scanned": 21,
+    "target_title": "Reply to Paolo on Brett note workaround",
+    "target_names": {
+      "U0A7JQ8V5NH": "Paolo"
+    },
+    "provider_sends": 0,
+    "direct_model_calls": 0
+  },
+  "scope": "Names verified through the connected Slack workspace; no Slack messages sent. Existing open task briefs queued for regeneration after corrected copy.",
+  "deployment": {
+    "workflow_id": 35058940393,
+    "conclusion": "success",
+    "revision": "maraithon-00391-fjn",
+    "traffic_percent": 100,
+    "image_digest": "sha256:7476286903b1708bb46cfbf0150f3103899c172a11180946a33ef74c0932b598",
+    "model": "meta/muse-spark-1.3-contributor",
+    "development_spending": true,
+    "slack_sends_enabled": false
+  }
+}
