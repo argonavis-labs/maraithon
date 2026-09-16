@@ -456,6 +456,17 @@ defmodule Maraithon.TelegramAssistant.Context do
     ])
   end
 
+  defp select_fetchers_for_focus(fetchers, :linked_item_context) do
+    # The selected item and its recent conversation are already loaded. Pull
+    # other sources through focused tools only when this request needs them.
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :briefing_schedule,
+      :connected_accounts,
+      :defaults
+    ])
+  end
+
   defp select_fetchers_for_focus(fetchers, _request_focus), do: fetchers
 
   defp take_fetchers(fetchers, allowed_keys) do

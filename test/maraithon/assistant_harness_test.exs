@@ -94,51 +94,34 @@ defmodule Maraithon.AssistantHarnessTest do
     assert failover_policy.model_failover.max_attempts == 3
   end
 
-  test "failure messages preserve context instead of handing work back to the user" do
-    disallowed = [
-      "internal issue",
-      "ran out of time",
-      "try again",
-      "ask me for a narrower",
-      "taking longer than it should",
-      "model",
-      "llm",
-      "reasoning",
-      "tool",
-      "budget",
-      "run context",
-      "same_tool_args"
-    ]
-
+  test "failure messages explain unfinished work without inventing saved findings" do
     messages = [
       AssistantHarness.failure_message(:timeout),
       AssistantHarness.failure_message(:llm_turn_limit),
       AssistantHarness.failure_message(:tool_step_limit),
       AssistantHarness.failure_message({:llm_busy, 1_000}),
+      AssistantHarness.failure_message({:api_error, 400, :redacted}),
       AssistantHarness.failure_message({:assistant_harness_tool_loop_detected, "list_todos", 3}),
       AssistantHarness.failure_message(
-        {:assistant_harness_tool_loop_detected, "get_open_loops", 3}
-      ),
-      AssistantHarness.failure_message(
-        {:assistant_harness_tool_loop_detected, "not_real_tool", 3}
-      ),
-      AssistantHarness.failure_message(
-        {:assistant_harness_tool_loop_detected, "list_todos", 3, "same_tool_args", %{}}
+        {:assistant_harness_tool_loop_detected, "get_open_loops", 3, "same_tool_args", %{}}
       ),
       AssistantHarness.failure_message(:unexpected)
     ]
 
-    assert Enum.all?(messages, &String.contains?(&1, "saved"))
-    assert Enum.all?(messages, &String.starts_with?(&1, "Maraithon saved"))
+    for message <- messages do
+      refute message =~ "saved what"
+      refute message =~ "incomplete evidence"
+      refute message =~ "same_tool_args"
+      refute message =~ "No task changes"
+    end
 
-    refute Enum.any?(messages, fn message ->
-             normalized = String.downcase(message)
-             Enum.any?(disallowed, &String.contains?(normalized, &1))
-           end)
-
-    refute Enum.any?(messages, &String.contains?(&1, "I "))
-    refute Enum.any?(messages, &String.contains?(&1, "partial evidence"))
-    assert Enum.any?(messages, &String.contains?(&1, "open work"))
+    assert AssistantHarness.failure_message({:api_error, 400, :redacted}) =~ "rejected"
+    assert AssistantHarness.failure_message(:timeout) =~ "timed out"
+    assert AssistantHarness.failure_message(:unexpected) =~ "can't confirm"
+    unknown = AssistantHarness.failure_message({:tool_outcome_unknown, "step-id"})
+    assert unknown =~ "may have completed"
+    assert unknown =~ "avoid repeating"
+    refute unknown =~ "todo remains open"
   end
 
   test "builds model requests with runtime policy instead of prompt text alone" do

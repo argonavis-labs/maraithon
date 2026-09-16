@@ -7,6 +7,17 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
   alias Maraithon.OAuth
   alias Maraithon.TelegramAssistant.Context
 
+  test "selected todo chat does not preload unrelated sources or model-selected memory" do
+    keys = Context.fetcher_keys_for_focus(:linked_item_context)
+    assert keys == Context.fetcher_keys_for_focus("linked_item_context")
+    assert :preference_memory in keys
+    assert :connected_accounts in keys
+
+    for unrelated <- [:calendar, :deep_memory, :open_loops, :todos, :relationships, :projects] do
+      refute unrelated in keys
+    end
+  end
+
   describe "connected account prompt context" do
     test "uses account labels without raw provider identifiers or scopes" do
       user_id = "context-connected-#{System.unique_integer([:positive])}@example.com"

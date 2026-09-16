@@ -718,7 +718,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
              Map.delete(request_payload, :_native_exchanges),
              now
            ),
-         {:ok, response} <- TelegramAssistant.client_module().next_step(request_payload),
+         {:ok, response} <- request_model_step(llm_request_step, request_payload),
          {:ok, _completed_request_step} <-
            TelegramAssistant.complete_step(llm_request_step, %{
              response_payload: %{ok: true},
@@ -737,7 +737,24 @@ defmodule Maraithon.TelegramAssistant.Runner do
       handle_llm_response(run, runtime_context, response, next_state, started_monotonic_ms)
     else
       {:error, reason} ->
-        {:error, run, reason, state}
+        {:error, run, reason, next_state}
+    end
+  end
+
+  defp request_model_step(step, payload) do
+    case TelegramAssistant.client_module().next_step(payload) do
+      {:error, reason} = error ->
+        with {:ok, _} <-
+               TelegramAssistant.complete_step(step, %{
+                 status: "failed",
+                 error: normalize_error(reason),
+                 finished_at: DateTime.utc_now()
+               }) do
+          error
+        end
+
+      result ->
+        result
     end
   end
 
@@ -1202,7 +1219,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         case TelegramAssistant.send_turn(
                conversation,
                Map.fetch!(attrs, :chat_id),
-               AssistantHarness.failure_message(reason),
+               failure_message(reason, state),
                reply_to_message_id: Map.get(attrs, :source_message_id),
                send_mode: send_mode_for_delivery(delivery, attrs),
                message_id: delivery[:message_id],
@@ -1223,6 +1240,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
         {:error, :missing_failure_delivery_conversation}
     end
   end
+
+  defp failure_message({:api_error, status, _} = reason, %{tool_steps: 0})
+       when status in [400, 422] do
+    AssistantHarness.failure_message(reason) <> " No task changes were made."
+  end
+
+  defp failure_message(reason, _state), do: AssistantHarness.failure_message(reason)
 
   # `LivenessSession` never actually hands back `:suppress_after_timeout`
   # today (it always resolves to `:send` or `:edit`), but this guards against

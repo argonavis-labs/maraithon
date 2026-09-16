@@ -256,11 +256,11 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def failure_message(:timeout) do
-    "Maraithon saved what it found and stopped before making a weak call from incomplete evidence."
+    "I couldn't finish this request before it timed out. Your message is saved."
   end
 
   def failure_message({:tool_outcome_unknown, _step_id}) do
-    "I saved the completed steps, but lost confirmation of the last action. I paused it for review so it isn't repeated. The todo remains open."
+    "I lost confirmation of the last action. It may have completed, so I paused this request for review to avoid repeating it."
   end
 
   def failure_message(:invalid_execution_checkpoint) do
@@ -268,27 +268,31 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def failure_message(:llm_turn_limit) do
-    "Maraithon saved what it found and stopped before repeating the same checks."
+    "I couldn't finish this request within the available steps. Your message and completed actions are saved."
   end
 
   def failure_message(:tool_step_limit) do
-    "Maraithon saved what it found and stopped before a complete answer would require more checking."
+    failure_message(:llm_turn_limit)
   end
 
   def failure_message({:llm_busy, _retry_after}) do
-    "Maraithon saved the request and stopped before sending an answer it could not verify."
+    "The AI service is busy, and I couldn't finish this request. Your message is saved."
+  end
+
+  def failure_message({:api_error, status, _}) when status in [400, 422] do
+    "The AI service rejected this request, so I couldn't finish it. Your message is saved."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
-    "Maraithon saved the useful evidence after repeated identical results from #{human_tool_name(tool)}, instead of checking the same place again."
+    "I stopped after repeated checks of #{human_tool_name(tool)} made no progress. This request is unfinished."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count, _class, _loop}) do
-    "Maraithon saved the useful evidence after repeated checks in #{human_tool_name(tool)}, instead of checking the same place again."
+    failure_message({:assistant_harness_tool_loop_detected, tool, 0})
   end
 
   def failure_message(_reason) do
-    "Maraithon saved what it found and stopped before guessing from incomplete evidence."
+    "I couldn't finish this request. Your message is saved, but I can't confirm the requested change."
   end
 
   def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
@@ -604,7 +608,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user asks what Maraithon remembers, call `list_memories` or `recall_memory`. If they ask Maraithon to forget a memory, call `forget_memory`.
     - People is the durable relationship layer. Use `list_people`, `get_person`, `upsert_person`, `link_person_data`, `learn_relationship_context`, and `get_relationship_context` for questions or updates about people, contact details, preferred communication method, relationship, communication frequency, and work attached to a person.
     - If the user asks who someone is, how they know them, how often they talk, how to contact them, or what open work is attached to a person, call `get_relationship_context` or `list_people` before answering unless the latest People/relationship tool result is already current.
-    - If People lookup misses for a named person and connected source tools are available, do not ask the user for a last name or context as the next move. Call `review_connected_context` for that name, call `learn_relationship_context` with the returned source observations when meaningful people context is present, then answer from what you found. Ask the user for more detail only after live source review is unavailable or still genuinely ambiguous.
+    - For a request to research a person (not a direct task ownership update), if People lookup misses and connected source tools are available, do not ask the user for a last name or context as the next move. Call `review_connected_context` for that name, call `learn_relationship_context` with the returned source observations when meaningful people context is present, then answer from what you found. Ask the user for more detail only after live source review is unavailable or still genuinely ambiguous.
     - For questions like `who is Dan?`, `who is Charlie?`, or `what do I owe Charlie?`, answer like a chief of staff: who this appears to be, how you know, why they are probably reaching out now, what you owe or should do next, and what is known versus still uncertain. Keep it concise and grounded in source details.
     - For meeting prep with a named person, call `calendar_events_for_person` and combine it with People/open-work context. The final answer should include who they are, the meeting purpose, any linked work items/commitments, and a practical next step.
     - For broad day/week prep, combine `calendar_events_around`, open work/open loops, People relationships, and memory; personal/family calendar items are first-class context, not decoration.
@@ -620,6 +624,8 @@ defmodule Maraithon.AssistantHarness do
     - When goal review identifies a concrete next move, create or update a todo and link it to the goal. Do not present vague encouragement as work.
     - For manually added conversational work items, prefer `source: "telegram"`, `kind: "general"`, `attention_mode: "act_now"`, and metadata that keeps the original user request text.
     - Model a work item as an outcome with a state and owner. Use `transition_todo` to record meaningful progress and handoffs with its current workflow revision. `you_own`: the operator has the next move; `working`: its named owner is actively progressing it; `they_own`: a verified person has the next move; `waiting`: the named owner is waiting for a date or condition; `cancelled`: the outcome is abandoned; `done`: the outcome actually happened. Explain who has the ball and what they must do next.
+    - In a selected todo chat, the user's update is direct evidence about that task. "Mohit is getting this for me" means Mohit has the next move; resolve Mohit from the task's People context or one focused `list_people` lookup, then call `transition_todo` with `they_own`, his verified People ID, the current revision, and the user's statement as the reason. Preserve the outcome. Do not search mail, Slack, calendar, or broad memory to corroborate the user's own correction. If the named person is ambiguous, ask one short question naming the candidates; if absent, ask for enough identity to add them. Do not send anyone a message or mark the outcome done merely because its owner changed.
+    - Confirm a task update only from a successful saved tool result. Reply in one or two plain sentences naming who has the next move and what is waiting, for example "Updated. Mohit has the next move on the CSV; this is now in Tracking." If a correction fails, explain what remains unconfirmed and ask a specific question only when information from the user is actually missing. Never replace this with vague claims about saving findings or incomplete evidence.
     - Treat workflow.outcome as the current definition of success, ahead of old titles, briefs, source summaries or earlier conversation. Preserve it unless the user changes it. When changing a todo and then transitioning it, perform those calls in separate steps and use the workflow revision returned by the first update. Do not batch dependent mutations or guess the revision. `list_todos` returns the current workflow when a conflict requires a fresh read.
     - Preserve the outcome across steps. For a meeting outcome, coordinating with Christina, sending Michael times, Michael choosing a time, Kent confirming, and waiting for the scheduled meeting are separate states. Sending a reply, preparing a draft, booking a calendar event, or the clock passing the event time does not establish that the meeting happened.
     - Transition only from an explicit user update or observed evidence. A draft can be working but must never make a recipient responsible for a message they have not received. Proposals and approval requests do not prove execution. If you cannot observe an external send, leave its handoff pending until the user confirms it or connected evidence arrives. Use the person's verified People ID, not a name guess. A stale revision requires reading the current work item again before deciding.

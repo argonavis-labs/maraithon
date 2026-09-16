@@ -65,6 +65,31 @@ defmodule Maraithon.TelegramAssistant.ContinuationTest do
     %{run: run, attrs: attrs, profile: %{tier: :chat, model: "test", llm_opts: []}}
   end
 
+  test "provider rejection records a failed attempt and says no task changes were made", ctx do
+    set_client(fn _ -> {:error, {:api_error, 400, :redacted}} end)
+    assert :ok = Runner.run_inbound(ctx.attrs)
+
+    run = reload(ctx.run)
+    assert run.status == "degraded"
+    assert run.result_summary["llm_turns"] == 1
+    assert run.result_summary["tool_steps"] == 0
+    step = Repo.one!(from s in Step, where: s.run_id == ^run.id and s.step_type == "llm_request")
+    assert step.status == "failed"
+    assert step.finished_at
+    assert step.error == "api_error:400"
+
+    turn =
+      Repo.one!(
+        from t in Turn, where: t.conversation_id == ^run.conversation_id and t.role == "assistant"
+      )
+
+    turn = Turn.hydrate(turn)
+    assert turn.text =~ "rejected"
+    assert turn.text =~ "No task changes were made"
+    refute turn.text =~ "incomplete evidence"
+    refute_received {:continuation_tool, _, _, _}
+  end
+
   test "restart reuses a committed result, finishes a partial native batch, and delivers once",
        ctx do
     test_pid = self()

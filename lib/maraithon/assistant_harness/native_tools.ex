@@ -31,7 +31,9 @@ defmodule Maraithon.AssistantHarness.NativeTools do
 
     params
     |> Map.put("tools", tools ++ [finish_tool()])
-    |> Map.put("tool_choice", "required")
+    # Muse accepts only automatic tool selection. A direct final reply is also
+    # valid under that protocol; execution still requires explicit tool calls.
+    |> Map.put("tool_choice", "auto")
     |> Map.put("parallel_tool_calls", true)
     |> Map.update!("messages", &(&1 ++ exchanges))
   end
@@ -58,6 +60,22 @@ defmodule Maraithon.AssistantHarness.NativeTools do
     else
       {:error, {:assistant_harness_unknown_tool, _}} = error -> error
       _ -> {:error, :assistant_harness_invalid_tool_calls}
+    end
+  end
+
+  def decode(%{message: %{"content" => content} = message, finish_reason: "stop"}, _params)
+      when is_binary(content) do
+    if String.trim(content) != "" and byte_size(content) <= @message_bytes and
+         Map.get(message, "tool_calls", []) in [nil, []] do
+      {:ok,
+       %{
+         "status" => "final",
+         "assistant_message" => content,
+         "message_class" => "assistant_reply",
+         "tool_calls" => []
+       }}
+    else
+      {:error, :assistant_harness_invalid_tool_calls}
     end
   end
 
