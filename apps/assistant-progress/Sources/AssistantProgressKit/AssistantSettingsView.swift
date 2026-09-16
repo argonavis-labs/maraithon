@@ -76,6 +76,18 @@ public struct AssistantSettingsView: View {
 
     @ViewBuilder private func preferencesForm(_ settings: AssistantSettings.Settings) -> some View {
         Section("Scheduling and follow-ups") {
+            if let accounts = settings.calendarAccounts {
+                Picker("Book meetings on", selection: bookingAccount) {
+                    Text("Task's Google account").tag(0)
+                    ForEach(accounts) { Text($0.label).tag($0.id) }
+                }
+                Text("Also check for conflicts").font(.headline)
+                ForEach(accounts) { account in
+                    Toggle(account.label, isOn: preferenceSelection("calendar_account_ids", account.id))
+                }
+                Text("Checks each account's primary calendar, including the booking account.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if let zones = settings.timezones {
                 Picker("Timezone", selection: preferenceText("timezone")) {
                     ForEach(zones, id: \.value) { Text($0.label).tag($0.value) }
@@ -84,7 +96,7 @@ public struct AssistantSettingsView: View {
                 LabeledContent("Timezone", value: preferences["timezone"]?.string ?? "")
             }
             ForEach(Array(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].enumerated()), id: \.offset) { day, label in
-                Toggle(label, isOn: workingDay(day + 1))
+                Toggle(label, isOn: preferenceSelection("work_days", day + 1))
             }
             TextField("Start of day (HH:mm)", text: preferenceText("work_start"))
             TextField("End of day (HH:mm)", text: preferenceText("work_end"))
@@ -114,11 +126,16 @@ public struct AssistantSettingsView: View {
     private func preferenceNumber(_ key: String) -> Binding<Int> {
         Binding(get: { preferences[key]?.integer ?? 0 }, set: { preferences[key] = .integer($0) })
     }
-    private func workingDay(_ day: Int) -> Binding<Bool> {
-        Binding(get: { preferences["work_days"]?.integers.contains(day) ?? false }, set: { enabled in
-            var days = Set(preferences["work_days"]?.integers ?? [])
-            if enabled { days.insert(day) } else { days.remove(day) }
-            preferences["work_days"] = .integers(days.sorted())
+    private var bookingAccount: Binding<Int> {
+        Binding(get: { preferences["booking_calendar_account_id"]?.integer ?? 0 }, set: {
+            preferences["booking_calendar_account_id"] = $0 == 0 ? .null : .integer($0)
+        })
+    }
+    private func preferenceSelection(_ key: String, _ value: Int) -> Binding<Bool> {
+        Binding(get: { preferences[key]?.integers.contains(value) ?? false }, set: { enabled in
+            var selected = Set(preferences[key]?.integers ?? [])
+            if enabled { selected.insert(value) } else { selected.remove(value) }
+            preferences[key] = .integers(selected.sorted())
         })
     }
 
@@ -133,6 +150,7 @@ public struct AssistantSettingsView: View {
     @MainActor private func savePreferences() async {
         let keys = ["timezone", "work_days", "work_start", "work_end", "video_link", "proposals_enabled"]
             + (settings?.numericPreferences ?? []).map(\.key)
+            + (settings?.calendarAccounts == nil ? [] : ["booking_calendar_account_id", "calendar_account_ids"])
         await perform(path: "delegation-settings/preferences", fields: preferences.filter { keys.contains($0.key) })
     }
     @MainActor private func perform(path: String, fields: [String: AssistantSettings.Value]? = nil) async {

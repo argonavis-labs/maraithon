@@ -7,6 +7,7 @@ public enum AssistantSettings {
     public struct Settings: Decodable, Sendable {
         public let enabled: Bool
         let accounts: [Account]?
+        let calendarAccounts: [Account]?
         let selectedAccount: Int?
         let aliases: [Address]?
         let identity: [String: Value]?
@@ -17,6 +18,7 @@ public enum AssistantSettings {
         enum CodingKeys: String, CodingKey {
             case enabled, accounts, aliases, identity, preferences, timezones, error
             case selectedAccount = "selected_account", numericPreferences = "numeric_preferences"
+            case calendarAccounts = "calendar_accounts"
         }
     }
     struct Account: Decodable, Identifiable, Sendable { let id: Int; let label: String }
