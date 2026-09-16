@@ -27,6 +27,19 @@
       "phase": "waiting_for_provider",
       "scheduled_at": "2026-09-16T19:23:51.433062Z",
       "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
+    },
+    {
+      "workflow": 35140500627,
+      "reported_at": "2026-09-16T19:28:52Z",
+      "status": "pending",
+      "error": null,
+      "phase": "waiting_for_proposal",
+      "proposal_candidate_ready": true,
+      "todo_id": "ae3d2027-04b2-4768-8826-d5ba1e3a1ce0",
+      "scheduled_at": "2026-09-16T19:29:08.609887Z",
+      "initial_action_id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+      "initial_action_status": "executed",
+      "recorded_action_count": 1
     }
   ],
   "verdict": "pending_proposal",
