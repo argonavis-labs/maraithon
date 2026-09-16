@@ -24,6 +24,18 @@ Commit `8e72ece8`, including the shared model report from `c91e10b1`, deployed t
 
 Read-only status workflow `35109485511` confirmed that the same job exchanged three counterparty replies and reached `waiting_across_releases`. Its saved baseline has four assistant messages, eight model calls, US$0.003337 in recorded cost and no unresolved reservation. The quiet interval began at `2026-09-16T14:36:36Z`; the final reply is due no earlier than `20:36:36Z` (4:36 PM Toronto). The sending identity passed verification. The six-hour interval and later memory turn are still pending.
 
+The original canary later passed. Read-only status `35148073704` reported its
+completion at `20:39:37Z`, after a quiet interval from `14:36:36Z` to `20:37:59Z`.
+The grant, scope, owner, ledger, source revision and spend remained unchanged
+during that interval, across revisions `00419-l2c` and `00444-btg`. The final
+turn used an older fact, obtained all four answers, passed independent review,
+and completed the todo. Every settled model receipt used Muse Spark Contributor.
+Four ordinary turns used two calls each; the final research turn used three.
+Total recorded cost was US$0.005449 with no unresolved reservation. All eight
+canary checks passed. This establishes six-hour continuity across releases,
+not months-long operation or the remaining recovery matrix. The report is in
+the existing [canary evidence](evidence/delegated-conversations/2026-09-16-durable-canary.json).
+
 The `durable_memory` controlled Gmail scenario collects four facts, one reply at a time. Before the final reply, it saves a baseline and schedules the existing eval job for at least six hours later, inside the user's working hours. It does not poll during that interval. The final reply also waits for a different serving revision. Each inspection reports elapsed time and current counters without reading provider messages or calling a model.
 
 The baseline covers the grant, scope, task owner, saved ledger, source revision, model calls, unresolved reservations, recorded cost and sent-message count. The unchanged interval is committed before the final reply can send. Active launches deduplicate per actor, and prepared replies keep their deterministic action IDs. The scenario has a three-day deadline and uses the existing controlled-recipient gate, signatures, request admission, send limits and independent review.
@@ -374,7 +386,7 @@ The server build passed, and 60 focused ingress and source checks pass. The fixt
 
 Commit `c18cd3d1` deployed successfully through workflow `35033415934`. Revision `maraithon-00376-m9w` is ready and serving. Production job `maraithon-todo-validation-c5prq` then verified 32 authenticated legacy references across Kent's and October's mailboxes. Both accounts are well below the 2,048-row compatibility bound; the sampled query execution took 1.1 and 1.9 ms. The transaction was read-only, with no provider calls, model calls, messages, or conversation writes. This verifies stored upgrade evidence and lookup cost, not a live automatic thread split. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. [Thread continuity evidence](evidence/delegated-conversations/2026-09-15-gmail-thread-continuity.json).
 
-Slack pagination was unfinished at this checkpoint; the later resumable-history section records its implementation. The real longevity canary remains unfinished. Automatic Gmail rollover still needs live provider evidence. The fact-ledger work below adds recall for facts learned by reviewed turns.
+Slack pagination was unfinished at this checkpoint; the later resumable-history section records its implementation. The later six-hour Gmail canary passed as recorded above. Longer longevity coverage and automatic Gmail rollover still need live provider evidence. The fact-ledger work below adds recall for facts learned by reviewed turns.
 
 ## Durable facts and cited recall
 
@@ -891,7 +903,13 @@ wakeup could enqueue discovery for October, despite the discovery acquisition
 guard. Both scheduling paths now exclude each user's designated assistant.
 Completion acquisition also checks the designation before consuming live or
 saved source bundles, covering already queued work. No address is hard-coded.
-`make build` passed; live verification of this queueing fix is pending.
+`make build` passed before deployment.
+
+The queueing fix deployed through `35147106544` to revision
+`maraithon-00444-btg`, serving all traffic. At `20:39Z`, live Activity showed new
+personal Gmail discovery and completion jobs; the most recent October entries
+were from `20:31Z` and `20:32Z`, before deployment. This is a short observation
+window, not a claim about historical learning cleanup.
 
 Status `35146657621` identified a Gmail `rate_limited` acquisition and another
 batch where 19 of 20 thread reads failed after all 21 message reads succeeded.
@@ -901,6 +919,17 @@ now runs sequentially within each mailbox, matching message hydration. The
 outer stream still reads different accounts concurrently, and the existing
 timeouts and complete-acquisition requirement remain in force. `make build`
 passed; a successful production acquisition still needs verification.
+
+Thread-read serialization deployed through `35147678598` to revision
+`maraithon-00445-w88`, serving all traffic. No automated tests ran under the
+manual-first policy.
+
+Live Activity at `20:43Z` showed successful Gmail acquisition jobs
+`3a5e4eff-4cdf-456e-8fc2-332581eadee6` for personal Gmail and
+`99f75462-ae79-489a-9dc6-cd9810dca12c` for Agora, followed by their model fan-outs.
+The acquisitions took 43 and 26 seconds. This verifies fresh provider
+acquisition for those accounts, not full runtime health or completed downstream
+todo decisions.
 
 The same status found an idle Chief of Staff checkpoint at sequence 26018, but
 the separate diagnostic process could not decode an unknown snapshot symbol.
@@ -970,10 +999,10 @@ No automated tests ran under the current policy.
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage. The recovered controlled task passed the production candidate gate but reached its original deadline without a proposal. Diagnosis of incomplete Gmail acquisition and failed scheduled Chief of Staff work is in progress.
-4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. Send recovery, older coordinator checkpoints, and interrupted model decisions now pass local whole-BEAM kills. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
+4. Finish the rest of whole-app recovery and race checks, schema evolution, and longer longevity coverage. The original six-hour Gmail canary passed across releases with stable quiet state, older-fact recall and independent review. Send recovery, older coordinator checkpoints, and interrupted model decisions have local whole-BEAM evidence. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Verify the revised call budget across the remaining paths and reduce redundant calls and daily workload volume. The information eval's two calls per turn meet the revised ordinary-turn target; live research turns have three settled calls with independent review; repair still needs verification against that ceiling. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 6. Manually verify the account-matching consumer with explicit user-selected calendars. Deployment, complete availability ingestion and live inventory presentation are verified. The replacement window includes unchanged events and reconciles local deletions; explicit bindings and a five-minute limit control use in slot proposals. Final booking always checks Google. Live coverage must establish the selected window and fallback behavior; a local capture timestamp does not prove remote CalDAV freshness.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. A later live model turn using that stored fact remains unverified. Compact People context still needs live verification. The original task email can now supply evidence for reviewed facts; bounded date-window selection of synchronized historical messages now has live Gmail read evidence; a model using that path and Slack recall remain unverified. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. The six-hour canary subsequently verified a later reviewed model turn using an older fact; its report also confirms one People context entry, without proving broader relationship inference. The original task email can now supply evidence for reviewed facts; bounded date-window selection of synchronized historical messages now has live Gmail read evidence; a model using that path and Slack recall remain unverified. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.

@@ -2,7 +2,7 @@
   "scenario": "durable_memory",
   "actor": "as_assistant",
   "job_id": "338b5a91-b56e-4536-b24c-9575848f3d8f",
-  "live_eval_passed": false,
+  "live_eval_passed": true,
   "observations": [
     {
       "workflow_id": 35104584209,
@@ -197,11 +197,300 @@
         },
         "job_id": "338b5a91-b56e-4536-b24c-9575848f3d8f"
       }
+    },
+    {
+      "workflow_id": 35148073704,
+      "execution_id": "maraithon-todo-validation-zfq5f",
+      "reported_at": "2026-09-16T20:45:08Z",
+      "error": null,
+      "status": "completed",
+      "result": {
+        "accepted_slot": null,
+        "agent_messages": 4,
+        "call_summary": {
+          "ordinary": {
+            "calls_per_turn": 2.0,
+            "cost_micro_usd": 3337,
+            "model_calls": 8,
+            "turns": 4,
+            "unresolved_micro_usd": 0
+          },
+          "research": {
+            "calls_per_turn": 3.0,
+            "cost_micro_usd": 2112,
+            "model_calls": 3,
+            "turns": 1,
+            "unresolved_micro_usd": 0
+          }
+        },
+        "canary_checks": {
+          "completion_independently_reviewed": true,
+          "configured_model_used": true,
+          "crossed_release": true,
+          "done_with_all_answers": true,
+          "older_fact_used": true,
+          "quiet_state_preserved": true,
+          "waited_six_hours": true,
+          "within_limits": true
+        },
+        "canary_wait": {
+          "after": {
+            "agent_messages": 4,
+            "cost_micro_usd": 3337,
+            "elapsed_seconds": 21942,
+            "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+            "ledger_hash": "85b075eed17d1c820ceb00c7151de3d2b78e9a4ad7633d32edf880ed8b559fd9",
+            "model_calls": 8,
+            "observed_at": "2026-09-16T20:37:59.960922Z",
+            "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+            "reserved_micro_usd": 0,
+            "runtime_revision": "maraithon-00444-btg",
+            "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+            "source_revision": 3,
+            "state": "waiting_reply"
+          },
+          "before": {
+            "agent_messages": 4,
+            "cost_micro_usd": 3337,
+            "elapsed_seconds": 259,
+            "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+            "ledger_hash": "85b075eed17d1c820ceb00c7151de3d2b78e9a4ad7633d32edf880ed8b559fd9",
+            "model_calls": 8,
+            "observed_at": "2026-09-16T14:36:36.003277Z",
+            "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+            "reserved_micro_usd": 0,
+            "runtime_revision": "maraithon-00419-l2c",
+            "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+            "source_revision": 3,
+            "state": "waiting_reply"
+          },
+          "reply_not_before": "2026-09-16T20:36:36.003360Z"
+        },
+        "completion_cites_reply": true,
+        "configured_model_used": true,
+        "cost_micro_usd": 5449,
+        "delegation_id": "713c2fa0-0724-4ae9-8ac3-c8ec2ba1525c",
+        "final_observation": {
+          "agent_messages": 4,
+          "cost_micro_usd": 5449,
+          "elapsed_seconds": 22040,
+          "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+          "ledger_hash": "44744229f4cb703a8284c9b7f84755be84f4df6f073684a8cca5b2311a78aa40",
+          "model_calls": 11,
+          "observed_at": "2026-09-16T20:39:37.884017Z",
+          "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+          "reserved_micro_usd": 0,
+          "runtime_revision": "maraithon-00444-btg",
+          "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+          "source_revision": 4,
+          "state": "completed"
+        },
+        "model_calls": 11,
+        "offered_slots_count": 0,
+        "people_context_count": 1,
+        "phase": "passed",
+        "received_offer_verified": false,
+        "recovered_at": "2026-09-16T14:31:44.235445Z",
+        "recovered_initial_rate_limit": true,
+        "reply_action_id": "5a423ba9-eba9-94e3-a17a-5b47c6043a78",
+        "reply_count": 4,
+        "reply_message_id": "1a0abf150880e5eb",
+        "reply_message_ids": {
+          "0": "1a0aaa2fb589ba51",
+          "1": "1a0aaa3f8234035d",
+          "2": "1a0aaa4f57fbb715",
+          "3": "1a0abf150880e5eb"
+        },
+        "reviewed_scheduling_research": false,
+        "sending_identity_verified": true,
+        "todo_id": "993f0834-d229-45fb-a19d-7d44dbf2bb9c",
+        "todo_state": "done",
+        "turn_metrics": [
+          {
+            "cost_micro_usd": 659,
+            "kind": "ordinary",
+            "model_calls": 2,
+            "requested_model": "meta/muse-spark-1.3-contributor",
+            "seq": 1,
+            "stages": {
+              "compose": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 256,
+                "input_tokens": 2143,
+                "output_tokens": 206,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              },
+              "policy": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 403,
+                "input_tokens": 1831,
+                "output_tokens": 1099,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              }
+            },
+            "status": "settled",
+            "turn_id": "1d703b3f-0103-46ef-92f7-42e8485586dc",
+            "unresolved_micro_usd": 0
+          },
+          {
+            "cost_micro_usd": 698,
+            "kind": "ordinary",
+            "model_calls": 2,
+            "requested_model": "meta/muse-spark-1.3-contributor",
+            "seq": 2,
+            "stages": {
+              "compose": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 303,
+                "input_tokens": 2445,
+                "output_tokens": 291,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              },
+              "policy": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 395,
+                "input_tokens": 2170,
+                "output_tokens": 890,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              }
+            },
+            "status": "settled",
+            "turn_id": "e9eb3da6-4b21-4d1d-a47e-ceb12a684b81",
+            "unresolved_micro_usd": 0
+          },
+          {
+            "cost_micro_usd": 895,
+            "kind": "ordinary",
+            "model_calls": 2,
+            "requested_model": "meta/muse-spark-1.3-contributor",
+            "seq": 3,
+            "stages": {
+              "compose": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 413,
+                "input_tokens": 3306,
+                "output_tokens": 410,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              },
+              "policy": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 482,
+                "input_tokens": 3044,
+                "output_tokens": 886,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              }
+            },
+            "status": "settled",
+            "turn_id": "39a22d35-bdb4-4090-9e9d-2a0396daa3a0",
+            "unresolved_micro_usd": 0
+          },
+          {
+            "cost_micro_usd": 1085,
+            "kind": "ordinary",
+            "model_calls": 2,
+            "requested_model": "meta/muse-spark-1.3-contributor",
+            "seq": 4,
+            "stages": {
+              "compose": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 513,
+                "input_tokens": 4337,
+                "output_tokens": 396,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              },
+              "policy": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 572,
+                "input_tokens": 4069,
+                "output_tokens": 823,
+                "prompt_version": 2,
+                "state": "settled",
+                "tier": "chat"
+              }
+            },
+            "status": "settled",
+            "turn_id": "70eb33da-70d5-4dc0-b503-d6bd7394d6c3",
+            "unresolved_micro_usd": 0
+          },
+          {
+            "cost_micro_usd": 2112,
+            "kind": "research",
+            "model_calls": 3,
+            "requested_model": "meta/muse-spark-1.3-contributor",
+            "seq": 5,
+            "stages": {
+              "compose": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 678,
+                "input_tokens": 5270,
+                "output_tokens": 755,
+                "prompt_version": 5,
+                "state": "settled",
+                "tier": "chat"
+              },
+              "policy": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 780,
+                "input_tokens": 5271,
+                "output_tokens": 1261,
+                "prompt_version": 5,
+                "state": "settled",
+                "tier": "chat"
+              },
+              "researched": {
+                "actual_model": "meta/muse-spark-1.3-contributor",
+                "cost_micro_usd": 654,
+                "input_tokens": 5691,
+                "output_tokens": 424,
+                "prompt_version": 5,
+                "state": "settled",
+                "tier": "chat"
+              }
+            },
+            "status": "settled",
+            "turn_id": "7a0d549d-e688-4b84-94eb-fadf21377c64",
+            "unresolved_micro_usd": 0
+          }
+        ],
+        "turns": 5
+      },
+      "scheduled_at": "2026-09-16T20:39:35.391952Z",
+      "observation": {
+        "agent_messages": 4,
+        "cost_micro_usd": 5449,
+        "elapsed_seconds": 22361,
+        "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+        "ledger_hash": "44744229f4cb703a8284c9b7f84755be84f4df6f073684a8cca5b2311a78aa40",
+        "model_calls": 11,
+        "observed_at": "2026-09-16T20:44:58.808978Z",
+        "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+        "reserved_micro_usd": 0,
+        "runtime_revision": null,
+        "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+        "source_revision": 4,
+        "state": "completed"
+      },
+      "job_id": "338b5a91-b56e-4536-b24c-9575848f3d8f"
     }
   ],
   "limits": [
-    "The six-hour quiet interval and later memory turn are still pending.",
-    "A failed eval before a delegation exists does not prove that its initial email was unsent.",
-    "Recovery must preserve this job and its deterministic prepared-action IDs."
+    "This verifies a six-hour quiet interval across serving revisions, not months-long operation or every failure case.",
+    "The same original job and deterministic action identities were preserved after its initial throttle recovery.",
+    "Ordinary turns used two model calls; the final research turn used three, including independent review.",
+    "The gh run view formatted log omitted the long report line; the exact report was read from the workflow job log API."
   ]
 }
