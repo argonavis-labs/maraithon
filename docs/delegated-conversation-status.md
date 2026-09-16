@@ -2,6 +2,22 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Saved meeting links
+
+Delegated scheduling now reads the user's saved video and booking links. The video link is frozen when an offer is sent and included in the eventual invitation description. An accepted older offer keeps its original link, including no link for offers made before this change. The existing calendar action and reconciliation cover that description.
+
+The composer may include an active, user-owned booking link alongside computed slots. Automatic selection matches the meeting length and the task's personal or work context through the existing selector. A preferred link overrides automatic selection but still must be active and match the meeting length. An unavailable or mismatched preferred link is omitted, without substituting another one. A booking link cannot replace the slot offer.
+
+Assistant settings expose the preferred link on web and through the shared native iPhone/Mac form, with a link to the existing booking-link editor. Unavailable saved choices stay visible. Saving the link list now retains each existing URL's record ID, so editing a label or another setting does not break a preferred-link selection.
+
+Server commit `7f04547c` passed `make build`. Shared native commit `91a70c84` passed the Mac and iPhone simulator builds. The mobile project was regenerated; the existing Mac project remained current, and its installed app signature passed verification. Automated tests were not run under the current manual-first policy. The new invitation path has not had a live calendar eval.
+
+The live Mac form rendered the new picker and saved the unchanged preferences successfully. Kent had no active booking links, so selection persistence could not be exercised with an existing link. Opening the editor exposed an old admin-only route. Commit `260bfc79` adds a signed-in owner route, shares the existing form and save logic, and keeps the admin page protected. The native link now opens that owner route. The server and both native builds passed again; the earlier mobile release was cancelled before shipping the broken editor link.
+
+Workflow `35068514603` deployed the owner editor successfully to revision `maraithon-00403-7h5`, serving all traffic. The signed-in web editor loaded and saved the unchanged empty link list. Native commit `e8d6b962` is installed in the signed Mac app; its Manage booking links action opened that owner page successfully. No meeting links, calendar events, or messages were created during these checks.
+
+Mobile workflow `35068839405` succeeded. TestFlight 1.0.1 (`20260916073030`) is available to Founders, including Kent. This build also includes the People loading and readable-error fixes. No physical iPhone interaction was performed.
+
 ## Requested meeting length and dates
 
 The delegated model can request calendar slots for a specific meeting length and date window through the existing bounded read step. This connects instructions such as "45 minutes, next two weeks" to the shared slot calculator. The server accepts durations from 5 to 240 minutes and windows up to 31 days. The request cannot choose calendars or override working hours, notice, buffers, or meeting caps. It can read cited older evidence in the same step.
@@ -51,6 +67,8 @@ The Phoenix compile and iPhone simulator build passed, including project generat
 Server workflow `35062580948` succeeded; revision `maraithon-00396-n6q` serves all traffic. Web and the existing native Mac client both loaded 60 ranked people out of 2,276 known people. Web also opened Charlie's detail. The native client uses the same People response decoder as iPhone. Mobile workflow `35062580967` succeeded; TestFlight 1.0.1 (`20260916061123`) is available to Founders, including Kent. No physical iPhone interaction was performed.
 
 The native detail check found a separate Mac URL bug: pre-encoded UUID hyphens were encoded again by the request builder, producing `%252D` and a missing-person response. Commit `10edf3f1` appends the opaque ID as a single URL component. The signed companion build passed and was installed in place. Charlie's meetings, relationship, and recent history then loaded successfully in the native app. This Mac-only follow-up required no server redeployment.
+
+The corrected Mac build was checked again after revision `maraithon-00403-7h5` deployed. People still loaded 60 ranked contacts from 2,276 known people. The iPhone request builder preserves percent-encoded path components and does not have the Mac detail URL bug. Physical iPhone verification remains unperformed.
 
 ## Calendar emphasis through the day
 
@@ -489,6 +507,6 @@ Commit `c5fa81d3` deployed through workflow `35055281619`. Revision `maraithon-0
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. Send recovery, older coordinator checkpoints, and interrupted model decisions now pass local whole-BEAM kills. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack history reuse across turns, durable long-thread preflight, slot preference ranking, configured video and booking links, and the full conversation ledger remain unfinished. Requested scheduling windows and durations now reach the shared calculator; live verification of the new request path remains. Cited recall has local coverage; live memory verification is pending. The original task email can now supply evidence for reviewed facts; bounded selection of other uncaptured historical messages remains unfinished. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack history reuse across turns, durable long-thread preflight, slot preference ranking, and the full conversation ledger remain unfinished. Requested scheduling windows and durations now reach the shared calculator, and saved meeting links reach offers and invitations; live verification of those new paths remains. Cited recall has local coverage; live memory verification is pending. The original task email can now supply evidence for reviewed facts; bounded selection of other uncaptured historical messages remains unfinished. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.
