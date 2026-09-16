@@ -23,7 +23,7 @@ defmodule Maraithon.Delegations.Decision do
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @opts [max_wall_clock_ms: 120_000, max_llm_turns: 3, max_tool_steps: 1]
-  @prompt_version 3
+  @prompt_version 4
   def prompt_version, do: @prompt_version
 
   def execute(%BackgroundJob{job_type: "delegation_decide"} = job) do
