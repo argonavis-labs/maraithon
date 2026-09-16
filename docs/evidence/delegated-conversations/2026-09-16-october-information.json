@@ -1,0 +1,31 @@
+{
+  "observed_date": "2026-09-16",
+  "source": {
+    "workflow_id": 35093470917,
+    "operation": "delegation-eval-status",
+    "workflow_conclusion": "success",
+    "launched_another_conversation": false
+  },
+  "job_id": "04a64f25-c24a-42ee-a819-a94cbe07e917",
+  "status": "completed",
+  "original_scheduled_start": "2026-09-16T12:00:00Z",
+  "last_scheduled_at": "2026-09-16T12:01:41.578764Z",
+  "result": {
+    "phase": "passed",
+    "delegation_id": "9db0675e-a904-470a-8642-d42d792c7431",
+    "todo_id": "01b37eb3-42f9-49c8-8760-5fc18e4457fb",
+    "model_calls": 4,
+    "turns": 2,
+    "cost_micro_usd": 1201,
+    "agent_messages": 1,
+    "todo_state": "done",
+    "completion_cites_reply": true,
+    "reply_count": 1
+  },
+  "error": null,
+  "limits": [
+    "The result verifies the controlled information conversation and its completion evidence.",
+    "The read-only fact-ledger and cited-source recall probe remains pending.",
+    "This does not verify acknowledgement suppression, research or repair call counts, or months of retention."
+  ]
+}
