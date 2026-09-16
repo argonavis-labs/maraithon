@@ -5,16 +5,19 @@ prefix=DELEGATION_EVAL=
 case "${1:-}" in
   delegation-eval-preflight) task=delegation_eval_preflight; prefix=DELEGATION_EVAL_PREFLIGHT= ;;
   delegation-eval-diagnose)
-    [[ "${DELEGATION_EVAL_EXECUTION_ID:-}" =~ ^maraithon-todo-validation-[a-z0-9]{5}$ ]] || {
-      echo "A controlled eval Cloud Run execution ID is required" >&2; exit 1;
+    [[ "${DELEGATION_EVAL_EXECUTION_ID:-}" =~ ^maraithon-(todo-validation|migrate)-[a-z0-9]{5}$ ]] || {
+      echo "A controlled eval or migration Cloud Run execution ID is required" >&2; exit 1;
     }
+    diagnostic_job="${DELEGATION_EVAL_EXECUTION_ID%-*}"
     # Read only this execution. Emit exception classes and source locations,
     # never exception messages, inspected arguments or provider response bodies.
     gcloud logging read \
-      "resource.type=cloud_run_job AND resource.labels.job_name=maraithon-todo-validation AND labels.\"run.googleapis.com/execution_name\"=\"${DELEGATION_EVAL_EXECUTION_ID}\"" \
+      "resource.type=cloud_run_job AND resource.labels.job_name=\"${diagnostic_job}\" AND labels.\"run.googleapis.com/execution_name\"=\"${DELEGATION_EVAL_EXECUTION_ID}\"" \
       --project maraithon --limit 200 --order=asc --format=json | jq -c '
         [.[] | .timestamp as $at | (.textPayload // "") | split("\n")[] |
           [capture("\\*\\* \\((?<exception>[A-Za-z0-9_.]+)\\)")?,
+           capture("ERROR (?<sqlstate>[0-9A-Z]{5}) \\((?<database_error>[a-z_]+)\\)")?,
+           capture("(?<migration_guard>Calendar source state (?:requires a verified catalog baseline|durable catalog entry is missing|found unrelated durable catalog drift|privacy catalog entry is missing|did not restore all catalog proofs))")?,
            capture("^\\*\\* \\(RuntimeError\\) Delegation eval could not start: (?<reason>account_cost_hold|eval_work_window_too_short|eval_preflight_required|unsupported_eval_scenario)$")?,
            capture("^\\s*\\(maraithon [0-9A-Za-z.-]+\\) (?<file>lib/[a-z0-9_/]+\\.ex):(?<line>[0-9]+): (?<function>[A-Za-z0-9_.!?]+/[0-9]+)")?][] |
           . + {timestamp: $at}] | {execution: env.DELEGATION_EVAL_EXECUTION_ID, failures: .}'

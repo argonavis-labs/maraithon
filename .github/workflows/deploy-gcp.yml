@@ -34,7 +34,7 @@ on:
         required: false
         type: string
       delegation_eval_execution_id:
-        description: Cloud Run eval execution ID for redacted failure diagnostics
+        description: Cloud Run eval or migration execution ID for redacted failure diagnostics
         required: false
         type: string
       delegation_eval_scenario:
