@@ -2323,6 +2323,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
          {:ok, result} <-
            RelationshipIntelligence.persist_from_response(state.user_id, content,
              source: "inbox_calendar_advisor",
+             source_observations: state.pending_relationship_observations,
              now: context.timestamp
            ) do
       result

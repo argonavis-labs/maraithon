@@ -93,6 +93,7 @@ defmodule Maraithon.Crm.Observation do
   """
   def to_intelligence_input(%__MODULE__{} = obs) do
     %{
+      "observation_id" => obs.id,
       "source" => obs.source,
       "source_account" => obs.source_account,
       "source_item_id" => obs.source_item_id,

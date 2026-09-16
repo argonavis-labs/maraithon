@@ -14,6 +14,9 @@ defmodule Maraithon.RelationshipIntelligence do
   alias Maraithon.Memory
   alias Maraithon.Memory.Item
   alias Maraithon.UserIdentity
+  alias Maraithon.RelationshipIntelligence.Sources
+  alias Maraithon.PrivacyErasure.WriteFence
+  alias Maraithon.Repo
 
   require Logger
 
@@ -44,16 +47,18 @@ defmodule Maraithon.RelationshipIntelligence do
     if normalized_observations == [] do
       {:error, :no_relationship_observations}
     else
-      prompt = build_prompt(user_id, normalized_observations, opts)
+      with {:ok, _} <- Sources.capture(user_id, normalized_observations) do
+        prompt = build_prompt(user_id, normalized_observations, opts)
 
-      {:ok,
-       %{
-         "messages" => [%{"role" => "user", "content" => prompt}],
-         "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
-         "temperature" => Keyword.get(opts, :temperature, 0.1),
-         "reasoning_effort" => Keyword.get(opts, :reasoning_effort, @default_reasoning_effort)
-       }}
-      |> maybe_put_model(Keyword.get(opts, :model, LLM.chat_model()))
+        {:ok,
+         %{
+           "messages" => [%{"role" => "user", "content" => prompt}],
+           "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
+           "temperature" => Keyword.get(opts, :temperature, 0.1),
+           "reasoning_effort" => Keyword.get(opts, :reasoning_effort, @default_reasoning_effort)
+         }}
+        |> maybe_put_model(Keyword.get(opts, :model, LLM.chat_model()))
+      end
     end
   end
 
@@ -63,6 +68,8 @@ defmodule Maraithon.RelationshipIntelligence do
 
   def learn_from_observations(user_id, observations, opts)
       when is_binary(user_id) and is_list(observations) and is_list(opts) do
+    opts = Keyword.put(opts, :source_observations, normalize_observations(observations))
+
     with {:ok, params} <- llm_params(user_id, observations, opts),
          {:ok, response} <- complete(params, opts),
          {:ok, content} <- response_content(response),
@@ -79,7 +86,22 @@ defmodule Maraithon.RelationshipIntelligence do
   def persist_from_response(user_id, content, opts)
       when is_binary(user_id) and is_binary(content) and is_list(opts) do
     with {:ok, decoded} <- decode_response(content) do
-      persist_decisions(user_id, decoded, opts)
+      Repo.transaction(fn ->
+        WriteFence.lock_user_writable!(user_id)
+        observations = normalize_observations(Keyword.get(opts, :source_observations, []))
+
+        with {:ok, provenance} <- Sources.capture(user_id, observations),
+             {:ok, result} <-
+               persist_decisions(
+                 user_id,
+                 decoded,
+                 Keyword.put(opts, :source_provenance, provenance)
+               ) do
+          result
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
     end
   end
 
@@ -385,6 +407,7 @@ defmodule Maraithon.RelationshipIntelligence do
                 "source" => Keyword.get(opts, :source, "relationship_intelligence"),
                 "importance" => read_integer(attrs, "importance", nil),
                 "confidence" => confidence,
+                "source_provenance" => Keyword.get(opts, :source_provenance),
                 "learned_at" =>
                   Keyword.get(opts, :now, DateTime.utc_now())
                   |> normalize_json_value()
@@ -417,6 +440,7 @@ defmodule Maraithon.RelationshipIntelligence do
         |> Map.get("metadata", %{})
         |> normalize_map()
         |> Map.put("relationship_intelligence", true)
+        |> Map.put("source_provenance", Keyword.get(opts, :source_provenance))
         |> maybe_put_person_id(person)
 
       memory_attrs =
@@ -569,10 +593,7 @@ defmodule Maraithon.RelationshipIntelligence do
     |> Enum.filter(&is_map/1)
     |> Enum.map(&normalize_observation/1)
     |> Enum.reject(&(&1 == %{}))
-    |> Enum.uniq_by(fn observation ->
-      {Map.get(observation, "resource_type"), Map.get(observation, "resource_id"),
-       Map.get(observation, "summary")}
-    end)
+    |> Enum.uniq()
     |> Enum.take(@max_observations)
   end
 
