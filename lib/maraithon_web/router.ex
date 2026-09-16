@@ -110,6 +110,8 @@ defmodule MaraithonWeb.Router do
     get "/settings/accounts", SettingsController, :accounts
     post "/settings/accounts/:id", SettingsController, :update_account_category
     get "/settings/assistant", SettingsController, :assistant
+    get "/settings/booking-links", SettingsController, :booking_links
+    post "/settings/booking-links", SettingsController, :update_booking_links
     post "/settings/assistant-identity", SettingsController, :update_assistant_identity
     post "/settings/delegation-preferences", SettingsController, :update_delegation_preferences
 

@@ -51,33 +51,53 @@ defmodule MaraithonWeb.SettingsController do
     redirect(conn, to: ~p"/settings/assistant")
   end
 
-  def update_calendar_links(conn, %{"calendar_links" => %{"links" => links}}) do
-    case settings_user(conn) do
-      %{id: user_id} ->
-        case CalendarLinks.replace_user_links(user_id, links) do
-          {:ok, _links} ->
-            conn
-            |> put_flash(:info, "Calendar links saved.")
-            |> redirect(to: ~p"/settings#calendar-links")
+  def booking_links(conn, _params) do
+    render_calendar_links(
+      conn,
+      :booking_links,
+      CalendarLinks.settings_rows(conn.assigns.current_user.id)
+    )
+  end
 
-          {:error, reason} ->
-            conn
-            |> put_flash(:error, CalendarLinks.changeset_error_message(reason))
-            |> render_settings(calendar_link_rows: CalendarLinks.settings_rows_from_params(links))
-        end
+  def update_booking_links(conn, params),
+    do: save_calendar_links(conn, params, conn.assigns.current_user, :booking_links)
 
-      nil ->
+  def update_calendar_links(conn, params),
+    do: save_calendar_links(conn, params, settings_user(conn), :index)
+
+  defp save_calendar_links(conn, %{"calendar_links" => %{"links" => links}}, %{id: id}, view)
+       when is_map(links) or is_list(links) do
+    case CalendarLinks.replace_user_links(id, links) do
+      {:ok, _} ->
+        conn |> put_flash(:info, "Calendar links saved.") |> redirect(to: calendar_links_path(view))
+
+      {:error, reason} ->
         conn
-        |> put_flash(:error, "Sign in as a workspace user before saving calendar links.")
-        |> redirect(to: ~p"/settings#calendar-links")
+        |> put_flash(:error, CalendarLinks.changeset_error_message(reason))
+        |> render_calendar_links(view, CalendarLinks.settings_rows_from_params(links))
     end
   end
 
-  def update_calendar_links(conn, _params) do
+  defp save_calendar_links(conn, _, _, view) do
     conn
     |> put_flash(:error, "Calendar links could not be saved.")
-    |> redirect(to: ~p"/settings#calendar-links")
+    |> redirect(to: calendar_links_path(view))
   end
+
+  defp render_calendar_links(conn, :index, rows),
+    do: render_settings(conn, calendar_link_rows: rows)
+
+  defp render_calendar_links(conn, :booking_links, rows) do
+    render(conn, :booking_links,
+      page_title: "Booking links",
+      current_path: calendar_links_path(:booking_links),
+      current_user: conn.assigns.current_user,
+      calendar_link_rows: rows
+    )
+  end
+
+  defp calendar_links_path(:index), do: ~p"/settings#calendar-links"
+  defp calendar_links_path(:booking_links), do: ~p"/settings/booking-links"
 
   def update_assistant_model(conn, %{"assistant_model" => %{"model" => model}}) do
     case settings_user(conn) do

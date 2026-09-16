@@ -99,7 +99,7 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
             </.c_select>
           </.field>
         </div>
-        <.link href={~p"/settings#calendar-links"} class="text-sm text-zinc-600 underline">Manage booking links</.link>
+        <.link href={~p"/settings/booking-links"} class="text-sm text-zinc-600 underline">Manage booking links</.link>
         <.checkbox_field label="Suggest tasks to delegate" name="delegation_preferences[proposals_enabled]" checked={@preferences["proposals_enabled"]} />
         <div class="flex justify-end"><.button type="submit">Save preferences</.button></div>
       </.form>
