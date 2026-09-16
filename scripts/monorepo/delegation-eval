@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+prefix=DELEGATION_EVAL=
 case "${1:-}" in
+  delegation-eval-preflight) task=delegation_eval_preflight; prefix=DELEGATION_EVAL_PREFLIGHT= ;;
+  delegation-eval-diagnose)
+    [[ "${DELEGATION_EVAL_EXECUTION_ID:-}" =~ ^maraithon-todo-validation-[a-z0-9]{5}$ ]] || {
+      echo "A controlled eval Cloud Run execution ID is required" >&2; exit 1;
+    }
+    # Read only this execution. Emit exception classes and source locations,
+    # never exception messages, inspected arguments or provider response bodies.
+    gcloud logging read \
+      "resource.type=cloud_run_job AND resource.labels.job_name=maraithon-todo-validation AND labels.\"run.googleapis.com/execution_name\"=\"${DELEGATION_EVAL_EXECUTION_ID}\"" \
+      --project maraithon --limit 200 --order=asc --format=json | jq -c '
+        [.[] | .timestamp as $at | (.textPayload // "") | split("\n")[] |
+          [capture("\\*\\* \\((?<exception>[A-Za-z0-9_.]+)\\)")?,
+           capture("^\\*\\* \\(RuntimeError\\) Delegation eval could not start: (?<reason>account_cost_hold|eval_work_window_too_short|eval_preflight_required|unsupported_eval_scenario)$")?,
+           capture("^\\s*\\(maraithon [0-9A-Za-z.-]+\\) (?<file>lib/[a-z0-9_/]+\\.ex):(?<line>[0-9]+): (?<function>[A-Za-z0-9_.!?]+/[0-9]+)")?][] |
+          . + {timestamp: $at}] | {execution: env.DELEGATION_EVAL_EXECUTION_ID, failures: .}'
+    exit 0
+    ;;
   delegation-eval-start) task=delegation_eval_start ;;
   delegation-eval-status) task=delegation_eval_status ;;
   delegation-eval-memory)
@@ -10,7 +28,7 @@ case "${1:-}" in
       echo "A completed controlled eval job UUID is required" >&2; exit 1;
     }
     ;;
-  *) echo "Expected delegation-eval-start, delegation-eval-status or delegation-eval-memory" >&2; exit 1 ;;
+  *) echo "Expected a controlled delegation eval operation" >&2; exit 1 ;;
 esac
 
 source "$(dirname "$0")/delegation-eval-config"
@@ -23,16 +41,17 @@ eval_env+="|DELEGATION_EVAL_SCENARIO=${scenario}"
 eval_env+="|DELEGATION_EVAL_JOB_ID=${DELEGATION_EVAL_JOB_ID:-}"
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+execution_status=0
 gcloud run jobs execute maraithon-todo-validation --project maraithon --region us-central1 \
-  --args="^@^eval@Maraithon.Release.${task}" --update-env-vars "${eval_env}" --wait --quiet
+  --args="^@^eval@Maraithon.Release.${task}" --update-env-vars "${eval_env}" --wait --quiet || execution_status=$?
 
 for attempt in $(seq 1 20); do
   report="$(gcloud logging read \
-    "resource.type=cloud_run_job AND resource.labels.job_name=maraithon-todo-validation AND timestamp>=\"${started_at}\" AND textPayload:\"DELEGATION_EVAL=\"" \
+    "resource.type=cloud_run_job AND resource.labels.job_name=maraithon-todo-validation AND timestamp>=\"${started_at}\" AND textPayload:\"${prefix}\"" \
     --project maraithon --limit 1 --order=desc --format='value(textPayload)')"
-  if [[ "${report}" == DELEGATION_EVAL=* ]]; then
+  if [[ "${report}" == "${prefix}"* ]]; then
     echo "${report}"
-    exit 0
+    exit "${execution_status}"
   fi
   sleep 3
 done

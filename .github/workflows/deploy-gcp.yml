@@ -24,11 +24,16 @@ on:
           - delegation-eval-start
           - delegation-eval-status
           - delegation-eval-memory
+          - delegation-eval-diagnose
           - reset-rebuild-kent
           - replay-gmail
           - replay-slack
       delegation_eval_job_id:
         description: Completed information eval job UUID for read-only memory verification
+        required: false
+        type: string
+      delegation_eval_execution_id:
+        description: Cloud Run eval execution ID for redacted failure diagnostics
         required: false
         type: string
       delegation_eval_scenario:
@@ -129,16 +134,13 @@ jobs:
           MARAITHON_OPERATOR_USER: kent@runner.now
           MARAITHON_RESET_CONFIRMATION: RESET_AND_REBUILD_KENT
 
-      - name: Check Kent's delegation eval accounts
-        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'delegation-eval-preflight'
-        run: scripts/monorepo/delegation-eval-preflight
-
       - name: Run or inspect the controlled delegation eval
-        if: github.event_name == 'workflow_dispatch' && (inputs.operation == 'delegation-eval-start' || inputs.operation == 'delegation-eval-status' || inputs.operation == 'delegation-eval-memory')
+        if: github.event_name == 'workflow_dispatch' && startsWith(inputs.operation, 'delegation-eval-')
         run: scripts/monorepo/delegation-eval "${OPERATION}"
         env:
           OPERATION: ${{ inputs.operation }}
           DELEGATION_EVAL_JOB_ID: ${{ inputs.delegation_eval_job_id }}
+          DELEGATION_EVAL_EXECUTION_ID: ${{ inputs.delegation_eval_execution_id }}
           DELEGATION_EVAL_SCENARIO: ${{ inputs.delegation_eval_scenario }}
           DELEGATION_EVAL_ACTOR: ${{ inputs.delegation_eval_actor }}
 
