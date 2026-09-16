@@ -243,7 +243,8 @@ defmodule Maraithon.Todos.SourceActions do
         if is_binary(value) and PublicMetadata.public_text?(value), do: value
       end)
 
-    from_metadata || todo.counterparty_label || get_in(Brief.reply(todo) || %{}, ["to"])
+    (from_metadata || todo.counterparty_label || get_in(Brief.reply(todo) || %{}, ["to"]))
+    |> Maraithon.Slack.UserDirectory.replace_user_ids(Maraithon.Todos.SlackNames.directory(todo))
   end
 
   defp card_subject(metadata) do

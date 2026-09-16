@@ -73,6 +73,29 @@ defmodule Maraithon.Todos.SlackNamesTest do
     assert Repo.get!(Todo, todo.id).title == edited.title
   end
 
+  test "message action labels show names while the prepared recipient retains its Slack ID", c do
+    expect_name(c.bypass)
+    todo = create_todo(c.user)
+    {:ok, todo} = Todos.resolve_slack_names(todo)
+    reply = %{"channel" => "slack", "to" => @slack_id, "body" => "Thanks"}
+
+    brief = %{
+      "version" => Todos.Brief.version(),
+      "fingerprint" => Todos.Brief.fingerprint(todo),
+      "generated_at" => DateTime.to_iso8601(DateTime.utc_now()),
+      "reply" => reply
+    }
+
+    todo = %{
+      todo
+      | counterparty_label: nil,
+        metadata: todo.metadata |> Map.delete("person") |> Map.put("brief", brief)
+    }
+
+    assert Todos.SourceActions.for_todo(todo)["recipient"] == "Alex Smith"
+    assert Todos.Brief.reply(todo)["to"] == @slack_id
+  end
+
   test "names are isolated to the task workspace and failure leaves copy intact", c do
     todo = create_todo(c.user)
 
