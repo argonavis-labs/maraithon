@@ -910,7 +910,10 @@ tasks without a binding keep their existing lookup path.
 cross-mailbox reads; the fixture's original provider error was not retained, so
 it does not establish the sole cause of that warning. Commit `1e68ecdf`
 deployed through successful workflow `35143818000` to revision
-`maraithon-00440-ml5`, serving all traffic. A fresh live source read is pending.
+`maraithon-00440-ml5`, serving all traffic. The Web task's Refresh context action
+then completed with the actual email request, its sender and a useful next
+action. The source-verification warning disappeared. This verifies the bound
+read on that controlled task; it does not establish background discovery health.
 No automated tests ran under the current policy.
 
 ## Remaining work
