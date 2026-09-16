@@ -67,8 +67,17 @@ defmodule Maraithon.Delegations.GmailSource do
   # entire remaining header index must still match the original fingerprint.
   def unchanged_except_thanks?(context, index) do
     previous = context.run.prompt_snapshot["sources"]
-    latest = previous["messages"] |> Enum.map(&date/1) |> Enum.max(DateTime)
-    newer = Enum.filter(index.messages, &(DateTime.compare(date(&1), latest) == :gt))
+
+    latest =
+      List.wrap(previous["messages"])
+      |> Enum.map(&date/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(DateTime, fn -> nil end)
+
+    newer =
+      if latest,
+        do: Enum.filter(index.messages, &(DateTime.compare(date(&1), latest) == :gt)),
+        else: []
 
     if length(newer) in 1..64 do
       keys = Enum.map(newer, &"gmail:#{index.account}:#{&1["message_id"]}")
