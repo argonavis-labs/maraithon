@@ -53,7 +53,7 @@ defmodule Maraithon.Delegations.Scheduling do
           day_end = local_at(date, prefs["work_end"], prefs) |> earlier(last)
           midnight = Preferences.from_local(date, ~T[00:00:00], prefs)
           tomorrow = Preferences.from_local(Date.add(date, 1), ~T[00:00:00], prefs)
-          meetings = Enum.count(busy, &overlaps?(&1, midnight, tomorrow))
+          meetings = meeting_count(busy, midnight, tomorrow)
 
           if meetings >= prefs["max_meetings_per_day"] do
             []
@@ -146,13 +146,38 @@ defmodule Maraithon.Delegations.Scheduling do
         true ->
           case interval(event, prefs) do
             {first, last} ->
-              {:cont, {:ok, [%{start: first, end: last, event_id: event[:event_id]} | acc]}}
+              {:cont,
+               {:ok,
+                [
+                  %{
+                    start: first,
+                    end: last,
+                    event_id: event[:event_id],
+                    ical_uid: event[:ical_uid]
+                  }
+                  | acc
+                ]}}
 
             nil ->
               {:halt, {:error, :calendar_source_gap}}
           end
       end
     end)
+  end
+
+  # A shared invitation can appear on several checked calendars. Keep every busy
+  # interval for conflict checks, but count each proven occurrence only once.
+  defp meeting_count(busy, first, last) do
+    busy
+    |> Enum.filter(&overlaps?(&1, first, last))
+    |> Enum.with_index()
+    |> Enum.uniq_by(fn {event, index} ->
+      case event.ical_uid do
+        uid when is_binary(uid) and uid != "" -> {uid, event.start, event.end}
+        _ -> index
+      end
+    end)
+    |> length()
   end
 
   defp interval(%{start: %{date: first}, end: %{date: last}}, prefs) do
