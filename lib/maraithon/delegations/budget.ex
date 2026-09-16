@@ -127,6 +127,7 @@ defmodule Maraithon.Delegations.Budget do
             "state" => "entered",
             "entered_at" => DateTime.to_iso8601(now),
             "prompt_version" => Decision.prompt_version(),
+            "tier" => "chat",
             "development_spending" => development?
           })
 

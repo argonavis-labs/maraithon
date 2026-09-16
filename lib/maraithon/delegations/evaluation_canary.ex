@@ -165,20 +165,6 @@ defmodule Maraithon.Delegations.EvaluationCanary do
       "phase" =>
         if(Enum.all?(checks, fn {_, passed} -> passed end), do: "passed", else: "failed"),
       "canary_checks" => checks,
-      "turn_metrics" =>
-        Enum.map(turns, fn t ->
-          %{
-            "turn_id" => t.id,
-            "seq" => t.seq,
-            "status" => t.status,
-            "model_calls" => t.model_calls,
-            "cost_micro_usd" => t.cost_micro_usd,
-            "stages" =>
-              Map.new(t.data["model_entries"] || %{}, fn {stage, entry} ->
-                {stage, Map.take(entry, ~w(state prompt_version actual_model cost_micro_usd))}
-              end)
-          }
-        end),
       "people_context_count" => length(run.prompt_snapshot["people"] || []),
       "final_observation" => snapshot(d)
     })

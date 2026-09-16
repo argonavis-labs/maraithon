@@ -7,6 +7,61 @@ defmodule Maraithon.Delegations.Reports do
 
   @limit 8
 
+  @doc "Model receipts by turn and stage, with zero-call work separated from model turns."
+  def model_usage(turns) do
+    metrics =
+      Enum.map(turns, fn row ->
+        turn = Turn.hydrate(row)
+        entries = turn.data["model_entries"] || %{}
+
+        kind =
+          cond do
+            turn.model_calls == 0 -> "no_model"
+            Map.has_key?(entries, "researched") -> "research"
+            Map.has_key?(entries, "repair") -> "repair"
+            true -> "ordinary"
+          end
+
+        %{
+          "turn_id" => turn.id,
+          "seq" => turn.seq,
+          "status" => turn.status,
+          "kind" => kind,
+          "requested_model" => turn.model,
+          "model_calls" => turn.model_calls,
+          "cost_micro_usd" => turn.cost_micro_usd,
+          "unresolved_micro_usd" => turn.reserved_micro_usd,
+          "stages" =>
+            Map.new(entries, fn {stage, entry} ->
+              {stage,
+               Map.take(
+                 entry,
+                 ~w(state tier prompt_version actual_model input_tokens output_tokens cost_micro_usd)
+               )}
+            end)
+        }
+      end)
+      |> Enum.sort_by(& &1["seq"])
+
+    summary =
+      metrics
+      |> Enum.group_by(& &1["kind"])
+      |> Map.new(fn {kind, rows} ->
+        calls = Enum.sum(Enum.map(rows, & &1["model_calls"]))
+
+        {kind,
+         %{
+           "turns" => length(rows),
+           "model_calls" => calls,
+           "calls_per_turn" => if(kind != "no_model", do: calls / length(rows)),
+           "cost_micro_usd" => Enum.sum(Enum.map(rows, & &1["cost_micro_usd"])),
+           "unresolved_micro_usd" => Enum.sum(Enum.map(rows, & &1["unresolved_micro_usd"]))
+         }}
+      end)
+
+    %{"turn_metrics" => metrics, "call_summary" => summary}
+  end
+
   def brief(user_id, now, since) do
     cutoff = DateTime.add(now, -30, :day)
 

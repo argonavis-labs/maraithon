@@ -528,14 +528,15 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     turns = Repo.all(from t in Turn, where: t.delegation_id == ^d.id)
     evidence_ids = Enum.map(d.data["evidence"] || [], & &1["id"])
 
-    common = %{
-      "model_calls" => Enum.sum(Enum.map(turns, & &1.model_calls)),
-      "turns" => length(turns),
-      "cost_micro_usd" => d.lifetime_micro_usd,
-      "agent_messages" => d.lifetime_sends,
-      "todo_state" => Workflow.current(todo)["state"],
-      "completion_cites_reply" => state["reply_message_id"] in evidence_ids
-    }
+    common =
+      Map.merge(Maraithon.Delegations.Reports.model_usage(turns), %{
+        "model_calls" => Enum.sum(Enum.map(turns, & &1.model_calls)),
+        "turns" => length(turns),
+        "cost_micro_usd" => d.lifetime_micro_usd,
+        "agent_messages" => d.lifetime_sends,
+        "todo_state" => Workflow.current(todo)["state"],
+        "completion_cites_reply" => state["reply_message_id"] in evidence_ids
+      })
 
     cond do
       d.kind == "scheduling" ->

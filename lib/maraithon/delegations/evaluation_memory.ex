@@ -100,5 +100,6 @@ defmodule Maraithon.Delegations.EvaluationMemory do
       "conversation_writes" => 0,
       "prompt_cache_cleared_in_memory" => true
     }
+    |> Map.put("saved_model_usage", Maraithon.Delegations.Reports.model_usage([context.turn]))
   end
 end

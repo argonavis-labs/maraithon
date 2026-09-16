@@ -42,6 +42,12 @@ Composition and independent review receive the same instruction: this is private
 
 Commit `e7ed426f` deployed through successful workflow `35097197940`. Revision `maraithon-00415-mdn` serves all traffic. No migration or native release was needed.
 
+## Model calls by turn and stage
+
+Controlled evals now share the cost report in `Delegations.Reports`. It groups ordinary, research, repair and zero-call turns separately. Each turn reports its requested model, stage receipts, actual models, prompt versions, token counts, billed micro-USD and unresolved reservations. Zero-call work has no calls-per-turn average and cannot lower the model-turn averages. New model entries also record the chat tier; older receipts keep their original fields.
+
+The saved-memory probe includes the same report for the inspected completion turn. Reading it adds no provider request or model call beyond that probe's existing evidence fetches. The canary uses the shared projection, removing its duplicate reporting code. `make build` passed with warnings treated as errors. Automated tests were not run under the manual-first policy. Deployment and live receipt inspection are still pending.
+
 ## Thanks-only replies without model calls
 
 Gmail and Slack now share a whole-message classifier for short thanks-only replies. An acknowledgement stays in the event ledger and history, but does not advance the source revision, start a decision turn, complete the todo or reset its follow-up schedule. Sender, participant, takeover, stop and delivery-error checks run first. Agreement such as "yes", completion claims and requests such as "Thanks, book the first time" remain substantive.
