@@ -1,0 +1,36 @@
+{
+  "scenario": "requested_scheduling",
+  "actor": "as_assistant",
+  "job_id": "77fa8492-89b1-44e9-8e79-822a2dd7e1ce",
+  "live_eval_passed": false,
+  "observations": [
+    {
+      "workflow_id": 35113421896,
+      "phase": "queued",
+      "scheduled_at": "2026-09-16T15:13:26.992171Z"
+    },
+    {
+      "workflow_id": 35114034091,
+      "report": {
+        "error": null,
+        "status": "completed",
+        "result": {
+          "calendar_cleanup": "completed",
+          "cleanup_checks": 1,
+          "delegation_id": "f52d1994-289b-4eca-afd8-1516a92b02f7",
+          "phase": "failed",
+          "reason": "eval_completion_without_reply",
+          "todo_id": "5699e757-2d20-4bcb-b7e0-51540e848999"
+        },
+        "scheduled_at": "2026-09-16T15:18:15.478597Z",
+        "observation": null,
+        "job_id": "77fa8492-89b1-44e9-8e79-822a2dd7e1ce"
+      }
+    }
+  ],
+  "limits": [
+    "The first scheduling attempt failed with eval_completion_without_reply.",
+    "The failed conversation has not been restarted.",
+    "Saved decisions and actions still need inspection to establish the exact cause."
+  ]
+}

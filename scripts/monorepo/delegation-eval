@@ -27,7 +27,7 @@ case "${1:-}" in
   *) echo "Expected a controlled delegation eval operation" >&2; exit 1 ;;
 esac
 
-if [[ "${task}" == delegation_eval_memory || "${task}" == delegation_eval_resume ]]; then
+if [[ "${task}" == delegation_eval_memory || "${task}" == delegation_eval_resume || -n "${DELEGATION_EVAL_JOB_ID:-}" ]]; then
   [[ "${DELEGATION_EVAL_JOB_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
     echo "A controlled eval job UUID is required" >&2; exit 1;
   }

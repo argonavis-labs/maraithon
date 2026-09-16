@@ -30,7 +30,7 @@ on:
           - replay-gmail
           - replay-slack
       delegation_eval_job_id:
-        description: Controlled eval job UUID for memory verification or initial throttle recovery
+        description: Controlled eval job UUID for detailed status, memory verification or initial throttle recovery
         required: false
         type: string
       delegation_eval_execution_id:

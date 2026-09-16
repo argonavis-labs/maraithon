@@ -111,8 +111,14 @@ defmodule Maraithon.Delegations.StateMachine do
       kind when kind in ~w(send propose_times book) ->
         {%{d | state: "sending"}, [{:prepare_action, decision}]}
 
-      "complete" ->
+      "complete" when d.kind != "scheduling" ->
         {%{d | state: "completed", next_wake_at: nil}, [{:complete_todo, decision}, :notify_user]}
+
+      "complete" ->
+        hold(
+          d,
+          "The meeting has not been confirmed on your calendar. Please review the scheduling details."
+        )
 
       "needs_user" ->
         hold(d, decision["question"])

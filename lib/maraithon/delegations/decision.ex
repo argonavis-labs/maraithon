@@ -23,7 +23,7 @@ defmodule Maraithon.Delegations.Decision do
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @opts [max_wall_clock_ms: 120_000, max_llm_turns: 3, max_tool_steps: 1]
-  @prompt_version 2
+  @prompt_version 3
   def prompt_version, do: @prompt_version
 
   def execute(%BackgroundJob{job_type: "delegation_decide"} = job) do
@@ -440,6 +440,9 @@ defmodule Maraithon.Delegations.Decision do
 
           :invalid_scheduling_request ->
             "I couldn't resolve the requested meeting length and dates. Please clarify those details."
+
+          :booking_receipt_required ->
+            "The meeting has not been confirmed on your calendar. Please review the scheduling details."
 
           reason
           when reason in [

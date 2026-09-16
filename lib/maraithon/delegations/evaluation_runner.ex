@@ -128,13 +128,16 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end)
   end
 
-  def status do
-    Repo.all(
+  def status(id \\ nil) do
+    query =
       from j in BackgroundJob,
         where: j.job_type == @job_type and j.user_id == @user,
         order_by: [desc: j.inserted_at],
         limit: 5
-    )
+
+    query = if id in [nil, ""], do: query, else: where(query, [j], j.id == ^id)
+
+    Repo.all(query)
     |> Enum.map(fn row ->
       job = BackgroundJob.hydrate_payloads(row)
 
@@ -146,7 +149,55 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         error: job.last_error,
         observation: EvaluationCanary.observation(job)
       }
+      |> then(fn report ->
+        if id in [nil, ""], do: report, else: Map.put(report, :details, details(job))
+      end)
     end)
+  end
+
+  defp details(job) do
+    if d = Delegations.get(@user, (job.result || %{})["delegation_id"]) do
+      rows =
+        Repo.all(
+          from t in Turn,
+            where: t.user_id == @user and t.delegation_id == ^d.id,
+            order_by: [desc: t.seq],
+            limit: 11
+        )
+
+      turns = rows |> Enum.take(10) |> Enum.map(&Turn.hydrate/1)
+      chat = "delegation-eval:#{job.id}"
+
+      %{
+        state: d.state,
+        kind: d.kind,
+        source_revision: d.source_revision,
+        last_action_id: d.last_action_id,
+        older_turns_omitted: length(rows) > 10,
+        model_usage: Maraithon.Delegations.Reports.model_usage(turns),
+        decisions:
+          Enum.map(turns, fn turn ->
+            decision = turn.data["decision"] || %{}
+            kind = decision["kind"]
+
+            %{
+              turn_id: turn.id,
+              kind: if(kind in ~w(send propose_times book complete wait needs_user), do: kind),
+              reviewed: Policy.approved?(decision, turn.data["policy_review"]),
+              evidence_count: length(decision["evidence"] || [])
+            }
+          end),
+        actions:
+          Repo.all(
+            from a in PreparedAction,
+              where: a.user_id == @user and (a.delegation_id == ^d.id or a.chat_id == ^chat),
+              order_by: [desc: a.inserted_at],
+              limit: 12,
+              select: map(a, [:id, :action_type, :status, :delegation_id, :inserted_at])
+          ),
+        trace: Maraithon.Delegations.Audit.page(@user, d.id)
+      }
+    end
   end
 
   defp step(job, %{"phase" => "calendar_verified", "delegation_id" => id} = state) do

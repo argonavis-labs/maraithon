@@ -79,6 +79,65 @@
         "state": "waiting_reply"
       },
       "scheduled_at": "2026-09-16T20:36:36.003360Z"
+    },
+    {
+      "workflow_id": 35114034091,
+      "report": {
+        "error": null,
+        "status": "pending",
+        "result": {
+          "canary_wait": {
+            "before": {
+              "agent_messages": 4,
+              "cost_micro_usd": 3337,
+              "elapsed_seconds": 259,
+              "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+              "ledger_hash": "85b075eed17d1c820ceb00c7151de3d2b78e9a4ad7633d32edf880ed8b559fd9",
+              "model_calls": 8,
+              "observed_at": "2026-09-16T14:36:36.003277Z",
+              "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+              "reserved_micro_usd": 0,
+              "runtime_revision": "maraithon-00419-l2c",
+              "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+              "source_revision": 3,
+              "state": "waiting_reply"
+            },
+            "reply_not_before": "2026-09-16T20:36:36.003360Z"
+          },
+          "delegation_id": "713c2fa0-0724-4ae9-8ac3-c8ec2ba1525c",
+          "phase": "waiting_across_releases",
+          "received_offer_verified": false,
+          "recovered_at": "2026-09-16T14:31:44.235445Z",
+          "recovered_initial_rate_limit": true,
+          "reply_action_id": "5a423ba9-eba9-94e3-a17a-5b47c6043a78",
+          "reply_count": 3,
+          "reply_message_id": "1a0aaa4f57fbb715",
+          "reply_message_ids": {
+            "0": "1a0aaa2fb589ba51",
+            "1": "1a0aaa3f8234035d",
+            "2": "1a0aaa4f57fbb715"
+          },
+          "sending_identity_verified": true,
+          "todo_id": "993f0834-d229-45fb-a19d-7d44dbf2bb9c"
+        },
+        "scheduled_at": "2026-09-16T20:36:36.003360Z",
+        "observation": {
+          "agent_messages": 4,
+          "cost_micro_usd": 3337,
+          "elapsed_seconds": 2829,
+          "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+          "ledger_hash": "85b075eed17d1c820ceb00c7151de3d2b78e9a4ad7633d32edf880ed8b559fd9",
+          "model_calls": 8,
+          "observed_at": "2026-09-16T15:19:26.687966Z",
+          "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+          "reserved_micro_usd": 0,
+          "runtime_revision": null,
+          "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+          "source_revision": 3,
+          "state": "waiting_reply"
+        },
+        "job_id": "338b5a91-b56e-4536-b24c-9575848f3d8f"
+      }
     }
   ],
   "limits": [

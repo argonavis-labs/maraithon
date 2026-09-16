@@ -75,7 +75,12 @@ defmodule Maraithon.Release do
   end
 
   def delegation_eval_status do
-    delegation_eval(fn -> Maraithon.Delegations.EvaluationRunner.status() end, "DELEGATION_EVAL=")
+    delegation_eval(
+      fn ->
+        Maraithon.Delegations.EvaluationRunner.status(System.get_env("DELEGATION_EVAL_JOB_ID"))
+      end,
+      "DELEGATION_EVAL="
+    )
   end
 
   def delegation_eval_memory do
