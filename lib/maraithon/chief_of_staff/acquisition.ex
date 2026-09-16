@@ -2915,7 +2915,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          source_scope,
          provider,
          true,
-         concurrency,
+         _concurrency,
          timeout,
          metadata
        ) do
@@ -2930,7 +2930,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
           {thread_id, result}
         end,
-        max_concurrency: max(min(concurrency, max(length(thread_ids), 1)), 1),
+        # Gmail admission serializes a mailbox. Sibling thread reads would
+        # reject one another as provider_busy and make every delta partial.
+        # The outer provider stream still reads different accounts in parallel.
+        max_concurrency: 1,
         ordered: true,
         timeout: timeout,
         on_timeout: :kill_task

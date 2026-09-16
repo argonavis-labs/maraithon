@@ -893,6 +893,21 @@ Completion acquisition also checks the designation before consuming live or
 saved source bundles, covering already queued work. No address is hard-coded.
 `make build` passed; live verification of this queueing fix is pending.
 
+Status `35146657621` identified a Gmail `rate_limited` acquisition and another
+batch where 19 of 20 thread reads failed after all 21 message reads succeeded.
+The batch was not truncated. Inspection found concurrent thread hydration
+competing with the mailbox's single-request admission lane. Thread hydration
+now runs sequentially within each mailbox, matching message hydration. The
+outer stream still reads different accounts concurrently, and the existing
+timeouts and complete-acquisition requirement remain in force. `make build`
+passed; a successful production acquisition still needs verification.
+
+The same status found an idle Chief of Staff checkpoint at sequence 26018, but
+the separate diagnostic process could not decode an unknown snapshot symbol.
+This does not establish that the serving Agent cannot restore it. Recent
+scheduled model steps reported `invalid_request`; the saved closed error does
+not identify the request validation cause.
+
 ## Read earlier conversation windows
 
 The date-window history reader is now implemented. A model may use its existing
