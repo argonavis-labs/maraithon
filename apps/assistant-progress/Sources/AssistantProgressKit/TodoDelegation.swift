@@ -37,6 +37,7 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
         public let delegation: TodoDelegation?
         public let scope: Scope?
         public let preflight: Preflight?
+        public let history: TodoDelegationHistory?
     }
 
     public struct Preflight: Decodable, Sendable {

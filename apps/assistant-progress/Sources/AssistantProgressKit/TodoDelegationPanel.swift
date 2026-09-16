@@ -11,6 +11,7 @@ public struct TodoDelegationPanel: View {
     private let refreshTodo: () async -> Void
     @State private var current: TodoDelegation?
     @State private var showsGrant = false
+    @State private var showsHistory = false
     @State private var busy = false
     @State private var error: String?
     @State private var answer = ""
@@ -52,6 +53,8 @@ public struct TodoDelegationPanel: View {
                     }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await reload() } }
                 }.buttonStyle(.borderless)
+                Button("Conversation history", systemImage: "clock") { showsHistory = true }
+                    .buttonStyle(.borderless)
             }
             if canDelegate && (current == nil || current?.isTerminal == true) {
                 Button(proposal?.label ?? "Delegate", systemImage: "person.crop.circle.badge.checkmark") { showsGrant = true }
@@ -68,6 +71,9 @@ public struct TodoDelegationPanel: View {
                 current = value
                 await refreshTodo()
             }
+        }
+        .sheet(isPresented: $showsHistory) {
+            if let current { TodoDelegationHistoryView(delegationID: current.id, request: request) }
         }
     }
 

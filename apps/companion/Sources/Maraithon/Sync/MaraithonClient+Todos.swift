@@ -5,8 +5,10 @@ import AssistantProgressKit
 
 extension MaraithonClient {
     func delegationRequest(path: String, input: TodoDelegation.Request?) async throws -> TodoDelegation.Response {
+        guard let components = URLComponents(string: path) else { throw MaraithonClientError.invalidResponse }
         let request = try await makeRequest(method: input == nil ? "GET" : "POST",
-            path: "/api/v1/companion/\(path)", body: try input.map { try JSONEncoder().encode($0) },
+            path: "/api/v1/companion/\(components.path)", body: try input.map { try JSONEncoder().encode($0) },
+            queryItems: components.queryItems ?? [],
             extraHeaders: ["Content-Type": "application/json"])
         let (data, response) = try await transport(request)
         try Self.validate(response: response, data: data)
