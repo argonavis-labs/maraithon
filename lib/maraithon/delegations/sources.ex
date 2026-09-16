@@ -19,21 +19,26 @@ defmodule Maraithon.Delegations.Sources do
   end
 
   def verify_before_send(job, context) do
-    d = context.delegation
+    with {:ok, messages, fresh, progress} <- SlackSource.read(context, "slack_verify"),
+         {:ok, result} <-
+           Jobs.transaction(job, fn current ->
+             route!(current, messages, fresh)
+             save_progress!(current.run, "slack_verify", if(fresh, do: nil, else: progress))
 
-    with {:ok, messages, fresh} <- fetch(d, context.grant.data["scope"]) do
-      previous = context.run.prompt_snapshot["sources"]
-      ids = fn source -> MapSet.new(source["messages"], &{&1["message_id"], &1["revision"]}) end
+             d = Repo.get!(Maraithon.Delegations.Delegation, current.delegation.id)
 
-      if ids.(fresh) == ids.(previous) do
-        Toolbox.verify_before_send(context)
-      else
-        case Jobs.transaction(job, fn _ ->
-               route!(context, messages, fresh)
-             end) do
-          {:ok, _} -> {:error, :source_changed}
-          error -> error
-        end
+             cond do
+               d.source_revision != current.turn.source_revision -> :changed
+               is_nil(fresh) -> :reading
+               SlackSource.unchanged?(fresh, current.run.prompt_snapshot["sources"]) -> :unchanged
+               true -> :changed
+             end
+           end) do
+      case result do
+        :unchanged -> Toolbox.verify_before_send(context)
+        :reading -> {:retry, 1_000}
+        :superseded -> {:error, :source_changed}
+        :changed -> {:error, :source_changed}
       end
     end
   end
@@ -58,23 +63,40 @@ defmodule Maraithon.Delegations.Sources do
         %{state: "synced", run_id: current.run.id}
       end)
     else
-      with {:ok, messages, sources} <- read(context) do
-        persist(job, messages, sources)
+      with {:ok, messages, sources, progress} <- read(context) do
+        persist(job, messages, sources, progress)
       else
         {:error, reason} -> source_error(job, reason)
       end
     end
   end
 
-  defp read(%{delegation: %{provider: "gmail"}} = context), do: GmailSource.read(context)
-  defp read(context), do: fetch(context.delegation, context.grant.data["scope"])
+  defp read(%{delegation: %{provider: "gmail"}} = context) do
+    with {:ok, messages, sources} <- GmailSource.read(context),
+         do: {:ok, messages, sources, nil}
+  end
 
-  defp persist(job, messages, sources) do
+  defp read(context), do: SlackSource.read(context, "slack_read")
+
+  defp save_progress!(run, key, progress) do
+    snapshot =
+      if progress,
+        do: Map.put(run.prompt_snapshot, key, progress),
+        else: Map.delete(run.prompt_snapshot, key)
+
+    run |> Run.changeset(%{prompt_snapshot: snapshot}) |> Repo.update!()
+  end
+
+  defp persist(job, messages, sources, progress) do
     # Ingestion and the source snapshot share the worker's ownership fence. A
     # missed reply advances the revision here before any decision can be made.
     Jobs.transaction(job, fn current ->
-      if current.delegation.provider == "gmail" or current.delegation.provider_thread_id,
-        do: route!(current, messages, sources)
+      route!(current, messages, sources)
+
+      run =
+        if current.delegation.provider == "slack",
+          do: save_progress!(current.run, "slack_read", if(sources, do: nil, else: progress)),
+          else: current.run
 
       d = Repo.get!(Maraithon.Delegations.Delegation, current.delegation.id)
 
@@ -86,8 +108,8 @@ defmodule Maraithon.Delegations.Sources do
           %{state: "syncing", run_id: current.run.id}
 
         true ->
-          snapshot = Map.put(current.run.prompt_snapshot, "sources", sources)
-          current.run |> Run.changeset(%{prompt_snapshot: snapshot}) |> Repo.update!()
+          snapshot = Map.put(run.prompt_snapshot, "sources", sources)
+          run |> Run.changeset(%{prompt_snapshot: snapshot}) |> Repo.update!()
           Jobs.result!(current, "sync_result", %{})
           %{state: "synced", run_id: current.run.id}
       end
@@ -97,21 +119,6 @@ defmodule Maraithon.Delegations.Sources do
       result -> result
     end
   end
-
-  defp fetch(%{provider: "slack"} = d, scope) do
-    channel = if d.provider_thread_id, do: d.slack_channel, else: scope["source_channel_id"]
-    thread = d.provider_thread_id || scope["source_thread_id"]
-
-    with {:ok, sources} <-
-           SlackSource.fetch(d.user_id, scope["identity"], channel, thread,
-             include_unthreaded?:
-               not is_nil(d.provider_thread_id) and String.starts_with?(d.slack_channel, "D") and
-                 SlackIngress.only_live_id(d.user_id, d.slack_channel) == d.id
-           ),
-         do: {:ok, sources["messages"], sources}
-  end
-
-  defp fetch(_, _), do: {:error, :unsupported_delegation_source}
 
   defp route!(
          %{delegation: %{provider: "slack", provider_thread_id: nil} = d, grant: grant},

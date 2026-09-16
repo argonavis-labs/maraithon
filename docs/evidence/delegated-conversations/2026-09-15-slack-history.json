@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-15",
+  "change": "Resumable Slack conversation pages and compact evidence snapshots",
+  "deployment": {
+    "status": "pending"
+  },
+  "validation": {
+    "build": "make build passed",
+    "focused_tests": 109,
+    "failures": 0,
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0,
+    "logs": [
+      "/tmp/maraithon-slack-pages-build.log",
+      "/tmp/maraithon-slack-pages-final-tests.log"
+    ]
+  },
+  "local_fixtures": {
+    "channel_messages": 180,
+    "dm_messages": 300,
+    "recent_bodies": 6,
+    "snapshot_bytes_below": 8000,
+    "new_model_calls": 0,
+    "separate_leased_workers": true,
+    "expired_cursor_recovered": true,
+    "provider_cooldown_preserves_progress": true,
+    "older_edit_prevents_send": true
+  },
+  "limits": [
+    "Live Slack evaluation remains deferred; no real Slack messages were sent.",
+    "Preview pagination is bounded but not durably checkpointed before a grant exists.",
+    "New turns still scan bound history; fetching only missing messages remains unfinished.",
+    "Worker resumption is covered locally. Whole-app recovery and a real longevity canary are not proven by these tests.",
+    "This server-only change uses existing native summary fields; native builds were not repeated."
+  ]
+}

@@ -114,7 +114,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
     d = insert_delegation(user_id, account.id, todo.id, scope)
 
     message = %{
-      "ts" => ts(DateTime.add(now, 1)),
+      "ts" => ts(DateTime.add(now, if(tags[:new_dm], do: -1, else: 1))),
       "channel" => source_channel,
       "thread_ts" => root,
       "user" => "UCHARLIE",
@@ -442,6 +442,258 @@ defmodule Maraithon.Delegations.SlackIngressTest do
       end)
 
       assert {:error, :recalled_evidence_changed} = Toolbox.verify_before_send(context)
+    end
+  end
+
+  for {dm?, edited?} <- [{false, false}, {true, false}, {false, true}] do
+    @tag timeout: 120_000, dm: dm?, edited: edited?
+    test "long Slack history resumes across leases and expired cursors (DM #{dm?}, edited #{edited?})",
+         c do
+      alias Maraithon.Delegations.{Binding, Jobs}
+      alias Maraithon.Runtime.BackgroundJob
+      {node, partitions} = exact_authority(c.user_id)
+      bypass = Bypass.open()
+      original = Application.get_env(:maraithon, :slack, [])
+      Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+      on_exit(fn -> Application.put_env(:maraithon, :slack, original) end)
+      root = c.root["ts"]
+      at = SlackSource.time(root)
+
+      replies =
+        for n <- 1..179,
+            do: %{
+              "ts" => ts(DateTime.add(at, n, :millisecond)),
+              "thread_ts" => root,
+              "user" => "UCHARLIE",
+              "text" => "Historical fact #{n}"
+            }
+
+      history =
+        for n <- 180..299,
+            do: %{
+              "ts" => ts(DateTime.add(at, n, :millisecond)),
+              "user" => "UCHARLIE",
+              "text" => "DM fact #{n}"
+            }
+
+      provider =
+        start_supervised!(
+          {Agent,
+           fn -> %{messages: [c.root | replies], expire?: true, throttle?: true, calls: []} end}
+        )
+
+      Bypass.stub(
+        bypass,
+        "POST",
+        "/api/auth.test",
+        &json(&1, %{"ok" => true, "team_id" => "T123", "user_id" => "UOWN"})
+      )
+
+      Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
+        query = URI.decode_query(conn.query_string)
+        assert query["channel"] == c.scope["channel"]
+        assert query["ts"] == root
+        assert query["limit"] == "100"
+
+        response =
+          Agent.get_and_update(provider, fn state ->
+            cond do
+              query["cursor"] == "second" and state.expire? ->
+                {%{"ok" => false, "error" => "invalid_cursor"},
+                 %{state | expire?: false, calls: [query | state.calls]}}
+
+              query["oldest"] && state.throttle? ->
+                {:throttled, %{state | throttle?: false, calls: [query | state.calls]}}
+
+              true ->
+                messages =
+                  if query["cursor"] == "second" or query["oldest"],
+                    do: Enum.drop(state.messages, 100),
+                    else: Enum.take(state.messages, 100)
+
+                if query["oldest"],
+                  do: assert(query["oldest"] == Enum.at(state.messages, 99)["ts"])
+
+                next = if query["cursor"] || query["oldest"], do: "", else: "second"
+
+                {%{
+                   "ok" => true,
+                   "messages" => messages,
+                   "has_more" => next != "",
+                   "response_metadata" => %{"next_cursor" => next}
+                 }, %{state | calls: [query | state.calls]}}
+            end
+          end)
+
+        if response == :throttled,
+          do:
+            conn
+            |> Plug.Conn.put_resp_header("retry-after", "90")
+            |> Plug.Conn.resp(429, "limited"),
+          else: json(conn, response)
+      end)
+
+      if c[:dm] do
+        Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+          query = URI.decode_query(conn.query_string)
+          assert query["oldest"] == root
+          assert query["channel"] == c.scope["channel"]
+          all = Enum.reverse(history) ++ [c.root]
+
+          {messages, cursor} =
+            if query["cursor"],
+              do: {Enum.drop(all, 100), ""},
+              else: {Enum.take(all, 100), "dm-second"}
+
+          json(conn, %{
+            "ok" => true,
+            "messages" => messages,
+            "has_more" => cursor != "",
+            "response_metadata" => %{"next_cursor" => cursor}
+          })
+        end)
+      end
+
+      {:ok, job} =
+        Repo.transaction(fn ->
+          d = reload(c)
+
+          next =
+            Jobs.start_sync!(
+              d,
+              Maraithon.Delegations.current_grant(d),
+              %{id: Ecto.UUID.generate(), kind: "user_action"},
+              DateTime.utc_now()
+            )
+
+          d |> Delegation.changeset(%{state: next.state}) |> Repo.update!()
+          Repo.get_by!(BackgroundJob, job_type: "delegation_sync")
+        end)
+
+      alias Maraithon.Runtime.Coordination.FairScheduler
+      :ok = FairScheduler.ensure_min_tenant_concurrency(job.tenant_key, 1)
+
+      {:ok, _} =
+        FairScheduler.configure_tenant(job.tenant_key,
+          max_concurrency: 1,
+          rate_per_minute: 6_000,
+          burst: 20
+        )
+
+      run = fn job, fun ->
+        run_leased_job(node, partitions, Repo.get!(BackgroundJob, job.id), fun)
+      end
+
+      context = fn ->
+        turn = Repo.one!(Turn) |> Turn.hydrate()
+        d = reload(c)
+
+        %{
+          delegation: d,
+          grant: Maraithon.Delegations.current_grant(d),
+          turn: turn,
+          run: Repo.get!(Run, turn.run_id) |> Run.hydrate_payloads()
+        }
+      end
+
+      assert {:ok, %{state: "syncing"}, {:reschedule_in, 1_000}} = run.(job, &Sources.execute/1)
+      assert length(events(c)) == 100
+      refute context.().run.prompt_snapshot["sources"]
+      assert context.().run.prompt_snapshot["slack_read"]["cursor"] == "second"
+
+      # An expired cursor saves a timestamp continuation in another leased worker.
+      assert {:ok, %{state: "syncing"}, {:reschedule_in, 1_000}} = run.(job, &Sources.execute/1)
+      assert context.().run.prompt_snapshot["slack_read"]["cursor"] == nil
+
+      assert context.().run.prompt_snapshot["slack_read"]["boundary"] ==
+               Enum.at(replies, 98)["ts"]
+
+      assert {:ok, %{throttled: true}, {:reschedule_in, 90_000}} =
+               run.(job, fn leased ->
+                 assert {:error, {:retry_after, 90, {:rate_limited, 90, :provider_limited}}} =
+                          Sources.execute(leased)
+
+                 {:ok, %{throttled: true}, {:reschedule_in, 90_000}}
+               end)
+
+      assert length(events(c)) == 100
+      refute context.().run.prompt_snapshot["sources"]
+      assert reload(c).data["last_action"] =~ "Waiting for Slack"
+
+      Repo.query!(
+        "UPDATE background_job_rate_limits SET blocked_until = timezone('UTC', clock_timestamp()) - interval '1 second' WHERE queue = 'http_slack'"
+      )
+
+      if c[:dm] do
+        for _ <- 1..2,
+            do:
+              assert(
+                {:ok, %{state: "syncing"}, {:reschedule_in, 1_000}} =
+                  run.(job, &Sources.execute/1)
+              )
+      end
+
+      assert {:ok, %{state: "synced"}} = run.(job, &Sources.execute/1)
+      snapshot = context.().run.prompt_snapshot["sources"]
+      assert snapshot["message_count"] == if(c[:dm], do: 300, else: 180)
+      assert length(snapshot["messages"]) == 6
+      assert byte_size(Jason.encode!(snapshot)) < 8_000
+      assert length(events(c)) == snapshot["message_count"]
+      assert context.().turn.model_calls == 0
+      assert context.().delegation.source_revision == 0
+      refute context.().run.prompt_snapshot["slack_read"]
+      assert SlackSource.participants(snapshot, c.scope["identity"]) == ["UCHARLIE"]
+
+      {:ok, send_job} =
+        Repo.transaction(fn ->
+          current = context.()
+
+          Jobs.enqueue!(
+            "delegation_send",
+            current.delegation,
+            current.run.prompt_snapshot[Binding.key()],
+            DateTime.utc_now()
+          )
+        end)
+
+      verify = fn leased ->
+        case Sources.verify_before_send(leased, context.()) do
+          {:retry, delay} -> {:ok, %{verification: "reading"}, {:reschedule_in, delay}}
+          :ok -> {:ok, %{verification: "unchanged"}}
+          {:error, :source_changed} -> {:ok, %{verification: "changed"}}
+        end
+      end
+
+      if c[:edited] do
+        # A change outside the six recent bodies still invalidates the old turn.
+        Agent.update(provider, fn state ->
+          %{
+            state
+            | messages:
+                List.update_at(
+                  state.messages,
+                  25,
+                  &Map.merge(&1, %{
+                    "text" => "Corrected old fact",
+                    "edited" => %{"ts" => ts(DateTime.add(DateTime.utc_now(), 2))}
+                  })
+                )
+          }
+        end)
+
+        assert {:ok, %{verification: "changed"}} = run.(send_job, verify)
+        assert reload(c).source_revision == 1
+      else
+        for _ <- 1..if(c[:dm], do: 3, else: 1),
+            do:
+              assert(
+                {:ok, %{verification: "reading"}, {:reschedule_in, 1_000}} =
+                  run.(send_job, verify)
+              )
+
+        assert {:ok, %{verification: "unchanged"}} = run.(send_job, verify)
+        refute context.().run.prompt_snapshot["slack_verify"]
+      end
     end
   end
 

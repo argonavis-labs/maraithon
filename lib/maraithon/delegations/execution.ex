@@ -121,6 +121,7 @@ defmodule Maraithon.Delegations.Execution do
              action = PreparedAction.hydrate_payload(action) do
           case fresh_source(job, context, action) do
             :ok -> send_action(job, action)
+            {:retry, delay} -> {:ok, %{state: "checking_source"}, {:reschedule_in, delay}}
             {:error, reason} -> source_hold(job, reason)
           end
         else

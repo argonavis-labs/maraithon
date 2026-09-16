@@ -90,7 +90,7 @@ The server build passed, and 60 focused ingress and source checks pass. The fixt
 
 Commit `c18cd3d1` deployed successfully through workflow `35033415934`. Revision `maraithon-00376-m9w` is ready and serving. Production job `maraithon-todo-validation-c5prq` then verified 32 authenticated legacy references across Kent's and October's mailboxes. Both accounts are well below the 2,048-row compatibility bound; the sampled query execution took 1.1 and 1.9 ms. The transaction was read-only, with no provider calls, model calls, messages, or conversation writes. This verifies stored upgrade evidence and lookup cost, not a live automatic thread split. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. [Thread continuity evidence](evidence/delegated-conversations/2026-09-15-gmail-thread-continuity.json).
 
-Slack pagination and the real longevity canary remain unfinished. Automatic Gmail rollover still needs live provider evidence. The fact-ledger work below adds recall for facts learned by reviewed turns.
+Slack pagination was unfinished at this checkpoint; the later resumable-history section records its implementation. The real longevity canary remains unfinished. Automatic Gmail rollover still needs live provider evidence. The fact-ledger work below adds recall for facts learned by reviewed turns.
 
 ## Durable facts and cited recall
 
@@ -301,6 +301,18 @@ Provider delays during source refresh, cited recall and sending also update the 
 
 The server build and 157 focused checks passed. Coverage includes cross-token cooldowns, separate workspace and method lanes, channel pacing, lock release, Gmail and Slack deferral under real local leases, changed evidence before retry, uncertain sends, and existing Slack readers. Commit `2fdccf75` deployed successfully through workflow `35042395245`. Revision `maraithon-00382-v5b` is ready and serves all traffic. Muse Spark Contributor, the US$3 projection, development spending, and the controlled Gmail gate remain configured. No live Slack exchange is part of this change; Kent deferred that eval and autonomous Slack sends remain disabled. [Slack admission evidence](evidence/delegated-conversations/2026-09-15-slack-admission.json).
 
+## Resumable Slack history
+
+Active Slack conversations now checkpoint one page at a time in the existing encrypted Run. The page's ingress records and continuation commit under the same job lease. Another worker resumes the cursor after a restart or throttle. An expired cursor resumes from the last fetched timestamp, using Slack's timestamp bounds. The reader follows short and empty cursor pages, rejects repeated cursors and inconsistent thread evidence, and never marks an unfinished page sequence complete. [Slack pagination](https://docs.slack.dev/apis/web-api/pagination/), [thread reads](https://docs.slack.dev/reference/methods/conversations.replies/), [history reads](https://docs.slack.dev/reference/methods/conversations.history/).
+
+The snapshot keeps six recent bodies, a fingerprint of the complete read, the message count, and the verified participant set. Older participants remain in scope even when their bodies leave recent context. Both threaded replies and unthreaded replies in a single live DM use this reader. Bounds are explicit: 100 messages per page, 10,000 included messages, 1,000 pages, and 240 KB for progress or a snapshot. Preview reads share the parser and have a 15-second admission deadline between bounded HTTP calls. They do not yet checkpoint before a grant exists.
+
+Before sending, a separate durable page checkpoint repeats source verification. No action enters while pages remain. Edits outside the six recent bodies still invalidate the old turn. The complete snapshot fingerprint is independent of page boundaries; malformed or inconsistent reads remain gaps. Initial assistant DM reads now also record their original source evidence, so new replies found there advance the revision before a decision.
+
+The server build and 109 focused checks passed. Local leased-worker fixtures cover a 180-message channel and a 300-message DM, an expired cursor, a provider throttle, resumption without duplicate ingress, compact snapshots, and an older edit before sending. Additional checks cover empty and short pages, retained participants, repeated cursors, foreign threads, duplicate pages, existing Slack sends, and shared Gmail source and send behaviour. No paid model calls or live messages were used. Deployment is pending.
+
+This is durable pagination, not the full read-economy requirement. A new turn still scans the bound history. Reusing verified history so subsequent turns fetch only missing messages, and durable progress for a long preflight before a grant exists, remain unfinished. Live Slack evaluation remains deferred.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
@@ -309,6 +321,6 @@ The server build and 157 focused checks passed. Coverage includes cross-token co
 4. Finish whole-app recovery and race checks, schema evolution, and a real longevity canary. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack pagination, scheduling preference refinements, and the full conversation ledger remain unfinished. Cited recall has local coverage; live memory verification is pending. Older conversations without saved facts still need a bounded way to seed their ledger from historical evidence. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack history reuse across turns, durable long-thread preflight, scheduling preference refinements, and the full conversation ledger remain unfinished. Cited recall has local coverage; live memory verification is pending. Older conversations without saved facts still need a bounded way to seed their ledger from historical evidence. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.

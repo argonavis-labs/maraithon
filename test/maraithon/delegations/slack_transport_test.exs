@@ -289,6 +289,86 @@ defmodule Maraithon.Delegations.SlackTransportTest do
     assert List.last(snapshot["messages"])["text_body"] == "Indigo"
   end
 
+  test "short cursor pages retain old participants and only six recent bodies", c do
+    auth(c)
+    author = action(c).payload["_maraithon_slack_author"]
+
+    messages =
+      for n <- 0..179 do
+        %{
+          "ts" => "#{1_789_500_000 + n}.000001",
+          "thread_ts" => @root,
+          "user" => if(n == 1, do: "UOLDER", else: "UCHARLIE"),
+          "text" => "Fact #{n}"
+        }
+      end
+
+    pages = [[], Enum.take(messages, 40), Enum.slice(messages, 40, 100), Enum.drop(messages, 140)]
+
+    Bypass.expect(c.bypass, "GET", "/api/conversations.replies", fn conn ->
+      query = URI.decode_query(conn.query_string)
+      index = String.to_integer(query["cursor"] || "0")
+      cursor = if index == 3, do: "", else: Integer.to_string(index + 1)
+
+      json(conn, %{
+        "ok" => true,
+        "messages" => Enum.at(pages, index),
+        "response_metadata" => %{"next_cursor" => cursor}
+      })
+    end)
+
+    assert {:ok, snapshot} =
+             Maraithon.Delegations.SlackSource.fetch(c.user_id, author, "C123", @root)
+
+    assert snapshot["message_count"] == 180
+    assert length(snapshot["messages"]) == 6
+
+    assert MapSet.new(Maraithon.Delegations.SlackSource.participants(snapshot, author)) ==
+             MapSet.new(~w(UOLDER UCHARLIE))
+
+    assert {:ok, direct} =
+             Maraithon.Delegations.SlackSource.snapshot(messages, c.source.id, "C123", @root)
+
+    assert direct["fingerprint"] == snapshot["fingerprint"]
+  end
+
+  for defect <- [:cursor_loop, :missing_cursor, :foreign_thread, :duplicate_page] do
+    @tag defect: defect
+    test "pagination #{defect} never becomes complete evidence", c do
+      auth(c)
+      author = action(c).payload["_maraithon_slack_author"]
+      root = %{"ts" => @root, "user" => "UCHARLIE", "text" => "Root"}
+      reply = %{"ts" => @sent, "thread_ts" => @root, "user" => "UCHARLIE", "text" => "Reply"}
+
+      Bypass.expect(c.bypass, "GET", "/api/conversations.replies", fn conn ->
+        query = URI.decode_query(conn.query_string)
+
+        response =
+          cond do
+            c.defect == :missing_cursor ->
+              %{"messages" => [root], "has_more" => true}
+
+            is_nil(query["cursor"]) ->
+              %{"messages" => [root, reply], "response_metadata" => %{"next_cursor" => "again"}}
+
+            c.defect == :cursor_loop ->
+              %{"messages" => [], "response_metadata" => %{"next_cursor" => "again"}}
+
+            c.defect == :foreign_thread ->
+              %{"messages" => [%{reply | "thread_ts" => @sent}]}
+
+            true ->
+              %{"messages" => [reply]}
+          end
+
+        json(conn, Map.put(response, "ok", true))
+      end)
+
+      assert {:error, :source_gap} =
+               Maraithon.Delegations.SlackSource.fetch(c.user_id, author, "C123", @root)
+    end
+  end
+
   test "missing assistant customization scope cannot switch to the member", c do
     action = action(c, "as_assistant")
 
