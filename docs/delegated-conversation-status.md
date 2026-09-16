@@ -994,6 +994,22 @@ action. The source-verification warning disappeared. This verifies the bound
 read on that controlled task; it does not establish background discovery health.
 No automated tests ran under the current policy.
 
+## Scheduled planning rejection
+
+The 20:52 UTC scheduled Chief of Staff run failed after the Gmail acquisition
+fix had deployed. A read-only diagnostic now reports saved request size and
+counts without prompt or email content. `make build` passed; commit `cbe16591`
+deployed through successful workflow `35149443027`. No automated tests ran.
+
+Read-only workflow `35149897205` found three recent `invalid_request` steps,
+including one at 21:01 UTC. Each retained an empty request placeholder. The
+runtime clears rejected parameters before recording a local validation failure,
+so validating that placeholder cannot identify the rejected constraint. This
+narrows the failure to local request admission before OpenRouter, but does not
+prove a size-limit cause. The original proposal eval remains failed at its
+original deadline. This inspection made no provider or model calls, sent no
+messages and changed no conversation records.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.

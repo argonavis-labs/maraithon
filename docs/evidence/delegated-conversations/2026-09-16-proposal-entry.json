@@ -283,5 +283,64 @@
     "No Chief of Staff proposal or UI acceptance has been verified yet.",
     "The first checkpoint diagnostic queried native Chief of Staff agents only and missed packaged installations; its empty list does not prove absence.",
     "The original deadline elapsed without a proposal or acceptance. The job completed cleanup with phase failed and reason eval_stopped; it was not extended or restarted."
-  ]
+  ],
+  "request_diagnostic": {
+    "workflow": 35149897205,
+    "code_commit": "cbe16591",
+    "observed_at": "2026-09-16T21:05:07Z",
+    "runtime": [
+      {
+        "status": "running",
+        "snapshot": {
+          "state_name": "idle",
+          "sequence_num": 26159
+        },
+        "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+        "install_status": "enabled",
+        "cycle_memo_generated": null,
+        "failed_steps": [
+          {
+            "error": "invalid_request",
+            "at": "2026-09-16T21:01:13.199774Z",
+            "request": {
+              "messages": 0,
+              "bytes": 2,
+              "valid": true,
+              "tools": 0
+            },
+            "effect_type": "llm_call"
+          },
+          {
+            "error": "invalid_request",
+            "at": "2026-09-16T20:53:14.003420Z",
+            "request": {
+              "messages": 0,
+              "bytes": 2,
+              "valid": true,
+              "tools": 0
+            },
+            "effect_type": "llm_call"
+          },
+          {
+            "error": "invalid_request",
+            "at": "2026-09-16T20:45:41.688447Z",
+            "request": {
+              "messages": 0,
+              "bytes": 2,
+              "valid": true,
+              "tools": 0
+            },
+            "effect_type": "llm_call"
+          }
+        ],
+        "memo_updated_at": null,
+        "pending_skill": null,
+        "snapshot_decode_error": "unknown_snapshot_symbol"
+      }
+    ],
+    "interpretation": "The failed steps retain an empty request placeholder. Runtime.Agent clears rejected parameters before recording a locally rejected effect. Validation of that placeholder does not validate the rejected request or identify the failed constraint.",
+    "provider_calls": 0,
+    "messages_sent": 0,
+    "conversation_writes": 0
+  }
 }
