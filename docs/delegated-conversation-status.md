@@ -770,7 +770,8 @@ not message contents or proof of individual claims. Older unattributed learning
 stays unknown; no historical person or memory was removed or rewritten.
 
 `make build` passed with warnings treated as errors. Automated tests were not
-run under the current development policy. Deployment is pending.
+run under the current development policy. Commit `d71b65df` deployed through
+successful workflow `35135789338` to revision `maraithon-00434-4z7`.
 
 The same review found four background writers that replaced the entire People
 metadata map after enrichment or scoring. They now use one small atomic helper
@@ -779,6 +780,12 @@ therefore survive a slow enrichment, graph update, communication-score update
 or merge suggestion. The helper is scoped to the person's user and preserves
 the existing database write fences. It adds no model call or process. Its
 `make build` check passed; no automated tests ran.
+
+Commit `fe23a0f9` deployed through successful workflow `35136330889` to revision
+`maraithon-00435-mwd`, serving all traffic. A fresh live Settings read confirmed
+October's selected account, name and assistant-account mode. This verifies the
+deployed settings read path, not the full concurrency or historical-attribution
+matrix. The six-hour conversation canary remains in its scheduled quiet period.
 
 ## Remaining work
 
