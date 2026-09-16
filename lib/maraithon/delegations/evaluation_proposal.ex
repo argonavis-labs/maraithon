@@ -25,14 +25,25 @@ defmodule Maraithon.Delegations.EvaluationProposal do
       unless person && person.id in source.resolved_person_ids,
         do: Repo.rollback(:eval_counterparty_not_resolved)
 
+      {:ok, workflow} =
+        Workflow.transition(
+          todo,
+          %{
+            "state" => "you_own",
+            "expected_revision" => Workflow.current(todo)["revision"],
+            "outcome" => job.payload["scenario"]["outcome"],
+            "next_action" => todo.next_action,
+            "reason" => "Controlled eval received its source email."
+          },
+          Workflow.user_owner(todo)
+        )
+
       todo
       |> Todo.changeset(%{
         counterparty_person_id: person.id,
         counterparty_label: person.display_name,
         source_occurred_at: message.internal_date,
-        workflow:
-          Workflow.current(todo)
-          |> Map.put("outcome", job.payload["scenario"]["outcome"])
+        workflow: workflow
       })
       |> Repo.update!()
     end)

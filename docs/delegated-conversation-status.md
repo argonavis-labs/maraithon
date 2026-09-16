@@ -803,6 +803,32 @@ acceptance times. Provider sends still use the controlled-pair gate and existing
 action identities. The scenario requires assistant mode. `make build` and shell
 syntax validation passed; no automated tests ran. Live verification is pending.
 
+Commit `4d46b58d` deployed through workflow `35137464447` to revision
+`maraithon-00436-lrn`. Launcher `35137918032` created job
+`fade27a9-e362-484b-b160-f26bf8507dab`. Read-only status `35138589359`
+reported a terminal `background_job_error` after the initial email action had
+executed. No delegation was recorded.
+
+Code inspection found that fixture preparation persisted `Workflow.current/1`,
+a display projection lacking the required reason and change time. A manual,
+provider-free calculation reproduced that invalid changeset. Preparation now
+uses the existing workflow transition function; the same calculation produces
+a valid changeset. The original failure retained no exception detail, so this
+does not establish that it was the only failure.
+
+Restricted recovery now also admits this proposal fixture's initial failure
+only while its workflow is empty, its runtime assignments are settled, its
+claim is clear, no delegation exists and its original deadline remains open.
+It preserves the original job, subject, account binding and prepared-action
+identities. It does not restart a live job or extend the deadline. `make build`
+passed with warnings treated as errors. Automated tests were not run.
+
+The Mac check also exposed a fallback card that called a next-step instruction
+a Gmail draft and always said to reconnect. Commit `155abddf` excludes known
+placeholder drafts from all provider fallback cards and labels a genuine Gmail
+fallback as a suggested reply for review. It adds no model or provider call.
+The server build passed; deployed UI verification is pending.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.

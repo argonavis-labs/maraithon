@@ -18,7 +18,7 @@ defmodule Maraithon.Delegations.EvaluationRecovery do
     end
   end
 
-  @doc "Recover only an initial rate-limit failure before any delegation was created."
+  @doc "Recover a bounded initial fixture failure before any delegation was created."
   def resume(id) do
     user = Evaluation.scenarios()["owner"]["email"]
 
@@ -37,8 +37,9 @@ defmodule Maraithon.Delegations.EvaluationRecovery do
           )
           |> BackgroundJob.hydrate_payloads()
 
-        unless job && get_in(job.payload, ["scenario", "id"]) == "durable_memory",
-          do: Repo.rollback(:controlled_canary_required)
+        unless job &&
+                 get_in(job.payload, ["scenario", "id"]) in ~w(durable_memory proposed_information_reply),
+               do: Repo.rollback(:controlled_canary_required)
 
         if job.status in ~w(pending running) do
           report(job)
@@ -56,11 +57,12 @@ defmodule Maraithon.Delegations.EvaluationRecovery do
     todo = Repo.get_by(Todo, user_id: user, dedupe_key: "delegation-eval:#{job.id}")
 
     settled? =
-      is_binary(job.coordination_task_assignment_id) and Repo.exists?(
-        from a in TaskAssignment,
-          where: a.id == ^job.coordination_task_assignment_id and a.work_id == ^job.id,
-          where: a.work_kind == "background_job" and a.state == "settled"
-      ) and
+      is_binary(job.coordination_task_assignment_id) and
+        Repo.exists?(
+          from a in TaskAssignment,
+            where: a.id == ^job.coordination_task_assignment_id and a.work_id == ^job.id,
+            where: a.work_kind == "background_job" and a.state == "settled"
+        ) and
         not Repo.exists?(
           from a in TaskAssignment,
             where: a.work_id == ^job.id and a.work_kind == "background_job",
@@ -69,9 +71,8 @@ defmodule Maraithon.Delegations.EvaluationRecovery do
 
     due = now |> DateTime.add(30, :second) |> Preferences.next_work_time(Preferences.get(user))
 
-    with "completed" <- job.status,
+    with true <- recoverable?(job, todo),
          nil <- job.claim_token,
-         %{"phase" => "failed", "reason" => "rate_limited"} <- job.result,
          nil <- job.result["delegation_id"],
          nil <- if(todo, do: Delegations.for_todo(user, todo.id)),
          true <- settled?,
@@ -82,12 +83,15 @@ defmodule Maraithon.Delegations.EvaluationRecovery do
         status: "pending",
         scheduled_at: due,
         completed_at: nil,
+        failed_at: nil,
+        last_error: nil,
         attempts: 0,
-        result: %{
-          "phase" => "waiting_for_provider",
-          "recovered_initial_rate_limit" => true,
-          "recovered_at" => DateTime.to_iso8601(now)
-        }
+        result:
+          Map.merge(job.result, %{
+            "phase" => "waiting_for_provider",
+            "recovered_initial_failure" => job.result["reason"] || job.last_error,
+            "recovered_at" => DateTime.to_iso8601(now)
+          })
       })
       |> Repo.update!()
       |> report()
@@ -95,6 +99,26 @@ defmodule Maraithon.Delegations.EvaluationRecovery do
       _ -> Repo.rollback(:initial_rate_limit_recovery_unavailable)
     end
   end
+
+  defp recoverable?(
+         %{status: "completed", result: %{"phase" => "failed", "reason" => "rate_limited"}} = job,
+         _todo
+       ),
+       do: get_in(job.payload, ["scenario", "id"]) == "durable_memory"
+
+  defp recoverable?(
+         %{
+           status: "failed",
+           last_error: "background_job_error",
+           result: %{"phase" => "waiting_for_initial_email"}
+         } = job,
+         %Todo{workflow: workflow}
+       ),
+       do:
+         get_in(job.payload, ["scenario", "id"]) == "proposed_information_reply" and
+           workflow == %{}
+
+  defp recoverable?(_job, _todo), do: false
 
   defp report(job),
     do: %{job_id: job.id, phase: job.result["phase"], scheduled_at: job.scheduled_at}
