@@ -69,13 +69,15 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     raw = "http_status: 500 internal_stacktrace db_timeout token=secret"
 
     assert ApiErrorCopy.mobile_chat_run_error(raw) ==
-             "Maraithon saved the request and avoided sending an unverified answer."
+             "I couldn't finish this request. Your message is saved, but I can't confirm the requested change."
 
     assert ApiErrorCopy.mobile_chat_run_error("google_account_not_connected") ==
              "Connect the missing account before running this again."
 
     assert ApiErrorCopy.mobile_chat_run_error("tool_timeout") ==
-             "Maraithon saved the request after the response took too long and avoided sending an incomplete answer."
+             "I couldn't finish this request before it timed out. Your message is saved."
+
+    assert ApiErrorCopy.mobile_chat_run_error("api_error:400") =~ "AI service rejected"
 
     refute_leaks_internal_reason(ApiErrorCopy.mobile_chat_run_error(raw))
     refute ApiErrorCopy.mobile_chat_run_error(raw) =~ "Ask for"

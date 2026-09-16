@@ -1112,7 +1112,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assert [%{"role" => "assistant", "body" => body}] = get_in(response, ["thread", "messages"])
 
     assert body ==
-             "Maraithon saved the request and avoided sending an unverified answer."
+             "I couldn't finish this request. Your message is saved, but I can't confirm the requested change."
 
     visible_response = inspect(response)
     refute body =~ "Ask for"
@@ -1154,7 +1154,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assert [%{"role" => "assistant", "body" => body}] = get_in(response, ["thread", "messages"])
 
     assert body ==
-             "Maraithon saved the request and avoided sending an unverified answer."
+             "I couldn't finish this request. Your message is saved, but I can't confirm the requested change."
 
     visible_response = inspect(response)
     refute visible_response =~ "generation failed"
@@ -1348,7 +1348,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     public_error = get_in(response, ["run", "error"])
 
     assert public_error ==
-             "Maraithon saved the request and avoided sending an unverified answer."
+             "I couldn't finish this request. Your message is saved, but I can't confirm the requested change."
 
     encoded = inspect(response)
     refute public_error =~ "refresh"

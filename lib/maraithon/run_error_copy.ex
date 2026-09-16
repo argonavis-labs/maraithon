@@ -7,7 +7,7 @@ defmodule Maraithon.RunErrorCopy do
   debugging, but route user-facing run history and exports through this module.
   """
 
-  @assistant_fallback "Maraithon saved the request and avoided sending an unverified answer."
+  alias Maraithon.AssistantHarness
   @agent_fallback "That run did not complete. Review the last action before running it again."
   @scheduled_task_fallback "That scheduled task did not complete. Review it before running it again."
   @runtime_fallback "Operation did not complete. Check the connection before running it again."
@@ -25,12 +25,17 @@ defmodule Maraithon.RunErrorCopy do
     "This older request could not be linked safely to its original message. Send the request again."
   end
 
+  def assistant_response(reason) when reason in ["api_error:400", "api_error:422"] do
+    AssistantHarness.failure_message({:api_error, 400, :redacted})
+  end
+
   def assistant_response(reason) do
+    fallback = AssistantHarness.failure_message(:unexpected)
+
     classify(reason,
-      fallback: @assistant_fallback,
-      internal: @assistant_fallback,
-      timeout:
-        "Maraithon saved the request after the response took too long and avoided sending an incomplete answer."
+      fallback: fallback,
+      internal: fallback,
+      timeout: AssistantHarness.failure_message(:timeout)
     )
   end
 

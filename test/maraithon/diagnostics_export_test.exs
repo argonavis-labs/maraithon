@@ -105,7 +105,7 @@ defmodule Maraithon.DiagnosticsExportTest do
     refute encoded =~ "token=secret"
 
     assert encoded =~
-             "Maraithon saved the request and avoided sending an unverified answer."
+             "I couldn't finish this request. Your message is saved, but I can't confirm the requested change."
 
     refute encoded =~ "Ask for a narrower check"
 
