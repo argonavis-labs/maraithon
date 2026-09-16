@@ -1,0 +1,191 @@
+{
+  "date": "2026-09-16",
+  "server_commit": "71ca0a3ea7f7841bcf5672fa02bead65a140d197",
+  "reported_failure": {
+    "run_id": "c3c0da36-f4f1-4e7e-9551-cff849b94287",
+    "error": "api_error:400",
+    "tools_executed": 0,
+    "task_changed": false,
+    "cause": "Meta only accepts tool_choice=auto for Muse; todo chat supplied required."
+  },
+  "provider_reproduction": {
+    "execution": "maraithon-todo-validation-h7lxp",
+    "tool_counts": [
+      67,
+      1
+    ],
+    "statuses": [
+      400,
+      400
+    ]
+  },
+  "provider_fix_check": {
+    "execution": "maraithon-todo-validation-4f4f6",
+    "cases": [
+      {
+        "usage": {
+          "model": "meta/muse-spark-1.3-contributor",
+          "cost_source": "provider_reported",
+          "cost_usd": 0.001015226,
+          "cache_read_tokens": 113,
+          "cache_write_tokens": 0,
+          "estimated_cost_usd": 0.031923,
+          "input_tokens": 10011,
+          "output_tokens": 126,
+          "reasoning_tokens": 32
+        },
+        "case": "saved_todo_catalog",
+        "http_status": 200,
+        "tool_count": 67,
+        "elapsed_ms": 1947,
+        "provider_error": null,
+        "finish_reason": "tool_calls",
+        "returned_tools": [
+          "maraithon_finish"
+        ],
+        "tools_executed": 0,
+        "external_messages": 0
+      },
+      {
+        "usage": {
+          "model": "meta/muse-spark-1.3-contributor",
+          "cost_source": "provider_reported",
+          "cost_usd": 0.000122526,
+          "cache_read_tokens": 113,
+          "cache_write_tokens": 0,
+          "estimated_cost_usd": 0.0066,
+          "input_tokens": 760,
+          "output_tokens": 288,
+          "reasoning_tokens": 194
+        },
+        "case": "finish_only",
+        "http_status": 200,
+        "tool_count": 1,
+        "elapsed_ms": 2253,
+        "provider_error": null,
+        "finish_reason": "tool_calls",
+        "returned_tools": [
+          "maraithon_finish"
+        ],
+        "tools_executed": 0,
+        "external_messages": 0
+      }
+    ]
+  },
+  "local_verification": {
+    "server_build": "passed",
+    "harness_context_continuation_checks": 64,
+    "native_protocol_checks": 3,
+    "failures": 0,
+    "api_controller_export_checks": 15,
+    "chat_lane_checks": 10,
+    "total_checks": 92
+  },
+  "deployment": {
+    "workflow": 35057468192,
+    "status": "success",
+    "revision": "maraithon-00389-dcq",
+    "traffic_percent": 100,
+    "image": "sha256:c86003b2bd0364a5af88ce59880f4227fe6a91c03f018132b7756f92791f65cd"
+  },
+  "live_ownership_replay": {
+    "execution": "maraithon-todo-validation-222xz",
+    "run_id": "33ca6711-4eb2-4476-b562-bd1ffcee517f",
+    "status": "completed",
+    "error": null,
+    "elapsed_ms": 85171,
+    "execution_ms": 12700,
+    "duplicate_reused_run": true,
+    "summary": {
+      "llm_turns": 3,
+      "tool_steps": 2
+    },
+    "rollout_overlap": true,
+    "latency_note": "72.471 seconds elapsed before execution during revision 00388 rollout. This does not isolate background contention from partition handoff. The later steady-state follow-up completed in 7.083 seconds before queue isolation.",
+    "queue_wait_ms": 72471,
+    "replies": [
+      {
+        "text": "Updated. Mohit has the next move on the CSV; this is now in Tracking.",
+        "kind": "assistant_reply"
+      }
+    ],
+    "tools": [
+      "list_people",
+      "transition_todo"
+    ],
+    "owner": "Mohit (Uride)",
+    "workflow_state": "they_own",
+    "workflow_revision": 1,
+    "attention_mode": "monitor"
+  },
+  "external_messages_sent": 0,
+  "queue_isolation": {
+    "commit": "71ca0a3ea7f7841bcf5672fa02bead65a140d197",
+    "workflow": 35057468192,
+    "status": "success",
+    "queue": "runtime_chat_user",
+    "local_proof": "Chat completed while a background model worker was held busy; exact admission isolated the queues with lease fences intact."
+  },
+  "steady_state_before_queue_isolation": {
+    "run_id": "2386738e-ef00-47ac-9f26-97fdb4871542",
+    "status": "completed",
+    "error": null,
+    "elapsed_ms": 7083,
+    "execution_ms": 5540,
+    "duplicate_reused_run": true,
+    "summary": {
+      "llm_turns": 1,
+      "tool_steps": 0
+    },
+    "queue_wait_ms": 1543,
+    "replies": [
+      {
+        "text": "Mohit has it.\n\nHe's pulling the CSV for the 8500+ Uride leads so you don't have to send it — you're just waiting for him to share it, then you can line up the Runner help on docs.",
+        "kind": "assistant_reply"
+      }
+    ],
+    "tools": [],
+    "owner": "Mohit (Uride)",
+    "workflow_state": "they_own",
+    "workflow_revision": 1,
+    "attention_mode": "monitor"
+  },
+  "live_isolated_queue": {
+    "execution": "maraithon-todo-validation-vtq64",
+    "run_id": "41aa845e-9290-404d-873a-9e54f19a2ec1",
+    "status": "completed",
+    "error": null,
+    "queue": "runtime_chat_user",
+    "elapsed_ms": 7166,
+    "execution_ms": 5589,
+    "duplicate_reused_run": true,
+    "summary": {
+      "llm_turns": 1,
+      "tool_steps": 0
+    },
+    "queue_wait_ms": 1577,
+    "replies": [
+      {
+        "text": "Mohit has the next move.\n\nHe's pulling the CSV for the 8500+ Uride leads — you're waiting on him to share it before you line up Runner help on docs.",
+        "kind": "assistant_reply"
+      }
+    ],
+    "tools": [],
+    "owner": "Mohit (Uride)",
+    "workflow_state": "they_own",
+    "workflow_revision": 1,
+    "attention_mode": "monitor"
+  },
+  "request_fix_commit": "7fa7b554984c6d88e7951ceee813b2da390ff271",
+  "api_failure_copy_commit": "cf68f713e623c4f612cc3cc2c56672b14604b07f",
+  "request_fix_deployment": {
+    "workflow": 35056622110,
+    "status": "success",
+    "revision": "maraithon-00387-zg8"
+  },
+  "settings": {
+    "model": "meta/muse-spark-1.3-contributor",
+    "development_spending": true,
+    "slack_autonomous_sends": false
+  }
+}

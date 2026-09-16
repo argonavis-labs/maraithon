@@ -2,6 +2,18 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Todo chat reliability
+
+The failed “Mohit is getting this for me” turn never changed the task. Muse rejected its first request because the chat harness required a function call; this provider accepts only automatic tool selection. The harness now uses that supported setting and accepts either a function call or a plain final reply. Failed requests are recorded as failed, and chat plus API error copy explain what did not complete without claiming that evidence was saved.
+
+Selected-task chat now loads the task, recent conversation, preferences and account settings. It fetches other sources only when needed. An explicit ownership update uses the user's statement as evidence, resolves the named person, saves the workflow transition, then confirms the saved result. It does not search connected mail to corroborate the user's own correction.
+
+The live replay resolved Mohit (Uride), saved `they_own`, and moved the CSV task into Tracking. Its reply was “Updated. Mohit has the next move on the CSV; this is now in Tracking.” It used three model calls and two tools: People lookup and workflow transition. No Slack message was sent. Duplicate acceptance returned the same run. The ownership change remains saved at revision 1.
+
+That replay took 85.171 seconds, including 72.471 seconds before execution during a deployment. A later follow-up completed in 7.083 seconds without changing ownership. The rollout overlap prevents attributing the whole delay to background contention. Interactive chat now has a separate, bounded worker queue using the existing OTP runner and PostgreSQL lease checks. Local checks prove that chat runs while a background model worker is occupied. Conversation ordering and duplicate detection remain in the existing durable execution path; previously queued requests retain their original queue.
+
+The server build and 92 focused checks passed. These cover native tool responses, failure receipts, context selection, restart recovery, API and export redaction, duplicate acceptance, worker isolation, and exact lease admission. Commits `7fa7b554` and `cf68f713` deployed successfully. Queue isolation in `71ca0a3e` deployed through workflow `35057468192` to revision `maraithon-00389-dcq`, serving all traffic. Its live follow-up completed in 7.166 seconds, including 1.577 seconds waiting to start, with one model call and no tool or external send. The new queue and duplicate reuse were verified. This does not prove that deployment handoff delays are eliminated. [Chat evidence](evidence/delegated-conversations/2026-09-16-todo-chat-reliability.json). These are shared server changes for web, Mac and iPhone; no native binary changed.
+
 ## Delegation suggestions
 
 The Chief of Staff now ranks source-backed delegation candidates inside its existing cycle memo. It scans at most 40 open Gmail or Slack tasks and passes at most 12 eligible candidates to that call. Eligibility requires work owned by the user, an outbound next action, a resolved person, and evidence bound to the connected account and conversation. Work owned by Charlie or another person does not qualify. The memo may suggest up to three tasks, each with a one-line reason.
