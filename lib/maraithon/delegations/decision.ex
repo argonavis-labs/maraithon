@@ -124,10 +124,10 @@ defmodule Maraithon.Delegations.Decision do
         {:ok, :superseded}
 
       {:error, {:rate_limited, seconds, _}} when is_integer(seconds) ->
-        {:error, {:retry_after, max(seconds, 30), :source_rate_limited}}
+        Jobs.provider_wait(job, seconds)
 
       {:error, {:rate_limited, _}} ->
-        {:error, {:retry_after, 30, :source_rate_limited}}
+        Jobs.provider_wait(job, 30)
 
       {:error, reason}
       when reason in [:invalid_message, :unverified_slot_wording, :invalid_question] ->

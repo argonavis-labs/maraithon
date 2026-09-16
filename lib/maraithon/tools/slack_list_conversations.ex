@@ -15,7 +15,7 @@ defmodule Maraithon.Tools.SlackListConversations do
          {:ok, team_id} <- ActionHelpers.required_string(args, "team_id"),
          {:ok, token} <- resolve_token(user_id, team_id, args),
          {:ok, response} <-
-           Slack.list_conversations(token.access_token,
+           Slack.list_conversations(token,
              types: resolve_types(args),
              limit: resolve_limit(args),
              exclude_archived: resolve_exclude_archived(args)

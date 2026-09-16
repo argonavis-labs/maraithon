@@ -1,5 +1,5 @@
 defmodule Maraithon.OAuth.SlackTest do
-  use ExUnit.Case, async: false
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.OAuth.Slack
 
@@ -97,6 +97,7 @@ defmodule Maraithon.OAuth.SlackTest do
 
   describe "exchange_code/1" do
     test "returns error for invalid code" do
+      reject_request(:token_url, "oauth.v2.access", "POST")
       result = Slack.exchange_code("invalid_code")
 
       assert match?({:error, _}, result)
@@ -213,6 +214,7 @@ defmodule Maraithon.OAuth.SlackTest do
 
   describe "revoke_token/1" do
     test "returns error for invalid token" do
+      reject_request(:revoke_url, "auth.revoke", "POST")
       result = Slack.revoke_token("invalid_token")
 
       assert match?({:error, _}, result)
@@ -332,16 +334,18 @@ defmodule Maraithon.OAuth.SlackTest do
   end
 
   describe "api_request/4" do
-    test "returns error for invalid endpoint" do
-      # Slack API uses hardcoded base URL, so we test error handling
-      result = Slack.api_request(:get, "conversations.list", "invalid_token")
+    test "returns an authentication error for a rejected GET" do
+      reject_request(:api_base_url, "conversations.list", "GET")
+      result = Slack.api_request(:get, "conversations.list", bound("invalid_token"))
 
-      # Will fail to authenticate with invalid token
       assert match?({:error, _}, result)
     end
 
     test "handles POST request method" do
-      result = Slack.api_request(:post, "chat.postMessage", "invalid_token", %{channel: "C123"})
+      reject_request(:api_base_url, "chat.postMessage", "POST")
+
+      result =
+        Slack.api_request(:post, "chat.postMessage", bound("invalid_token"), %{channel: "C123"})
 
       assert match?({:error, _}, result)
     end
@@ -370,7 +374,7 @@ defmodule Maraithon.OAuth.SlackTest do
         )
       end)
 
-      {:ok, response} = Slack.api_request(:get, "conversations.list", "test_token")
+      {:ok, response} = Slack.api_request(:get, "conversations.list", bound("test_token"))
 
       assert response["channels"] == [%{"id" => "C123", "name" => "general"}]
     end
@@ -402,7 +406,7 @@ defmodule Maraithon.OAuth.SlackTest do
       end)
 
       {:ok, response} =
-        Slack.api_request(:post, "chat.postMessage", "test_token", %{
+        Slack.api_request(:post, "chat.postMessage", bound("test_token"), %{
           channel: "C123",
           text: "Hello"
         })
@@ -431,9 +435,26 @@ defmodule Maraithon.OAuth.SlackTest do
         )
       end)
 
-      result = Slack.api_request(:get, "conversations.list", "bad_token")
+      result = Slack.api_request(:get, "conversations.list", bound("bad_token"))
 
       assert {:error, {:slack_error, "invalid_auth"}} = result
     end
+  end
+
+  defp bound(token), do: %{access_token: token, provider: "slack:T123"}
+
+  defp reject_request(config_key, endpoint, method) do
+    bypass = Bypass.open()
+    base = "http://localhost:#{bypass.port}/api"
+    url = if config_key == :api_base_url, do: base, else: "#{base}/#{endpoint}"
+    config = Application.get_env(:maraithon, :slack, []) |> Keyword.put(config_key, url)
+    Application.put_env(:maraithon, :slack, config)
+
+    Bypass.expect_once(
+      bypass,
+      method,
+      "/api/#{endpoint}",
+      &Plug.Conn.resp(&1, 401, "invalid_auth")
+    )
   end
 end

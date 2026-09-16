@@ -447,6 +447,10 @@ defmodule Maraithon.Delegations.SlackIngressTest do
 
   for {actor, response, new_dm} <- [
         {"as_user", :accepted, false},
+        {"as_user", :locally_deferred, false},
+        {"as_user", :source_deferred, false},
+        {"as_user", :edited_during_cooldown, false},
+        {"as_assistant", :locally_deferred, true},
         {"as_user", :lost_response, false},
         {"as_user", :edited_before_send, false},
         {"as_assistant", :accepted, false},
@@ -601,7 +605,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
           ]
         end)
       else
-        Bypass.expect_once(
+        Bypass.expect(
           bypass,
           "GET",
           "/api/conversations.info",
@@ -616,37 +620,102 @@ defmodule Maraithon.Delegations.SlackIngressTest do
           })
         )
 
-        Bypass.expect_once(bypass, "POST", "/api/chat.postMessage", fn conn ->
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          body = Jason.decode!(body)
-          assert body["client_msg_id"] == action.id
-          assert body["thread_ts"] == c.scope["thread_id"]
-          assert body["channel"] == c.scope["channel"]
+        unless c.slack_response == :edited_during_cooldown do
+          Bypass.expect_once(bypass, "POST", "/api/chat.postMessage", fn conn ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            body = Jason.decode!(body)
+            assert body["client_msg_id"] == action.id
+            assert body["thread_ts"] == c.scope["thread_id"]
+            assert body["channel"] == c.scope["channel"]
 
-          sent =
-            Map.merge(body, %{
-              "ts" => ts(DateTime.add(DateTime.utc_now(), 4)),
-              "user" => c.scope["identity"]["user_id"],
-              "bot_id" => c.scope["identity"]["bot_id"]
-            })
+            sent =
+              Map.merge(body, %{
+                "ts" => ts(DateTime.add(DateTime.utc_now(), 4)),
+                "user" => c.scope["identity"]["user_id"],
+                "bot_id" => c.scope["identity"]["bot_id"]
+              })
 
-          Agent.update(accepted, fn _ -> sent end)
+            Agent.update(accepted, fn _ -> sent end)
 
-          if c.slack_response == :accepted,
-            do:
-              json(conn, %{
-                "ok" => true,
-                "channel" => c.scope["channel"],
-                "ts" => sent["ts"],
-                "message" => sent
-              }),
-            else: Plug.Conn.resp(conn, 503, "Accepted; response lost")
-        end)
+            if c.slack_response in [:accepted, :locally_deferred, :source_deferred],
+              do:
+                json(conn, %{
+                  "ok" => true,
+                  "channel" => c.scope["channel"],
+                  "ts" => sent["ts"],
+                  "message" => sent
+                }),
+              else: Plug.Conn.resp(conn, 503, "Accepted; response lost")
+          end)
+        end
+      end
+
+      deferred? =
+        c.slack_response in [:locally_deferred, :source_deferred, :edited_during_cooldown]
+
+      if deferred? do
+        method =
+          if c.slack_response == :source_deferred,
+            do: "conversations.replies",
+            else: "chat.postMessage"
+
+        key = :crypto.hash(:sha256, "T123:#{method}") |> Base.encode16(case: :lower)
+
+        assert {:error, {:rate_limited, 90, :provider_limited}} =
+                 Maraithon.HTTP.Admission.run([{"slack", key, 0}], 5_000, fn ->
+                   {:error, {:rate_limited, 90, :provider_limited}}
+                 end)
       end
 
       result =
         run_leased_job(node, partitions, "delegation_send", fn job ->
           result = Execution.execute(job)
+
+          result =
+            if deferred? do
+              assert {:error, {:retry_after, seconds, :source_rate_limited}} = result
+              assert seconds in 30..90
+              assert Agent.get(accepted, & &1) == nil
+              held = Repo.get!(PreparedAction, action.id) |> PreparedAction.hydrate_payload()
+              assert Maraithon.Delegations.Actions.unentered?(held)
+              assert held.status == "confirmed"
+
+              if c.slack_response == :source_deferred do
+                refute Repo.get_by(Event, delegation_id: c.delegation.id, kind: "send_deferred")
+              else
+                proof =
+                  Repo.get_by!(Event, delegation_id: c.delegation.id, kind: "send_deferred")
+                  |> Event.hydrate()
+
+                assert proof.data["provider_entered"] == false
+                assert proof.data["action_id"] == action.id
+                assert proof.data["reason"] == "provider_cooldown"
+                assert proof.wake_state == "consumed"
+              end
+
+              assert reload(c).data["last_action"] =~ "Waiting for Slack"
+
+              if c.slack_response == :edited_during_cooldown do
+                Agent.update(messages, fn [root, message] ->
+                  [
+                    root,
+                    Map.merge(message, %{
+                      "text" => "Actually violet.",
+                      "edited" => %{"ts" => ts(DateTime.add(DateTime.utc_now(), 2))}
+                    })
+                  ]
+                end)
+              end
+
+              # Advance only the fixture's provider deadline; no wall-clock sleep.
+              Repo.query!(
+                "UPDATE background_job_rate_limits SET blocked_until = timezone('UTC', clock_timestamp()) - interval '1 second' WHERE queue = 'http_slack'"
+              )
+
+              Execution.execute(job)
+            else
+              result
+            end
 
           if c.slack_response == :lost_response,
             do: assert({:ok, %{state: "reconciling"}} = Execution.execute(job))
@@ -657,7 +726,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
       saved = Repo.get!(PreparedAction, action.id) |> PreparedAction.hydrate_payload()
 
       case c.slack_response do
-        :accepted ->
+        response when response in [:accepted, :locally_deferred, :source_deferred] ->
           assert {:ok, %{state: "sent"}} = result
           assert saved.status == "executed"
           assert reload(c).lifetime_sends == 1
@@ -706,7 +775,7 @@ defmodule Maraithon.Delegations.SlackIngressTest do
           assert saved.payload["_maraithon_execution_attempts"] == 1
           assert reload(c).lifetime_sends == 0
 
-        :edited_before_send ->
+        response when response in [:edited_before_send, :edited_during_cooldown] ->
           assert {:ok, %{state: "superseded"}} = result
           assert (saved.payload["_maraithon_execution_attempts"] || 0) == 0
           assert Agent.get(accepted, & &1) == nil

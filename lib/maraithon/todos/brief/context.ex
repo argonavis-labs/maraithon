@@ -492,7 +492,7 @@ defmodule Maraithon.Todos.Brief.Context do
   defp slack_permalink(user_id, team_id, channel, timestamp) when is_binary(timestamp) do
     with {:ok, token} <- SlackHelpers.resolve_access_token(user_id, team_id),
          {:ok, %{"permalink" => url}} <-
-           Slack.get_message_permalink(token.access_token, channel, timestamp) do
+           Slack.get_message_permalink(token, channel, timestamp) do
       url
     else
       _ -> nil
@@ -551,7 +551,7 @@ defmodule Maraithon.Todos.Brief.Context do
          {:ok, token} <- SlackHelpers.resolve_access_token(user_id, team_id, []) do
       ids
       |> Enum.reduce(%{}, fn id, acc ->
-        case Slack.get_user_info(token.access_token, id) do
+        case Slack.get_user_info(token, id) do
           {:ok, %{"user" => user}} when is_map(user) ->
             name =
               first_present([

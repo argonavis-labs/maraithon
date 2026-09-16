@@ -12,6 +12,37 @@ defmodule Maraithon.Delegations.Receipts do
 
   def proof_fields, do: @fields
 
+  # Called only after the provider worker returned a closed local admission
+  # rejection, under the matching execution claim and the normal write fence.
+  # Commit this evidence with the restored unentered action, or restore neither.
+  def deferred!(action, token, {:rate_limited, seconds, reason}) do
+    %{delegation: d, turn: turn} = Authority.lock_action_scope!(action)
+    attempt = :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
+    retry_at = Maraithon.Runtime.DatabaseClock.now!() |> DateTime.add(max(seconds, 30))
+
+    Outbox.append!(d, "send_deferred", "deferred:#{action.id}:#{attempt}", %{
+      "turn_id" => turn.id,
+      "grant_version" => turn.grant_version,
+      "action_id" => action.id,
+      "confirmed_payload_hash" => action.payload[@hash],
+      "reason" => Atom.to_string(reason),
+      "provider_entered" => false,
+      "retry_at" => DateTime.to_iso8601(retry_at)
+    })
+    |> Event.changeset(%{wake_state: "consumed", consumed_by_turn_id: turn.id})
+    |> Repo.update!()
+
+    provider = if action.action_type == "gmail_send", do: "Gmail", else: "Slack"
+
+    d
+    |> Delegation.changeset(%{
+      revision: d.revision + 1,
+      data:
+        Map.put(d.data, "last_action", "Waiting for #{provider}'s request limit before sending.")
+    })
+    |> Repo.update!()
+  end
+
   # The executor already owns the job fence and delegation/turn/run/action locks.
   # This remains writable after revocation: a receipt is evidence, not new authority.
   def record!(%PreparedAction{authorization_kind: "delegation_grant", status: status} = action)

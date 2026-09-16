@@ -306,6 +306,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     bot_provider = "slack:#{team_id}"
 
     with {:ok, bot_token} <- OAuth.get_valid_access_token(state.user_id, bot_provider) do
+      bot_token = %{access_token: bot_token, provider: bot_provider}
       user_token = resolve_user_token(state.user_id, team_id)
       self_user_ids = resolve_self_user_ids(state.user_id, team_id)
       oldest = slack_oldest_ts(timestamp, state.lookback_hours)
@@ -1052,7 +1053,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
       token ->
         case OAuth.get_valid_access_token(user_id, token.provider) do
-          {:ok, access_token} -> access_token
+          {:ok, access_token} -> %{access_token: access_token, provider: token.provider}
           _ -> nil
         end
     end
@@ -1145,7 +1146,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp slack_access_token_for_thread(user_id, team_id) do
     resolve_user_token(user_id, team_id) ||
       case OAuth.get_valid_access_token(user_id, "slack:#{team_id}") do
-        {:ok, access_token} -> access_token
+        {:ok, access_token} -> %{access_token: access_token, provider: "slack:#{team_id}"}
         _ -> nil
       end
   end
@@ -1363,7 +1364,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
     access_token = team_id && slack_access_token_for_thread(state.user_id, team_id)
 
-    if is_binary(access_token) do
+    if is_map(access_token) do
       user_directory = slack_user_directory(access_token, messages, nil)
 
       Enum.map(messages, fn message ->

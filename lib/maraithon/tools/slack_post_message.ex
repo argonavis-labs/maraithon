@@ -18,7 +18,7 @@ defmodule Maraithon.Tools.SlackPostMessage do
          {:ok, token} <- resolve_token(user_id, team_id, args),
          {:ok, response} <-
            Slack.post_message(
-             token.access_token,
+             token,
              channel,
              text,
              thread_ts: ActionHelpers.optional_string(args, "thread_ts")

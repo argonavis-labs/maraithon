@@ -15,9 +15,7 @@ defmodule Maraithon.Tools.SlackOpenConversation do
          :ok <- validate_user_ids(user_ids),
          {:ok, token} <- resolve_token(user_id, team_id, args),
          {:ok, response} <-
-           Slack.open_conversation(token.access_token, user_ids,
-             return_im: resolve_return_im(args)
-           ) do
+           Slack.open_conversation(token, user_ids, return_im: resolve_return_im(args)) do
       channel = response["channel"] || %{}
 
       {:ok,

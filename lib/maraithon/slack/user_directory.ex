@@ -11,9 +11,10 @@ defmodule Maraithon.Slack.UserDirectory do
 
   def resolve(access_token, user_ids, opts \\ [])
 
-  def resolve(access_token, user_ids, opts) when is_binary(access_token) and is_list(user_ids) do
+  def resolve(%{access_token: _, provider: _} = access_token, user_ids, opts)
+      when is_list(user_ids) do
     max_users = Keyword.get(opts, :max_users, 120)
-    max_concurrency = Keyword.get(opts, :max_concurrency, 6)
+    max_concurrency = 1
     timeout = opts |> Keyword.get(:timeout, :timer.seconds(10)) |> positive_timeout()
 
     user_ids

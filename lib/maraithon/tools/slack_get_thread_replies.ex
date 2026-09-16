@@ -17,7 +17,7 @@ defmodule Maraithon.Tools.SlackGetThreadReplies do
          {:ok, thread_ts} <- ActionHelpers.required_string(args, "thread_ts"),
          {:ok, token} <- resolve_token(user_id, team_id, args),
          {:ok, response} <-
-           Slack.get_thread_replies(token.access_token, channel, thread_ts,
+           Slack.get_thread_replies(token, channel, thread_ts,
              limit: resolve_limit(args),
              oldest: ActionHelpers.optional_string(args, "oldest"),
              latest: ActionHelpers.optional_string(args, "latest"),

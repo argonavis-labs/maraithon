@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-15",
+  "change": "Shared Slack admission and durable proof for locally deferred sends",
+  "deployment": {
+    "status": "pending"
+  },
+  "validation": {
+    "build": "make build passed",
+    "focused_tests": 157,
+    "failures": 0,
+    "quota_and_execution_tests": 87,
+    "existing_slack_reader_tests": 70,
+    "logs": [
+      "/tmp/maraithon-slack-quota-tests.log",
+      "/tmp/maraithon-slack-readers-tests.log",
+      "/tmp/maraithon-slack-quota-build.log"
+    ],
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0
+  },
+  "verified_behaviors": [
+    "Workspace-method cooldown applies across member and bot tokens and channels.",
+    "Different workspace or method is independent; posts also retain a one-second channel deadline.",
+    "HTTP 429 and Slack JSON ratelimited responses preserve Retry-After; absent deadlines default to 30 seconds.",
+    "Failure to acquire a second lane releases the first lock.",
+    "A fenced locally rejected send restores unentered status atomically with send_deferred evidence.",
+    "Gmail and both Slack actors retry after local cooldown without duplicate sends.",
+    "A changed reply during cooldown supersedes the old action before sending.",
+    "Lost responses, Slack internal errors and malformed success remain uncertain.",
+    "Source and send delays update the shared task summary without closing the todo."
+  ],
+  "limits": [
+    "Slack admission and retry evidence use local PostgreSQL leases and mock providers, not live Slack.",
+    "Native clients consume the existing shared summary field; native builds and visual checks were not repeated for this server-only change.",
+    "The queued October memory eval remains scheduled for September 16 at 08:00 Eastern; no duplicate was started.",
+    "Slack pagination, whole-app recovery and the real longevity canary remain unfinished."
+  ]
+}

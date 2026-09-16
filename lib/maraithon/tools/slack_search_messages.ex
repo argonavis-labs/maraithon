@@ -16,7 +16,7 @@ defmodule Maraithon.Tools.SlackSearchMessages do
          {:ok, query} <- ActionHelpers.required_string(args, "query"),
          {:ok, token} <- resolve_token(user_id, team_id, args),
          {:ok, response} <-
-           Slack.search_messages(token.access_token, query,
+           Slack.search_messages(token, query,
              count: resolve_count(args),
              page: ActionHelpers.optional_integer(args, "page"),
              sort: ActionHelpers.optional_string(args, "sort"),

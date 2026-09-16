@@ -59,7 +59,7 @@ defmodule Maraithon.Todos.Brief.SearchedSlackContext do
       _ ->
         with {:ok, token} <- SlackHelpers.resolve_access_token(user_id, team),
              {:ok, %{"channel" => %{"name" => name}}} <-
-               Slack.get_channel_info(token.access_token, channel) do
+               Slack.get_channel_info(token, channel) do
           name
         else
           _ -> nil

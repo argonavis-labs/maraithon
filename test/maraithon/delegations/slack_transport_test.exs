@@ -317,17 +317,17 @@ defmodule Maraithon.Delegations.SlackTransportTest do
     end
   end
 
-  test "Slack partial errors and malformed success stay uncertain after one post", c do
-    action = action(c)
-    auth(c)
-    channel(c)
-
-    for response <- [
-          %{"ok" => false, "error" => "internal_error"},
-          %{"ok" => false, "error" => "fatal_error"},
-          %{"ok" => true, "ts" => @sent, "channel" => "COTHER"}
-        ] do
-      Bypass.expect_once(c.bypass, "POST", "/api/chat.postMessage", &json(&1, response))
+  for {name, response} <- [
+        {"internal error", %{"ok" => false, "error" => "internal_error"}},
+        {"fatal error", %{"ok" => false, "error" => "fatal_error"}},
+        {"malformed success", %{"ok" => true, "ts" => @sent, "channel" => "COTHER"}}
+      ] do
+    @tag response: response
+    test "Slack #{name} stays uncertain after one post", c do
+      action = action(c)
+      auth(c)
+      channel(c)
+      Bypass.expect_once(c.bypass, "POST", "/api/chat.postMessage", &json(&1, c.response))
       assert {:error, %{class: :ambiguous} = error} = SlackPostMessage.execute(action.payload)
       assert TelegramAssistant.prepared_action_error_class(error) == :ambiguous
     end

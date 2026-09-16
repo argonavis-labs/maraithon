@@ -200,10 +200,10 @@ defmodule Maraithon.Delegations.Execution do
   defp source_hold(job, reason) do
     case reason do
       {:rate_limited, seconds, _} ->
-        {:error, {:retry_after, max(seconds, 30), :source_rate_limited}}
+        Jobs.provider_wait(job, seconds)
 
       {:rate_limited, _} ->
-        {:error, {:retry_after, 30, :source_rate_limited}}
+        Jobs.provider_wait(job, 30)
 
       _ ->
         Jobs.transaction(job, fn context ->

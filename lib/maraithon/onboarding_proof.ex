@@ -227,7 +227,9 @@ defmodule Maraithon.OnboardingProof do
 
     with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, provider),
          {:ok, response} <-
-           Slack.search_messages(access_token, "after:#{since}",
+           Slack.search_messages(
+             %{access_token: access_token, provider: provider},
+             "after:#{since}",
              count: @slack_sample_limit,
              sort: "timestamp",
              sort_dir: "desc"

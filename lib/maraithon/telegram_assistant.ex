@@ -2467,42 +2467,60 @@ defmodule Maraithon.TelegramAssistant do
           if execution_token_matches?(action, token) do
             attempts = prepared_execution_attempts(action.payload || %{})
 
-            if durable? and error_class in [:transient, :ambiguous] and attempts < max_attempts do
-              payload = clear_prepared_execution_claim(action.payload || %{})
+            deferral = Maraithon.HTTP.Admission.local_deferral(reason)
 
-              case update_prepared_action(action, %{
-                     status: "confirmed",
-                     error: compact_prepared_action_error(reason),
-                     payload: payload
-                   }) do
-                {:ok, retryable_action} ->
-                  {:retry, retryable_action}
+            cond do
+              deferral && action.authorization_kind == "delegation_grant" &&
+                  action.action_type in ~w(gmail_send slack_post) ->
+                Maraithon.Delegations.Receipts.deferred!(action, token, deferral)
 
-                {:error, update_reason} ->
-                  Repo.rollback({:prepared_action_status_update_failed, update_reason})
-              end
-            else
-              error_checkpoint = prepared_execution_error_checkpoint(reason)
+                payload =
+                  action.payload
+                  |> clear_prepared_execution_claim()
+                  |> Map.put(@prepared_execution_attempts_key, 0)
 
-              payload =
-                action.payload
-                |> Kernel.||(%{})
-                |> clear_prepared_execution_claim()
-                |> reset_prepared_result_delivery()
-                |> Map.put(@prepared_execution_result_key, error_checkpoint)
-                |> Map.put(@prepared_execution_error_key, error_checkpoint)
+                retryable =
+                  update_prepared_action_or_rollback(action, %{error: nil, payload: payload})
 
-              case update_prepared_action(action, %{
-                     status: "failed",
-                     error: compact_prepared_action_error(reason),
-                     payload: payload
-                   }) do
-                {:ok, failed_action} ->
-                  {:failed, Maraithon.Delegations.Receipts.record!(failed_action)}
+                {:deferred, retryable, deferral}
 
-                {:error, update_reason} ->
-                  Repo.rollback({:prepared_action_status_update_failed, update_reason})
-              end
+              durable? and error_class in [:transient, :ambiguous] and attempts < max_attempts ->
+                payload = clear_prepared_execution_claim(action.payload || %{})
+
+                case update_prepared_action(action, %{
+                       status: "confirmed",
+                       error: compact_prepared_action_error(reason),
+                       payload: payload
+                     }) do
+                  {:ok, retryable_action} ->
+                    {:retry, retryable_action}
+
+                  {:error, update_reason} ->
+                    Repo.rollback({:prepared_action_status_update_failed, update_reason})
+                end
+
+              true ->
+                error_checkpoint = prepared_execution_error_checkpoint(reason)
+
+                payload =
+                  action.payload
+                  |> Kernel.||(%{})
+                  |> clear_prepared_execution_claim()
+                  |> reset_prepared_result_delivery()
+                  |> Map.put(@prepared_execution_result_key, error_checkpoint)
+                  |> Map.put(@prepared_execution_error_key, error_checkpoint)
+
+                case update_prepared_action(action, %{
+                       status: "failed",
+                       error: compact_prepared_action_error(reason),
+                       payload: payload
+                     }) do
+                  {:ok, failed_action} ->
+                    {:failed, Maraithon.Delegations.Receipts.record!(failed_action)}
+
+                  {:error, update_reason} ->
+                    Repo.rollback({:prepared_action_status_update_failed, update_reason})
+                end
             end
           else
             {:error, action, :prepared_action_execution_in_progress}
@@ -2522,6 +2540,9 @@ defmodule Maraithon.TelegramAssistant do
       end)
 
     case result do
+      {:deferred, retryable_action, deferral} ->
+        {:error, retryable_action, deferral}
+
       {:retry, retryable_action} ->
         {:error, retryable_action, reason}
 

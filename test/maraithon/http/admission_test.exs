@@ -121,6 +121,53 @@ defmodule Maraithon.HTTP.AdmissionTest do
     assert {:ok, :recovered} = run(ctx.key, fn -> {:ok, :recovered} end)
   end
 
+  test "a busy second lane releases the first lane in the same transaction", ctx do
+    parent = self()
+    first = {"slack", ctx.key, 0}
+    second = {"slack_channel", ctx.key, 0}
+
+    holder =
+      Task.Supervisor.async_nolink(ctx.supervisor, fn ->
+        run([second], fn ->
+          send(parent, :channel_held)
+
+          receive do
+            :finish -> {:ok, :finished}
+          end
+        end)
+      end)
+
+    assert_receive :channel_held
+
+    assert {:error, {:rate_limited, 1, :provider_busy}} =
+             run([first, second], fn -> flunk("entered occupied channel") end)
+
+    assert {:ok, :free} = run([first], fn -> {:ok, :free} end)
+    send(holder.pid, :finish)
+    assert {:ok, :finished} = Task.await(holder)
+  end
+
+  test "only a closed local rejection proves non-entry, including wrapped tool errors" do
+    for kind <- [:provider_busy, :provider_cooldown], provider <- [:gmail, :slack] do
+      reason = {:rate_limited, 30, kind}
+      assert Admission.local_deferral(reason) == reason
+      assert Admission.local_deferral({:provider_error, provider, reason, "safe copy"}) == reason
+    end
+
+    for reason <- [
+          {:rate_limited, 30, :provider_limited},
+          {:http_status, 429, "limited"},
+          %{class: :ambiguous, reason: {:rate_limited, 30, :provider_busy}},
+          {:provider_error, :calendar, {:rate_limited, 30, :provider_busy}, "copy"}
+        ] do
+      assert Admission.local_deferral(reason) == nil
+    end
+  end
+
+  defp run(lanes, request) when is_list(lanes) do
+    Sandbox.unboxed_run(Repo, fn -> Admission.run(lanes, 5_000, request) end)
+  end
+
   defp run(key, request) do
     Sandbox.unboxed_run(Repo, fn -> Admission.run({"gmail", key}, 5_000, request) end)
   end

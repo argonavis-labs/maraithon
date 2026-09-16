@@ -34,7 +34,7 @@ defmodule Maraithon.Delegations.SlackIdentity do
              required_scopes: scopes,
              strict_identity?: true
            ),
-         {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token.access_token),
+         {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token),
          true <- auth["team_id"] == team and is_binary(auth["user_id"]),
          true <- valid_author?(auth, actor, member),
          sender when not is_nil(sender) <- ConnectedAccounts.get(todo.user_id, token.provider) do
@@ -122,7 +122,7 @@ defmodule Maraithon.Delegations.SlackIdentity do
          "actor" => "as_assistant"
        }) do
     with {:ok, %{"channel" => channel}} <-
-           Slack.open_conversation(token.access_token, [member], return_im: true),
+           Slack.open_conversation(token, [member], return_im: true),
          true <- available?(channel, channel["id"]) and channel["is_im"] == true,
          true <- channel["user"] == member and channel["id"] != source["id"] do
       {:ok, channel["id"]}
@@ -135,7 +135,7 @@ defmodule Maraithon.Delegations.SlackIdentity do
 
   defp destination(token, source, _identity) do
     with {:ok, %{"channel" => channel}} <-
-           Slack.get_channel_info(token.access_token, source["id"]),
+           Slack.get_channel_info(token, source["id"]),
          true <- available?(channel, source["id"]) do
       {:ok, channel["id"]}
     else
@@ -160,12 +160,12 @@ defmodule Maraithon.Delegations.SlackIdentity do
              strict_identity?: true
            ),
          true <- token.provider == identity["provider"],
-         {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token.access_token),
+         {:ok, auth} <- SlackAPI.api_request(:post, "auth.test", token),
          true <-
            auth["team_id"] == identity["team_id"] and auth["user_id"] == identity["user_id"],
          true <- auth["bot_id"] == identity["bot_id"],
          true <- valid_author?(auth, identity["actor"], identity["user_id"]) do
-      {:ok, token.access_token}
+      {:ok, token}
     else
       {:error, _} = error -> error
       _ -> {:error, :slack_identity_changed}

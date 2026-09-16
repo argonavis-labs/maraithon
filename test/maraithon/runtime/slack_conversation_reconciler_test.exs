@@ -54,7 +54,7 @@ defmodule Maraithon.Runtime.SlackConversationReconcilerTest do
   test "plans readable conversation fan-outs and seals history plus replies before its cursor" do
     now = ~U[2026-08-31 12:00:00Z]
     user_id = "slack-reconciler@example.com"
-    team_id = "T-RECONCILE"
+    team_id = "TRECONCILE"
     bypass = Bypass.open()
 
     _user = Accounts.get_or_create_user_by_email(user_id)
@@ -69,7 +69,7 @@ defmodule Maraithon.Runtime.SlackConversationReconcilerTest do
              })
 
     assert {:ok, _token} =
-             OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
+             OAuth.store_tokens(user_id, "slack:#{team_id}:user:USELF", %{
                access_token: "xoxp-user-token",
                scopes: [
                  "channels:read",

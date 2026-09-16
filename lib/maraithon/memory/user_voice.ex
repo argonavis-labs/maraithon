@@ -212,13 +212,13 @@ defmodule Maraithon.Memory.UserVoice do
              strict_identity?: is_binary(slack_user_id),
              required_scopes: ["search:read"]
            ),
-         {:ok, auth} <- Maraithon.OAuth.Slack.api_request(:post, "auth.test", token.access_token),
+         {:ok, auth} <- Maraithon.OAuth.Slack.api_request(:post, "auth.test", token),
          true <-
            auth["team_id"] == team_id and is_binary(auth["user_id"]) and is_nil(auth["bot_id"]),
          true <- token.provider == "slack:#{team_id}:user:#{auth["user_id"]}",
          true <- is_nil(slack_user_id) or slack_user_id == auth["user_id"],
          {:ok, response} <-
-           Slack.search_messages(token.access_token, query,
+           Slack.search_messages(token, query,
              count: max_samples(opts),
              sort: "timestamp",
              sort_dir: "desc"

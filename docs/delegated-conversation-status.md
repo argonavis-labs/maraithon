@@ -289,6 +289,18 @@ The server build and 114 focused checks passed. They cover separate database ses
 
 Google error normalisation shipped in commit `0f3f01f7`, workflow `35038983064`, revision `maraithon-00380-49b`. Shared admission commit `4a8a17f1` deployed through workflow `35040624836` to revision `maraithon-00381-gxc`, serving all traffic. Cloud Run execution `maraithon-todo-validation-6wkhz` verified Kent’s Runner mailbox and October. The personal Gmail probe returned a retry signal with no active persisted cooldown at the end of the check; its exact subtype was not recorded. Follow-up execution `maraithon-todo-validation-xgrl8` verified that mailbox on its first attempt. All three returned the expected address and stable admission key. Both jobs used the deployed image, made no model calls, sent no messages, and created no calendar events. The October memory eval remains pending for September 16 at 08:00 Eastern. [Gmail admission evidence](evidence/delegated-conversations/2026-09-15-gmail-admission.json).
 
+## Shared Slack admission and safe local deferral
+
+Slack API calls now share admission by workspace and method. User and bot tokens for the same workspace use the same limit. Message posts also share a one-second channel deadline. A throttle blocks that method across the workspace while unrelated methods and workspaces can continue, matching [Slack's documented rate-limit scope](https://docs.slack.dev/apis/web-api/rate-limits/).
+
+This extends the existing Gmail admission helper and cooldown table. The bounded HTTP worker owns the transaction locks. A failed attempt to acquire both Slack lanes releases either lock already acquired. HTTP 429 and Slack's JSON `ratelimited` response preserve `Retry-After`; missing deadlines use 30 seconds. Bare Slack tokens cannot bypass the workspace binding. Sync, voice sampling, identity checks, tools, source reads and reconciliation all pass their resolved account identity. OAuth token exchange and revocation remain separate control-plane operations.
+
+A send rejected locally before its provider request now waits safely. Under the current worker lease and action claim, the executor records `send_deferred` evidence and restores the action's unentered status in one transaction. The evidence keeps the action, turn, grant, payload hash and retry deadline. A later attempt rechecks the conversation; a changed reply supersedes the old send. A lost response, Slack partial failure or malformed receipt still requires reconciliation. This does not infer delivery from similar text or automatically replay an uncertain write.
+
+Provider delays during source refresh, cited recall and sending also update the shared task summary. Web, Mac and iPhone receive the waiting explanation through the existing `last_action` field. No new native code, database table or coordination process is needed.
+
+The server build and 157 focused checks passed. Coverage includes cross-token cooldowns, separate workspace and method lanes, channel pacing, lock release, Gmail and Slack deferral under real local leases, changed evidence before retry, uncertain sends, and existing Slack readers. Deployment is pending. No live Slack exchange is part of this change; Kent deferred that eval and autonomous Slack sends remain disabled.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.

@@ -16,7 +16,7 @@ defmodule Maraithon.Tools.SlackListMessages do
          {:ok, channel} <- ActionHelpers.required_string(args, "channel"),
          {:ok, token} <- resolve_token(user_id, team_id, args),
          {:ok, response} <-
-           Slack.get_conversation_history(token.access_token, channel,
+           Slack.get_conversation_history(token, channel,
              limit: resolve_limit(args),
              oldest: ActionHelpers.optional_string(args, "oldest"),
              latest: ActionHelpers.optional_string(args, "latest"),

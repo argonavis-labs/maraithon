@@ -48,7 +48,7 @@ defmodule Maraithon.Runtime.SlackConversationReconciler do
                SlackHelpers.resolve_access_token(account.user_id, team_id,
                  token_preference: "user"
                ),
-             {:ok, conversations} <- list_all_conversations(token.access_token) do
+             {:ok, conversations} <- list_all_conversations(token) do
           due =
             conversations
             |> Enum.filter(&readable?/1)
@@ -94,9 +94,9 @@ defmodule Maraithon.Runtime.SlackConversationReconciler do
            SlackHelpers.resolve_access_token(account.user_id, team_id, token_preference: "user"),
          {oldest, expected_lower} <- conversation_window(account, channel_id, now, opts),
          newest = Integer.to_string(DateTime.to_unix(now, :second)),
-         {:ok, roots} <- fetch_all_history(token.access_token, channel_id, oldest, newest),
+         {:ok, roots} <- fetch_all_history(token, channel_id, oldest, newest),
          {:ok, replies} <-
-           fetch_thread_replies(token.access_token, channel_id, roots, oldest, newest),
+           fetch_thread_replies(token, channel_id, roots, oldest, newest),
          messages <- exact_window_messages(roots ++ replies, oldest, newest),
          :ok <- persist_messages(account, team_id, channel_id, messages) do
       {:ok,

@@ -269,9 +269,12 @@ defmodule Maraithon.HTTP do
   defp positive_limit(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_limit(_value, default), do: default
 
-  defp handle_response(%Response{status: status, body: body}, _url, _opts)
-       when status in 200..299,
-       do: {:ok, body}
+  defp handle_response(%Response{status: status, body: body} = response, _url, opts)
+       when status in 200..299 do
+    if opts[:slack_errors?] && match?(%{"ok" => false, "error" => "ratelimited"}, body),
+      do: rate_limited(response),
+      else: {:ok, body}
+  end
 
   defp handle_response(%Response{status: 401}, _url, _opts) do
     {:error, :unauthorized}

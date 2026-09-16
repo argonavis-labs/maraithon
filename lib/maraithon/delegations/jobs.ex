@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Jobs do
   @moduledoc "Durable turn admission and worker results in the existing runtime lanes."
   import Ecto.Query
   alias Maraithon.{Accounts, LLM, Repo}
-  alias Maraithon.Delegations.{Authority, Binding, Outbox, Turn}
+  alias Maraithon.Delegations.{Authority, Binding, Delegation, Outbox, Turn}
 
   alias Maraithon.Runtime.{
     BackgroundJob,
@@ -128,6 +128,23 @@ defmodule Maraithon.Delegations.Jobs do
     run = Repo.get_by!(Run, id: turn.run_id, user_id: d.user_id) |> Run.hydrate_payloads()
     binding = run.prompt_snapshot[Binding.key()]
     Authority.lock_context!(binding, d.user_id)
+  end
+
+  def provider_wait(job, seconds, reason \\ :source_rate_limited) do
+    case transaction(job, fn %{delegation: d} ->
+           provider = if d.provider == "gmail", do: "Gmail", else: "Slack"
+           label = "Waiting for #{provider}'s request limit before continuing."
+
+           d
+           |> Delegation.changeset(%{
+             revision: d.revision + 1,
+             data: Map.put(d.data, "last_action", label)
+           })
+           |> Repo.update!()
+         end) do
+      {:ok, %Delegation{}} -> {:error, {:retry_after, max(seconds, 30), reason}}
+      other -> other
+    end
   end
 
   def transaction(%BackgroundJob{} = job, fun) do

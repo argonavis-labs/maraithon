@@ -1855,7 +1855,7 @@ defmodule Maraithon.Delegations.IngressTest do
     {d, grant, %{id: Ecto.UUID.generate(), kind: "decision", data: %{"turn_id" => turn.id}}}
   end
 
-  for response <- [:accepted, :lost_response, :rewritten_response, :unproven] do
+  for response <- [:accepted, :locally_deferred, :lost_response, :rewritten_response, :unproven] do
     @tag timeout: 30_000, send_response: response
     test "leased sender #{response} never replays an entered send", c do
       alias Maraithon.Delegations.{Execution, Turn}
@@ -1908,7 +1908,7 @@ defmodule Maraithon.Delegations.IngressTest do
         assert sent =~ "Got it. Indigo."
         Agent.update(accepted, fn _ -> sent end)
 
-        if c.send_response == :accepted,
+        if c.send_response in [:accepted, :locally_deferred],
           do: json(conn, %{"id" => "445566", "threadId" => "aabbcc"}),
           else: Plug.Conn.resp(conn, 503, "Lost response after accepting the message")
       end)
@@ -1940,9 +1940,43 @@ defmodule Maraithon.Delegations.IngressTest do
                end)
 
       run_leased_job(node, partitions, "delegation_send", fn job ->
+        if c.send_response == :locally_deferred do
+          {:ok, access} = Maraithon.Connectors.GmailAccess.for_account(c.user_id, c.account.id)
+
+          assert {:error, {:rate_limited, 90, :provider_limited}} =
+                   Maraithon.HTTP.Admission.run({"gmail", access.mailbox_key}, 5_000, fn ->
+                     {:error, {:rate_limited, 90, :provider_limited}}
+                   end)
+
+          # Exercise quota contention after the action claim, before Gmail's
+          # read-only sender verification and final send request can run.
+          Maraithon.AssistantChat.Execution.with_authority(job, fn ->
+            assert {:error, held, {:rate_limited, seconds, :provider_cooldown}} =
+                     Maraithon.TelegramAssistant.execute_granted_action(action)
+
+            assert seconds in 89..90
+            assert Maraithon.Delegations.Actions.unentered?(held)
+          end)
+
+          assert Agent.get(accepted, & &1) == nil
+
+          proof =
+            Repo.get_by!(Event, delegation_id: c.delegation.id, kind: "send_deferred")
+            |> Event.hydrate()
+
+          assert proof.data["provider_entered"] == false
+          assert proof.data["action_id"] == action.id
+          assert proof.wake_state == "consumed"
+
+          Repo.query!(
+            "UPDATE background_job_rate_limits SET blocked_until = timezone('UTC', clock_timestamp()) - interval '1 second' WHERE queue = 'http_gmail' AND rate_limit_key = $1",
+            [access.mailbox_key]
+          )
+        end
+
         result = Execution.execute(job)
 
-        if c.send_response == :accepted do
+        if c.send_response in [:accepted, :locally_deferred] do
           assert {:ok, %{state: "sent"}} = result
           assert {:ok, %{state: "superseded"}} = Execution.execute(job)
         else
@@ -1953,7 +1987,7 @@ defmodule Maraithon.Delegations.IngressTest do
         result
       end)
 
-      if c.send_response != :accepted do
+      if c.send_response not in [:accepted, :locally_deferred] do
         alias Maraithon.TelegramAssistant.ActionReconciliation
         assert Repo.get!(PreparedAction, action.id).status == "execution_unknown"
         assert Repo.get!(Delegation, c.delegation.id).lifetime_sends == 0
@@ -2040,7 +2074,7 @@ defmodule Maraithon.Delegations.IngressTest do
         end)
       end
 
-      if c.send_response in [:accepted, :lost_response, :rewritten_response] do
+      if c.send_response in [:accepted, :locally_deferred, :lost_response, :rewritten_response] do
         assert {:ok, :ok} =
                  Repo.transaction(fn ->
                    Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(c.user_id)

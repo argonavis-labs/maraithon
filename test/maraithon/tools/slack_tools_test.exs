@@ -17,6 +17,13 @@ defmodule Maraithon.Tools.SlackToolsTest do
       Application.put_env(:maraithon, :slack, original_slack)
     end)
 
+    for suffix <- ~w(1 2 2b 3 4) do
+      {:ok, _} =
+        Maraithon.Accounts.get_or_create_user_by_email(
+          "slack-tool-user-#{suffix}@example.invalid"
+        )
+    end
+
     :ok
   end
 
@@ -26,7 +33,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
     assert {:ok, _token} =
-             OAuth.store_tokens("slack-tool-user-1", "slack:T123", %{
+             OAuth.store_tokens("slack-tool-user-1@example.invalid", "slack:T123", %{
                access_token: "xoxb-bot-token",
                scopes: ["channels:read", "channels:history"]
              })
@@ -52,7 +59,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
 
     assert {:ok, result} =
              SlackListConversations.execute(%{
-               "user_id" => "slack-tool-user-1",
+               "user_id" => "slack-tool-user-1@example.invalid",
                "team_id" => "T123",
                "types" => "public_channel,private_channel"
              })
@@ -68,7 +75,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
     assert {:ok, _token} =
-             OAuth.store_tokens("slack-tool-user-2", "slack:T123", %{
+             OAuth.store_tokens("slack-tool-user-2@example.invalid", "slack:T123", %{
                access_token: "xoxb-bot-token",
                scopes: ["channels:history"]
              })
@@ -100,7 +107,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
 
     assert {:ok, result} =
              SlackListMessages.execute(%{
-               "user_id" => "slack-tool-user-2",
+               "user_id" => "slack-tool-user-2@example.invalid",
                "team_id" => "T123",
                "channel" => "C111",
                "limit" => 2
@@ -117,13 +124,13 @@ defmodule Maraithon.Tools.SlackToolsTest do
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
     assert {:ok, _bot_token} =
-             OAuth.store_tokens("slack-tool-user-2b", "slack:T123", %{
+             OAuth.store_tokens("slack-tool-user-2b@example.invalid", "slack:T123", %{
                access_token: "xoxb-bot-token",
                scopes: ["channels:history"]
              })
 
     assert {:ok, _user_token} =
-             OAuth.store_tokens("slack-tool-user-2b", "slack:T123:user:U999", %{
+             OAuth.store_tokens("slack-tool-user-2b@example.invalid", "slack:T123:user:U999", %{
                access_token: "xoxp-user-token",
                scopes: ["channels:history", "groups:history", "im:history", "mpim:history"]
              })
@@ -144,7 +151,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
 
     assert {:ok, result} =
              SlackListMessages.execute(%{
-               "user_id" => "slack-tool-user-2b",
+               "user_id" => "slack-tool-user-2b@example.invalid",
                "team_id" => "T123",
                "channel" => "C111"
              })
@@ -159,7 +166,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
     assert {:ok, _token} =
-             OAuth.store_tokens("slack-tool-user-3", "slack:T123", %{
+             OAuth.store_tokens("slack-tool-user-3@example.invalid", "slack:T123", %{
                access_token: "xoxb-bot-token",
                scopes: ["channels:history"]
              })
@@ -185,7 +192,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
 
     assert {:ok, result} =
              SlackGetThreadReplies.execute(%{
-               "user_id" => "slack-tool-user-3",
+               "user_id" => "slack-tool-user-3@example.invalid",
                "team_id" => "T123",
                "channel" => "C111",
                "thread_ts" => "1762502400.000001"
@@ -202,7 +209,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
     assert {:ok, _token} =
-             OAuth.store_tokens("slack-tool-user-4", "slack:T123:user:U999", %{
+             OAuth.store_tokens("slack-tool-user-4@example.invalid", "slack:T123:user:U999", %{
                access_token: "xoxp-user-token",
                scopes: ["search:read"]
              })
@@ -236,7 +243,7 @@ defmodule Maraithon.Tools.SlackToolsTest do
 
     assert {:ok, result} =
              SlackSearchMessages.execute(%{
-               "user_id" => "slack-tool-user-4",
+               "user_id" => "slack-tool-user-4@example.invalid",
                "team_id" => "T123",
                "query" => "send the deck",
                "count" => 5

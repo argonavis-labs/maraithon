@@ -198,27 +198,51 @@ defmodule Maraithon.OAuth.Slack do
   @doc """
   Makes an authenticated request to the Slack API.
   """
-  def api_request(method, endpoint, access_token, body \\ nil) do
-    url = "#{api_base_url()}/#{endpoint}"
-    headers = [{"Authorization", "Bearer #{access_token}"}]
+  def api_request(method, endpoint, access, body \\ nil)
 
-    result =
-      case method do
-        :get -> HTTP.get(url, headers)
-        :post -> HTTP.post_json(url, body || %{}, headers)
+  def api_request(method, endpoint, %{access_token: token, provider: provider}, body)
+      when is_binary(token) and is_binary(provider) do
+    with [_, team] <- Regex.run(~r/^slack:([A-Z0-9]+)(?::user:[A-Z0-9]+)?$/, provider),
+         uri = URI.parse(endpoint),
+         api_method when is_binary(api_method) <- uri.path,
+         true <- Regex.match?(~r/^[a-z][a-zA-Z0-9.]+$/, api_method) do
+      url = "#{api_base_url()}/#{endpoint}"
+      headers = [{"Authorization", "Bearer #{token}"}]
+
+      channel =
+        (body || %{})[:channel] || (body || %{})["channel"] ||
+          URI.decode_query(uri.query || "")["channel"]
+
+      lanes = [{"slack", admission_key([team, api_method]), 0}]
+
+      lanes =
+        if api_method == "chat.postMessage" and is_binary(channel) and channel != "",
+          do: lanes ++ [{"slack_channel", admission_key([team, channel]), 1}],
+          else: lanes
+
+      opts = [admission: lanes, slack_errors?: true]
+
+      result =
+        case method do
+          :get -> HTTP.get(url, headers, opts)
+          :post -> HTTP.post_json(url, body || %{}, headers, opts)
+        end
+
+      case result do
+        {:ok, %{"ok" => true} = response} -> {:ok, response}
+        {:ok, %{"ok" => false, "error" => error}} -> {:error, {:slack_error, error}}
+        {:error, _} = error -> error
+        _ -> {:error, :invalid_slack_response}
       end
-
-    case result do
-      {:ok, %{"ok" => true} = response} ->
-        {:ok, response}
-
-      {:ok, %{"ok" => false, "error" => error}} ->
-        {:error, {:slack_error, error}}
-
-      {:error, reason} ->
-        {:error, reason}
+    else
+      _ -> {:error, :slack_workspace_required}
     end
   end
+
+  def api_request(_, _, _, _), do: {:error, :slack_workspace_required}
+
+  defp admission_key(parts),
+    do: :crypto.hash(:sha256, Enum.join(parts, ":")) |> Base.encode16(case: :lower)
 
   # ===========================================================================
   # Private Functions

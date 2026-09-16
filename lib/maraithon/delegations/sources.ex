@@ -133,10 +133,10 @@ defmodule Maraithon.Delegations.Sources do
     # A rate limit is a queue cooldown, not a new model call or a tight retry.
     case reason do
       {:rate_limited, seconds, _} when is_integer(seconds) ->
-        {:error, {:retry_after, max(seconds, 30), reason}}
+        Jobs.provider_wait(job, seconds, reason)
 
       {:rate_limited, _} ->
-        {:error, {:retry_after, 30, reason}}
+        Jobs.provider_wait(job, 30, reason)
 
       {:http_error, _} when job.attempts + 1 < job.max_attempts ->
         {:error, :source_temporarily_unavailable}

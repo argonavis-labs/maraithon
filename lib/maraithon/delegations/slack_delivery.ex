@@ -110,8 +110,10 @@ defmodule Maraithon.Delegations.SlackDelivery do
 
       # Once postMessage is entered, even Slack's internal_error can follow a
       # committed write. The prepared-action executor must retain uncertainty.
-      result ->
-        {:error, %{class: :ambiguous, code: :slack_delivery_not_proven, reason: result}}
+      {:error, reason} = result ->
+        if Maraithon.HTTP.Admission.local_deferral(reason),
+          do: result,
+          else: {:error, %{class: :ambiguous, code: :slack_delivery_not_proven, reason: result}}
     end
   end
 
