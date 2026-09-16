@@ -194,7 +194,10 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         trace: Maraithon.Delegations.Audit.page(@user, d.id)
       }
     else
-      %{actions: action_details(job, nil)}
+      %{
+        actions: action_details(job, nil),
+        proposal_runtime: EvaluationProposal.diagnostics(job)
+      }
     end
   end
 

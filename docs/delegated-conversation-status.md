@@ -843,7 +843,7 @@ Read-only status `35140500627` then confirmed `waiting_for_proposal` with
 The only recorded action is the same executed initial email. Proposal generation
 and acceptance remain unverified.
 
-## Remaining work
+## Read earlier conversation windows
 
 The date-window history reader is now implemented. A model may use its existing
 single research step to request up to 31 days of earlier conversation evidence.
@@ -860,8 +860,26 @@ read-only memory probe now also clears the fact ledger in memory and checks
 that the delivered answer can be recovered through this history path.
 `make build` passed, and a provider-free request check accepted a bounded window
 while rejecting an oversized window, an account override and a fact write.
-Automated tests were not run under the manual-first policy. Deployment and live
-history verification are pending.
+Automated tests were not run under the manual-first policy.
+
+Commit `1d9bd2ab` deployed through successful workflow `35141593439` to revision
+`maraithon-00438-rfs`, serving all traffic. Read-only workflow `35142254118`
+passed against October's completed information conversation. With the prompt
+cache and fact ledger cleared in memory, the reader recovered the delivered
+counterparty answer through the synchronized event history and verified Gmail
+content. It made zero model calls, sent no messages, created no calendar events
+and changed no conversation records. This does not prove a later model choosing
+the read, Slack retrieval or months of retention.
+[Live history-read evidence](evidence/delegated-conversations/2026-09-16-uncited-history-recall.json).
+
+The compatibility follow-up in `16fd7d9c` excludes only the six messages visible
+to the model from history selection, so older snapshots with larger caches
+remain readable. The build passed. Proposal diagnostics now report a bounded
+Chief of Staff checkpoint summary without memo text or source content, to help
+explain why an eligible task has not received a proposal. That build also passed;
+these follow-ups have not deployed yet.
+
+## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
@@ -870,6 +888,6 @@ history verification are pending.
 5. Verify the revised call budget across the remaining paths and reduce redundant calls and daily workload volume. The information eval's two calls per turn meet the revised ordinary-turn target; live research turns have three settled calls with independent review; repair still needs verification against that ceiling. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 6. Manually verify the account-matching consumer with explicit user-selected calendars. Deployment, complete availability ingestion and live inventory presentation are verified. The replacement window includes unchanged events and reconciles local deletions; explicit bindings and a five-minute limit control use in slot proposals. Final booking always checks Google. Live coverage must establish the selected window and fallback behavior; a local capture timestamp does not prove remote CalDAV freshness.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. A later live model turn using that stored fact remains unverified. Compact People context still needs live verification. The original task email can now supply evidence for reviewed facts; bounded selection of other uncaptured historical messages remains unfinished. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. A later live model turn using that stored fact remains unverified. Compact People context still needs live verification. The original task email can now supply evidence for reviewed facts; bounded date-window selection of synchronized historical messages now has live Gmail read evidence; a model using that path and Slack recall remain unverified. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.

@@ -1,5 +1,6 @@
 defmodule Maraithon.Delegations.EvaluationProposal do
   @moduledoc "Controlled provider fixture that waits for a real Chief of Staff proposal and UI acceptance."
+  import Ecto.Query
   alias Maraithon.{Crm, Delegations, Repo}
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ChiefOfStaff.Skills.DelegationProposals
@@ -7,6 +8,31 @@ defmodule Maraithon.Delegations.EvaluationProposal do
   alias Maraithon.Crm.Observation
   alias Maraithon.Runtime.JobAuthority
   alias Maraithon.Todos.{Todo, Workflow}
+
+  def diagnostics(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
+    Repo.all(
+      from a in Maraithon.Agents.Agent,
+        where: a.user_id == ^job.user_id and a.behavior == "ai_chief_of_staff",
+        order_by: [desc: a.updated_at],
+        limit: 3
+    )
+    |> Enum.map(fn agent ->
+      snapshot = Maraithon.Runtime.Snapshot.latest(agent.id) || %{}
+      state = snapshot[:behavior_state] || %{}
+
+      %{
+        agent_id: agent.id,
+        status: agent.status,
+        install_status: agent.install_status,
+        snapshot: Map.take(snapshot, [:sequence_num, :state_name]),
+        memo_updated_at: get_in(state, [:cycle_memory, "updated_at"]),
+        pending_skill: state[:pending_effect_skill_id],
+        cycle_memo_generated: state[:cycle_memo_generated]
+      }
+    end)
+  end
+
+  def diagnostics(_job), do: nil
 
   def prepare(job, todo, message) do
     JobAuthority.transaction(job, fn ->
