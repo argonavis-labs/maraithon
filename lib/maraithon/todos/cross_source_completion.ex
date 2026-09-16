@@ -673,7 +673,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp observation_evidence(user_id, cutoff) do
     Repo.all(
-      from(o in Observation,
+      from(o in Maraithon.AssistantIdentities.user_observations(Observation),
         where: o.user_id == ^user_id and o.occurred_at >= ^cutoff,
         where: not is_nil(o.excerpt) and o.excerpt != "",
         order_by: [desc: o.occurred_at],

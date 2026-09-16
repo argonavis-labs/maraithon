@@ -92,6 +92,16 @@ defmodule Maraithon.Crm.IngestLoopTest do
     refute Repo.exists?(from(j in BackgroundJob, where: j.user_id == ^user_id))
 
     # Force the flush, run the job, and confirm the durable trail
+    # A disabled coordination runtime deliberately flushes without queuing a job.
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.put(runtime, :multinode_coordination_enabled, true)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, Maraithon.Runtime, runtime) end)
     {:ok, :flushed, job_id} = Ingest.flush_pending(user_id, "gmail")
     job = Repo.get!(BackgroundJob, job_id)
     assert {:ok, %{source: "crm_ingest"}} = BackgroundJobHandler.execute(job)

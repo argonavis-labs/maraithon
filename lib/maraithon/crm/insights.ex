@@ -87,6 +87,7 @@ defmodule Maraithon.Crm.Insights do
 
   defp list_recent_observations(user_id, limit) do
     Observation
+    |> Maraithon.AssistantIdentities.user_observations()
     |> where([observation], observation.user_id == ^user_id)
     |> order_by([observation], desc: observation.occurred_at, desc: observation.inserted_at)
     |> limit(^limit)

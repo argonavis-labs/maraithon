@@ -89,6 +89,7 @@ defmodule Maraithon.Crm.InteractionEvents do
     cutoff = cutoff()
 
     Observation
+    |> Maraithon.AssistantIdentities.user_observations()
     |> where([o], o.user_id == ^user_id and o.occurred_at > ^cutoff)
     |> where([o], o.resolved_person_ids != [])
     |> select([o], %{

@@ -34,7 +34,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.DelegationProposals do
 
       observations =
         Repo.all(
-          from o in Observation,
+          from o in Maraithon.AssistantIdentities.user_observations(Observation),
             where: o.user_id == ^user_id and o.source_item_id in ^ids
         )
         |> Map.new(&{&1.source_item_id, &1})

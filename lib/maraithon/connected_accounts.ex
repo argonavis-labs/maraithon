@@ -142,6 +142,10 @@ defmodule Maraithon.ConnectedAccounts do
 
     case result do
       {:ok, updated_account} = ok ->
+        if updated_account.metadata["assistant_account"] == true and
+             (is_nil(previous_account) or previous_account.metadata["assistant_account"] != true),
+           do: Maraithon.PeopleNetwork.invalidate(user_id)
+
         maybe_report_recovery(previous_account, updated_account)
         ok
 

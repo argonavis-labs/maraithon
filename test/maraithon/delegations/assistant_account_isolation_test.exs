@@ -4,6 +4,8 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
   alias Maraithon.{Accounts, AssistantIdentities, ConnectedAccounts, OAuth, Repo, UserIdentity}
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.Connectors.Gmail
+  alias Maraithon.Crm.Observation
+  alias Maraithon.PeopleNetwork.{Detail, Generation, Profile, ReadRepo, Snapshot, Sources}
   alias Maraithon.OAuth.Google
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Tools.GmailHelpers
@@ -27,6 +29,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
 
   test "the assistant OAuth path isolates the mailbox before verifying and binding its address",
        %{user: user} do
+    generation = Repo.insert!(%Generation{user_id: user, as_of: DateTime.utc_now()})
     bypass = Bypass.open()
     original = Application.get_env(:maraithon, :gmail, [])
     Application.put_env(:maraithon, :gmail, api_base_url: "http://localhost:#{bypass.port}")
@@ -80,6 +83,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
              )
 
     assert_receive {:isolated_before_http, true}
+    assert Repo.get!(Generation, generation.id).invalidated_at
     identity = AssistantIdentities.get(user)
     assert identity.data["display_name"] == "October"
     assert identity.gmail_connected_account_id == ConnectedAccounts.get(user, provider).id
@@ -548,6 +552,203 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
 
     assert AssistantIdentities.assistant_account_ids(user) == []
     assert SourceScope.google_account_providers(SourceScope.resolve(user)) == [own.provider]
+    personal = observation(user, %{source_account: user})
+
+    assert Repo.exists?(
+             from o in AssistantIdentities.user_observations(), where: o.id == ^personal.id
+           )
+  end
+
+  test "a queued relationship window cannot learn from a newly designated assistant mailbox", %{
+    user: user
+  } do
+    assistant = account(user, "assistant@example.invalid")
+
+    window =
+      Repo.insert!(%Maraithon.Crm.Ingest.Window{
+        user_id: user,
+        source: "gmail",
+        status: "flushed",
+        opened_at: DateTime.utc_now(),
+        observation_count: 1
+      })
+
+    saved =
+      observation(user, %{source_account: "assistant@example.invalid", window_id: window.id})
+
+    assert {:ok, _} =
+             AssistantIdentities.put(user, %{
+               "display_name" => "October",
+               "gmail_connected_account_id" => assistant.id,
+               "gmail_mode" => "account"
+             })
+
+    assert {:ok,
+            %{
+              observations_count: 0,
+              relationship: %{skipped: "no_observations"},
+              open_loop: %{skipped: "no_observations"}
+            }} =
+             Maraithon.Runtime.BackgroundJobHandler.process_ingestion_window(window.id)
+
+    assert Repo.get!(Maraithon.Crm.Ingest.Window, window.id).status == "completed"
+    assert Repo.get!(Observation, saved.id).learned_at == nil
+  end
+
+  test "historical assistant observations are excluded by account id, provider and legacy email",
+       %{user: user} do
+    assistant = account(user, "assistant@example.invalid", true)
+    other = "other-#{Ecto.UUID.generate()}@example.invalid"
+    {:ok, _} = Accounts.get_or_create_user_by_email(other)
+    account(other, "personal@example.invalid", true)
+
+    for attrs <- [
+          %{metadata: %{"connected_account_id" => assistant.id}},
+          %{metadata: %{"google_provider" => assistant.provider}},
+          %{metadata: %{"account_email" => "ASSISTANT@example.invalid "}},
+          %{source_account: assistant.provider},
+          %{source_account: " Assistant@example.invalid "},
+          %{source: "google_calendar", metadata: %{"connected_account_id" => assistant.id}}
+        ] do
+      observation(user, attrs)
+    end
+
+    personal = observation(user, %{source_account: "personal@example.invalid"})
+    slack = observation(user, %{source: "slack", source_account: "assistant@example.invalid"})
+    unknown = observation(user, %{})
+
+    assert MapSet.new(
+             Repo.all(
+               from o in AssistantIdentities.user_observations(),
+                 where: o.user_id == ^user,
+                 select: o.id
+             )
+           ) == MapSet.new([personal.id, slack.id, unknown.id])
+
+    # Evidence is retained for account-bound delegation reads.
+    assert Repo.aggregate(from(o in Observation, where: o.user_id == ^user), :count) == 9
+  end
+
+  test "designation revokes published and building People generations and legacy scores", %{
+    user: user
+  } do
+    assistant = account(user, "assistant@example.invalid")
+    {:ok, person} = Maraithon.Crm.create_person(user, %{display_name: "Counterparty"})
+
+    person
+    |> Ecto.Changeset.change(
+      communication_score: 80,
+      network_rank: 70,
+      metadata: %{
+        "communication_signals" => %{"score" => 80},
+        "graph_signals" => %{},
+        "keep" => true
+      }
+    )
+    |> Repo.update!()
+
+    now = DateTime.utc_now()
+    published = Repo.insert!(%Generation{user_id: user, as_of: now, completed_at: now})
+    building = Repo.insert!(%Generation{user_id: user, as_of: now})
+    Repo.insert!(%Snapshot{user_id: user, generation_id: published.id, refreshed_at: now})
+
+    assert {:ok, _} =
+             AssistantIdentities.put(user, %{
+               "display_name" => "October",
+               "gmail_connected_account_id" => assistant.id,
+               "gmail_mode" => "account"
+             })
+
+    assert Maraithon.PeopleNetwork.current(user) == nil
+    assert Repo.get!(Generation, building.id).invalidated_at
+    assert Repo.get!(Generation, published.id).invalidated_at
+    updated = Repo.get!(Maraithon.Crm.Person, person.id)
+    assert updated.communication_score == 0
+    assert updated.network_rank == 0
+    assert updated.metadata == %{"keep" => true}
+
+    # Reconnecting or editing a signature does not invalidate a clean generation.
+    clean = Repo.insert!(%Generation{user_id: user, as_of: now})
+    account(user, "assistant@example.invalid", true)
+    assert {:ok, _} = AssistantIdentities.put(user, %{"signature_text" => "October"})
+    assert Repo.get!(Generation, clean.id).invalidated_at == nil
+  end
+
+  test "People source pages and legacy interaction scores ignore saved assistant mail", %{
+    user: user
+  } do
+    assistant = account(user, "assistant@example.invalid", true)
+    {:ok, person} = Maraithon.Crm.create_person(user, %{display_name: "Counterparty"})
+
+    observation(user, %{
+      source_account: "assistant@example.invalid",
+      resolved_person_ids: [person.id]
+    })
+
+    personal = observation(user, %{source_account: user, resolved_person_ids: [person.id]})
+
+    old_repo = ReadRepo.put_dynamic_repo(Repo)
+
+    try do
+      events = Sources.reduce(user, DateTime.utc_now(), [], fn event, acc -> [event | acc] end)
+      assert [%{evidence: %{id: id}}] = events
+      assert id == personal.id
+      # The assistant alone must not produce a calendar read or an unavailable warning.
+      assert Maraithon.PeopleNetwork.Calendar.add_upcoming(user, DateTime.utc_now(), %{
+               warnings: []
+             }) == %{warnings: []}
+    after
+      ReadRepo.put_dynamic_repo(old_repo)
+    end
+
+    assert [%{person_id: person_id, source: "gmail"}] =
+             Maraithon.Crm.InteractionEvents.gather(user).events
+
+    assert person_id == person.id
+    assert assistant.id in AssistantIdentities.assistant_account_ids(user)
+  end
+
+  test "stale People detail drops the entire assistant evidence row, including its title", %{
+    user: user
+  } do
+    account(user, "assistant@example.invalid", true)
+    hidden = observation(user, %{source_account: "assistant@example.invalid"})
+    visible = observation(user, %{source_account: user, excerpt: "Personal message"})
+    now = DateTime.utc_now()
+    generation = Repo.insert!(%Generation{user_id: user, as_of: now, completed_at: now})
+    Repo.insert!(%Snapshot{user_id: user, generation_id: generation.id, refreshed_at: now})
+
+    Repo.insert!(%Profile{
+      user_id: user,
+      generation_id: generation.id,
+      window_days: 30,
+      node_id: "counterparty",
+      display_name: "Counterparty",
+      profile: %{
+        "history" => [
+          %{"type" => "observation", "id" => hidden.id, "title" => "Assistant-only topic"},
+          %{"type" => "observation", "id" => visible.id, "title" => "Personal topic"}
+        ]
+      }
+    })
+
+    assert {:ok, %{"history" => [event]}} = Detail.fetch(user, "counterparty")
+    assert event["id"] == visible.id
+    assert event["excerpt"] == "Personal message"
+    assert event["title"] == "Personal topic"
+  end
+
+  defp observation(user, attrs) do
+    %{
+      user_id: user,
+      source: "gmail",
+      source_item_id: Ecto.UUID.generate(),
+      occurred_at: DateTime.utc_now(),
+      direction: "inbound"
+    }
+    |> Map.merge(attrs)
+    |> Observation.new()
+    |> Repo.insert!()
   end
 
   defp account(user, email, assistant? \\ false) do

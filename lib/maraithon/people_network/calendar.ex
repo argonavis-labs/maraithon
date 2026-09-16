@@ -7,7 +7,7 @@ defmodule Maraithon.PeopleNetwork.Calendar do
   def add_upcoming(user_id, now, aggregate) do
     providers =
       ReadRepo.all(
-        from a in ConnectedAccount,
+        from a in Maraithon.AssistantIdentities.user_accounts(ConnectedAccount),
           where:
             a.user_id == ^user_id and (a.provider == "google" or like(a.provider, "google:%")),
           select: a.provider,

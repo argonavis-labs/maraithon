@@ -25,6 +25,34 @@ defmodule Maraithon.AssistantIdentities do
     from a in query, where: ^included
   end
 
+  @doc "Exclude saved assistant-mailbox observations, including mail ingested before designation."
+  def user_observations(query \\ Maraithon.Crm.Observation) do
+    excluded = assistant_filter()
+
+    accounts =
+      from a in ConnectedAccount,
+        where: a.user_id == parent_as(:user_observation).user_id,
+        where: ^excluded,
+        where:
+          fragment("?::text", a.id) ==
+            fragment("?->>'connected_account_id'", parent_as(:user_observation).metadata) or
+            fragment(
+              "ARRAY[lower(nullif(btrim(?), '')), lower(nullif(btrim(?->>'account_email'), '')), lower(nullif(btrim(?->>'google_provider'), ''))] && ARRAY[lower(?), lower(nullif(btrim(?), '')), lower(nullif(btrim(?->>'account_email'), '')), lower(nullif(btrim(?->>'email'), '')), lower(nullif(regexp_replace(?, '^google:', ''), ''))]",
+              parent_as(:user_observation).source_account,
+              parent_as(:user_observation).metadata,
+              parent_as(:user_observation).metadata,
+              a.provider,
+              a.external_account_id,
+              a.metadata,
+              a.metadata,
+              a.provider
+            )
+
+    from o in query,
+      as: :user_observation,
+      where: o.source not in ["gmail", "google_calendar"] or not exists(accounts)
+  end
+
   defp assistant_filter do
     bound =
       from i in AssistantIdentity,
@@ -179,6 +207,9 @@ defmodule Maraithon.AssistantIdentities do
       metadata: Map.put(account.metadata || %{}, "assistant_account", true)
     )
     |> Repo.update!()
+
+    if account.metadata["assistant_account"] != true,
+      do: Maraithon.PeopleNetwork.invalidate(user_id)
   end
 
   defp retain_account_purpose!(_), do: :ok

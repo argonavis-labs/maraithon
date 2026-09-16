@@ -29,7 +29,7 @@ defmodule Maraithon.PeopleNetwork.Sources do
         }
 
     observations =
-      from o in Observation,
+      from o in Maraithon.AssistantIdentities.user_observations(Observation),
         where: o.user_id == ^user_id and o.occurred_at >= ^since and o.occurred_at <= ^now,
         where: o.source in ["gmail", "slack", "google_calendar"],
         select: %{

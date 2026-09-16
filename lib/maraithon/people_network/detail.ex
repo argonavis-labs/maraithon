@@ -46,7 +46,7 @@ defmodule Maraithon.PeopleNetwork.Detail do
 
     observations =
       Repo.all(
-        from o in Observation,
+        from o in Maraithon.AssistantIdentities.user_observations(Observation),
           where: o.user_id == ^user_id and o.id in ^observation_ids,
           select: {o.id, fragment("left(?, 700)", o.excerpt)}
       )
@@ -62,7 +62,9 @@ defmodule Maraithon.PeopleNetwork.Detail do
       )
       |> Map.new()
 
-    Enum.map(history, fn event ->
+    history
+    |> Enum.reject(&(&1["type"] == "observation" and not Map.has_key?(observations, &1["id"])))
+    |> Enum.map(fn event ->
       excerpt =
         case event["type"] do
           "message" -> Map.get(messages, event["id"])

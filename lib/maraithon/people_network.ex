@@ -141,6 +141,21 @@ defmodule Maraithon.PeopleNetwork do
       set: [invalidated_at: DateTime.utc_now()]
     )
 
+    # The legacy CRM surfaces read these columns without going through current/1.
+    Repo.update_all(
+      from(p in Maraithon.Crm.Person,
+        where: p.user_id == ^user_id,
+        update: [
+          set: [
+            communication_score: 0,
+            network_rank: 0,
+            metadata: fragment("? - 'communication_signals' - 'graph_signals'", p.metadata)
+          ]
+        ]
+      ),
+      []
+    )
+
     :ok
   end
 

@@ -268,6 +268,7 @@ defmodule Maraithon.Crm.RelationshipGraph do
     cutoff = InteractionEvents.cutoff()
 
     Observation
+    |> Maraithon.AssistantIdentities.user_observations()
     |> where([o], o.user_id == ^user_id and o.occurred_at > ^cutoff)
     |> where([o], fragment("array_length(?, 1) >= 2", o.resolved_person_ids))
     |> select([o], %{occurred_at: o.occurred_at, person_ids: o.resolved_person_ids})

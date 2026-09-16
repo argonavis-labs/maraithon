@@ -520,7 +520,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       %Window{} = window ->
         observations =
           Repo.all(
-            from o in Observation, where: o.window_id == ^window_id, order_by: o.occurred_at
+            from o in Maraithon.AssistantIdentities.user_observations(Observation),
+              where: o.window_id == ^window_id,
+              order_by: o.occurred_at
           )
 
         run_ingestion_passes(window, observations)
