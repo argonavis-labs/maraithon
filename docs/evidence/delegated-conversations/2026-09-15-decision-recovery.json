@@ -1,0 +1,93 @@
+{
+  "date": "2026-09-15",
+  "checked_at": "2026-09-16T04:05:24.343070+00:00",
+  "change": "Resume proven-dead decision workers without replaying sends or refunding unknown model costs",
+  "commit": "05e76232a92a639c7cecba02b61b126845c066cb",
+  "validation": {
+    "build": "make build passed",
+    "focused_tests": 65,
+    "failures": 0,
+    "duration_seconds": 37.2,
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0,
+    "logs": [
+      "/tmp/maraithon-decision-recovery-focused.log",
+      "/tmp/maraithon-decision-recovery-build.log"
+    ]
+  },
+  "new_cases": [
+    "interrupted_before_call",
+    "interrupted_compose",
+    "interrupted_after_save",
+    "interrupted_policy",
+    "recovery_exhausted"
+  ],
+  "observed": {
+    "real_supervised_worker_terminated": true,
+    "guardian_termination_proof": "supervisor_down",
+    "old_task_outcome": "outcome_ambiguous",
+    "old_job_preserved_as_failed": true,
+    "stale_claim_rejected": true,
+    "same_turn_resumed": true,
+    "duplicate_sweep_did_not_admit_extra_job": true,
+    "disabled_delegation_not_restarted": true,
+    "expired_attempt_deadline_recovered": true,
+    "unknown_cost_reservation_retained": true,
+    "model_call_counts_retained": true,
+    "maximum_automatic_recoveries": 2,
+    "exhaustion_published_one_review_event": true,
+    "send_actions_created": 0
+  },
+  "files_sha256": {
+    "lib/maraithon/delegations/recovery.ex": "ecf469d993ee841c9c697e3607e2c56d096307948db0114384bfedba0377a5dc",
+    "lib/maraithon/delegations/decision.ex": "6e9bbe0bc336d480dda83bcb84eaf0506f1ec858cda9d929de99144f7b301a21",
+    "lib/maraithon/delegations/wakes.ex": "d0080b97b2a7464c9da8531d6e5f1e1bab6dbf54efeb5652a52da6c92f197284",
+    "test/maraithon/delegations/ingress_test.exs": "b9d6208a30e9528f604221c0c7b41252648ceef746d0adde6d52160f9c1e88e1",
+    "test/support/delegation_runtime.ex": "c005748477f73e7b663e9794d0fafcb4f383f256bd23f4a95a173073c5e55de1"
+  },
+  "limits": [
+    "Local PostgreSQL test transaction and loopback provider fixtures; no real messages or paid model calls.",
+    "Worker termination uses actual task supervision; this extension does not kill the entire BEAM.",
+    "The explicit test driver advances task reconciliation and runs the leased repair job; automatic production sweep behavior is checked separately.",
+    "Schema evolution across 180 days, disaster restore, full automatic boot and a real longevity canary remain unverified.",
+    "Live Slack evaluation remains deferred.",
+    "Production sweep completed after rollout with zero users; no production conversation recovery was exercised."
+  ],
+  "deployment": {
+    "workflow_run": 35053762059,
+    "conclusion": "success",
+    "revision": "maraithon-00385-zx2",
+    "ready_at": "2026-09-16T04:01:26.772586Z",
+    "ready": true,
+    "traffic_percent": 100,
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:ae6b61670f725c2a8e6ffe220acf26731a3760ed541fae7db0e4dec282892ec8",
+    "model": "meta/muse-spark-1.3-contributor",
+    "development_spending": true,
+    "delegation_eval_only": true,
+    "gmail_sends_enabled": true,
+    "slack_sends_enabled": false
+  },
+  "deployed_probe": {
+    "execution": "maraithon-todo-validation-n4qwh",
+    "execution_succeeded": true,
+    "checked_at": "2026-09-16T04:04:32.329972Z",
+    "recovery_module_loaded": true,
+    "sweep": {
+      "id": "cace85b9-1105-40a3-9a14-61599d31301d",
+      "status": "pending",
+      "result": {
+        "held": 0,
+        "repaired": 0,
+        "retired": 0,
+        "retiring": 0,
+        "users": 0
+      },
+      "scheduled_at": "2026-09-16T04:07:56.412727Z",
+      "updated_at": "2026-09-16T04:02:56.412727Z",
+      "last_error": null
+    },
+    "database_writes": 0,
+    "model_calls": 0,
+    "provider_calls": 0
+  }
+}
