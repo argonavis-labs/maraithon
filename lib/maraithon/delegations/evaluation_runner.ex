@@ -578,6 +578,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       verify_outcome(job, next, d)
     else
       :wait -> {:wait, Map.put(state, "phase", "waiting_for_reply_evidence")}
+      {:error, _} = error -> error
       _ -> {:error, :eval_completion_without_reply}
     end
   end
