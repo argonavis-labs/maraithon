@@ -313,12 +313,22 @@ The server build and 110 focused checks passed. Local leased-worker fixtures cov
 
 This is durable pagination, not the full read-economy requirement. A new turn still scans the bound history. Reusing verified history so subsequent turns fetch only missing messages, and durable progress for a long preflight before a grant exists, remain unfinished. Live Slack evaluation remains deferred.
 
+## Process loss during a send
+
+A local eval now kills a complete application BEAM after the mail provider accepts a message and before Maraithon records the response. A second BEAM starts against the same committed database with a new node incarnation. It uses the real coordination Session, PostgreSQL leases, task supervision, action executor, and delivery observer. The old task blocks its partition until an incident-role attestation records the observed OS exit. Expired leases alone do not release it.
+
+The replacement rejects writes using the old job claim. It leaves the ambiguous send job failed and runs the observer already saved before the crash. That observer records `execution_unknown`, finds the exact accepted message through the local provider's history, and records one proven receipt. The grant survives unchanged. There is one provider send, one lifetime send, and no model call. Both stale-write attempts are rejected.
+
+Run this explicit eval with `MIX_ENV=test mix run --no-start test/evals/delegation_beam_recovery.exs`. It creates and removes a fresh local database, migrates it through the existing role gates, and uses a loopback HTTP fixture with synthetic addresses and credentials. The eval and `make build` passed. Commits `15eec32f` and `b6e480fb` add only test files. This work requires no server or native deployment. [Recovery evidence](evidence/delegated-conversations/2026-09-15-beam-send-recovery.json).
+
+This proves the sender and receipt path across an OS process death. Periodic product producers are disabled, and the fixture prepares a reviewed turn without an LLM. Restoring an older coordinator checkpoint, killing a model decision before commit, schema upgrades, disaster restore, and a real longevity canary remain unverified. Live Slack evaluation remains deferred.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage; the production gate currently admits no eligible proposal.
-4. Finish whole-app recovery and race checks, schema evolution, and a real longevity canary. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
+4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. The send and receipt path now passes a local whole-BEAM kill; coordinator checkpoints and uncommitted decisions still need that coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
 The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack history reuse across turns, durable long-thread preflight, scheduling preference refinements, and the full conversation ledger remain unfinished. Cited recall has local coverage; live memory verification is pending. Older conversations without saved facts still need a bounded way to seed their ledger from historical evidence. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.

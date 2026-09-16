@@ -1,0 +1,64 @@
+{
+  "date": "2026-09-15",
+  "checked_at": "2026-09-16T02:46:35.749423+00:00",
+  "change": "Local delegated send recovery across a killed BEAM",
+  "commit": "b6e480fba71f4074c6ea37a555a2f0682e9fd6e2",
+  "validation": {
+    "command": "MIX_ENV=test mix run --no-start test/evals/delegation_beam_recovery.exs",
+    "focused_evals": 1,
+    "failures": 0,
+    "duration_seconds": 86.3,
+    "build": "make build passed",
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0,
+    "logs": [
+      "/tmp/maraithon-beam-recovery.log",
+      "/tmp/maraithon-beam-recovery-build.log"
+    ]
+  },
+  "observed": {
+    "provider": "local HTTP fixture",
+    "model_calls": 0,
+    "old_incarnation": "079ea199-74d2-4b90-9632-40d01c06ca5a",
+    "new_incarnation": "0c7c6486-39aa-4bff-b4e4-dc215c1dbc5f",
+    "os_exit_status": 137,
+    "provider_send_count": 1,
+    "proven_send_count": 1,
+    "stale_writes_rejected": 2,
+    "periodic_producers": false
+  },
+  "assertions": [
+    "Frozen grant survives unchanged",
+    "Claimed action is durable while the provider response is withheld",
+    "Provider accepts before response is released",
+    "OS exit status 137 is observed before physical-termination attestation",
+    "Unproven assignment leaves the old owner and epoch in a draining partition",
+    "Canonical incident role records identity-bound destruction evidence",
+    "New incarnation acquires the partition after proof reconciliation",
+    "Ambiguous send job remains failed and is not replayed",
+    "Existing observer records uncertainty then one exact provider receipt",
+    "Both stale job writes are rejected",
+    "Disposable database is removed"
+  ],
+  "configuration": {
+    "background_product_producers": false,
+    "coordination_session": "real",
+    "legacy_protocol_bypass": false,
+    "node_partition_and_leader_lease_ms": 3000,
+    "prepared_action_lease_seconds": 2,
+    "provider_base": "loopback HTTP fixture",
+    "database": "fresh local database, deleted after eval"
+  },
+  "files_sha256": {
+    "test/evals/delegation_beam_recovery.exs": "12b1ca05849f1cddf566ca522af2c1a321a3e4983f76748f9b5ac1f8ed75b279",
+    "test/evals/support/delegation_beam_node.exs": "8b763fce2ca50bcc3cbeb2df516b3a7826145fb4325ad246c25375a3e4a62a53"
+  },
+  "limits": [
+    "No real Gmail or Slack traffic; live Slack evaluation remains deferred.",
+    "Turn and reviewed decision are seeded; no model decision is exercised.",
+    "Periodic product producers and coordinator Agents are not started.",
+    "Older coordinator checkpoint restoration and uncommitted-decision crash coverage remain unfinished.",
+    "Schema upgrades, disaster restore and real longevity remain unverified.",
+    "Test and documentation only; no deployment required."
+  ]
+}
