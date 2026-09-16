@@ -69,13 +69,106 @@
       "scheduled_at": "2026-09-16T19:58:43.176102Z",
       "observation": null,
       "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
+    },
+    {
+      "workflow": 35144918697,
+      "reported_at": "2026-09-16T20:14:05Z",
+      "error": null,
+      "status": "completed",
+      "result": {
+        "calendar_cleanup": "completed",
+        "cleanup_checks": 1,
+        "phase": "failed",
+        "proposal_candidate_ready": true,
+        "reason": "eval_stopped",
+        "recovered_at": "2026-09-16T19:23:21.433062Z",
+        "recovered_initial_failure": "background_job_error",
+        "todo_id": "ae3d2027-04b2-4768-8826-d5ba1e3a1ce0"
+      },
+      "details": {
+        "source_failures": [
+          {
+            "error": "source_discovery_dependency_failed",
+            "at": "2026-09-16T20:11:53.700202Z",
+            "job_type": "runtime_partition:source_account_closure_acquire",
+            "job_id": "634ab0a3-7be5-4a95-b97a-5b486fe94349"
+          },
+          {
+            "error": "source_discovery_acquisition_incomplete",
+            "at": "2026-09-16T20:11:53.163281Z",
+            "job_type": "runtime_partition:source_account_discovery",
+            "job_id": "02102597-744c-49a1-9d9e-1b692be65f1f"
+          },
+          {
+            "error": "source_discovery_dependency_failed",
+            "at": "2026-09-16T20:10:41.721130Z",
+            "job_type": "runtime_partition:source_account_closure_acquire",
+            "job_id": "c4ca7c3e-a156-422d-869f-54da982ade2b"
+          },
+          {
+            "error": "source_discovery_acquisition_incomplete",
+            "at": "2026-09-16T20:10:34.805657Z",
+            "job_type": "runtime_partition:source_account_discovery",
+            "job_id": "117750b3-5d7f-4596-a5e5-399726bf194f"
+          },
+          {
+            "error": "source_discovery_dependency_failed",
+            "at": "2026-09-16T20:10:29.869287Z",
+            "job_type": "runtime_partition:source_account_closure_acquire",
+            "job_id": "da34b868-75e0-45dc-9a49-a304514a7e15"
+          },
+          {
+            "error": "source_discovery_acquisition_incomplete",
+            "at": "2026-09-16T20:08:40.649194Z",
+            "job_type": "runtime_partition:source_account_discovery",
+            "job_id": "cbb27078-94b6-4830-b9f4-025686bbedef"
+          },
+          {
+            "error": "source_discovery_dependency_failed",
+            "at": "2026-09-16T20:01:52.157163Z",
+            "job_type": "runtime_partition:source_account_closure_acquire",
+            "job_id": "004d5e39-1f74-4cb5-aca8-c09e8d78f8b5"
+          },
+          {
+            "error": "source_discovery_acquisition_incomplete",
+            "at": "2026-09-16T20:01:50.995110Z",
+            "job_type": "runtime_partition:source_account_discovery",
+            "job_id": "9d66b6c5-80c8-4629-9a34-fa835c2cc496"
+          }
+        ],
+        "actions": [
+          {
+            "id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+            "status": "executed",
+            "failure": null,
+            "inserted_at": "2026-09-16T19:05:45.071313Z",
+            "action_type": "gmail_send",
+            "delegation_id": null
+          }
+        ],
+        "proposal_runtime": [
+          {
+            "status": "running",
+            "snapshot": {},
+            "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+            "install_status": "enabled",
+            "cycle_memo_generated": null,
+            "memo_updated_at": null,
+            "pending_skill": null
+          }
+        ]
+      },
+      "scheduled_at": "2026-09-16T20:05:53.466645Z",
+      "observation": null,
+      "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
     }
   ],
-  "verdict": "pending_proposal",
+  "verdict": "failed_without_proposal",
   "limitations": [
     "The failed attempt retained no exception detail.",
     "A provider-free calculation reproduced an invalid fixture workflow; this does not prove it was the only failure.",
     "No Chief of Staff proposal or UI acceptance has been verified yet.",
-    "The first checkpoint diagnostic queried native Chief of Staff agents only and missed packaged installations; its empty list does not prove absence."
+    "The first checkpoint diagnostic queried native Chief of Staff agents only and missed packaged installations; its empty list does not prove absence.",
+    "The original deadline elapsed without a proposal or acceptance. The job completed cleanup with phase failed and reason eval_stopped; it was not extended or restarted."
   ]
 }

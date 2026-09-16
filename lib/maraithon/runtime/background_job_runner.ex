@@ -1809,8 +1809,14 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp closed_failure_text({:rate_limited, _provider_detail}), do: "rate_limited"
   defp closed_failure_text({:rate_limited, _seconds, _provider_detail}), do: "rate_limited"
+
   defp closed_failure_text({:exception, _, _} = reason),
     do: Maraithon.Redaction.exception_summary(reason)
+
+  defp closed_failure_text({:source_discovery_acquisition_incomplete, source, telemetry}),
+    do:
+      "source_discovery_acquisition_incomplete " <>
+        Maraithon.ChiefOfStaff.Acquisition.failure_summary(telemetry, source)
 
   defp closed_failure_text({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp closed_failure_text({kind, _detail, _extra}) when is_atom(kind), do: Atom.to_string(kind)

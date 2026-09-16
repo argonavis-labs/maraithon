@@ -195,6 +195,35 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   def source_complete?(_telemetry, _source), do: false
 
+  @doc "Bounded acquisition diagnostics containing only statuses, counts and closed failure codes."
+  def failure_summary(telemetry, source) when is_map(telemetry) and source in ~w(gmail slack) do
+    counts =
+      ~w(count listed_count requested_count detail_success_count detail_failure_count thread_fetch_count thread_failure_count)
+
+    fetches =
+      (telemetry["fetches"] || [])
+      |> Enum.filter(&(&1["source"] == source))
+      |> Enum.take(4)
+      |> Enum.map(fn fetch ->
+        numeric = Map.take(fetch, counts) |> Map.filter(fn {_, n} -> is_integer(n) and n >= 0 end)
+
+        Map.merge(numeric, %{
+          "status" => Redaction.log_metadata_value(:status, fetch["status"]),
+          "failure_code" => Redaction.log_metadata_value(:failure_code, fetch["reason"]),
+          "truncated" => fetch["truncated"] == true
+        })
+      end)
+
+    Jason.encode!(%{
+      "source" => source,
+      "status" =>
+        Redaction.log_metadata_value(:status, get_in(telemetry, ["sources", source, "status"])),
+      "fetches" => fetches
+    })
+  end
+
+  def failure_summary(_, _), do: "acquisition_incomplete"
+
   # R10/R11 (SPEC 07): a :pubsub_event trigger on one of the three subscribed
   # topic families (email:/calendar:/slack: — the only topics
   # SourceScope.subscriptions/2 ever returns) fetches gmail + calendar +

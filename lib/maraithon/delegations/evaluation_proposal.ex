@@ -21,15 +21,47 @@ defmodule Maraithon.Delegations.EvaluationProposal do
         limit: 3
     )
     |> Enum.map(fn agent ->
-      snapshot = Maraithon.Runtime.Snapshot.latest(agent.id) || %{}
-      state = snapshot[:behavior_state] || %{}
+      snapshot =
+        Repo.one(
+          from s in Maraithon.Runtime.Snapshot,
+            where: s.agent_id == ^agent.id and is_nil(s.payload_purged_at),
+            order_by: [desc: s.sequence_num, desc: s.id],
+            limit: 1
+        )
+
+      {state, decode_error} =
+        if snapshot do
+          snapshot = Maraithon.Runtime.Snapshot.hydrate_payloads!(snapshot)
+
+          case Maraithon.Runtime.SnapshotFormat.decode_stored(snapshot.state_data) do
+            {:ok, state, _} when is_map(state) -> {state, nil}
+            {:error, reason} -> {%{}, Maraithon.Redaction.error_class(reason)}
+          end
+        else
+          {%{}, "no_snapshot"}
+        end
+
       state = state[:source_state] || state
 
       %{
         agent_id: agent.id,
         status: agent.status,
         install_status: agent.install_status,
-        snapshot: Map.take(snapshot, [:sequence_num, :state_name]),
+        snapshot: if(snapshot, do: Map.take(snapshot, [:sequence_num, :state_name]), else: nil),
+        snapshot_decode_error: decode_error,
+        failed_steps:
+          Repo.all(
+            from s in Maraithon.Agents.AgentRunStep,
+              where: s.agent_id == ^agent.id and s.status == "failed",
+              order_by: [desc: s.started_at],
+              limit: 3,
+              select: %{effect_type: s.effect_type, error: s.error, at: s.started_at}
+          )
+          |> Enum.map(
+            &Map.update!(&1, :error, fn error ->
+              Maraithon.Redaction.log_metadata_value(:failure_code, error)
+            end)
+          ),
         memo_updated_at: get_in(state, [:cycle_memory, "updated_at"]),
         pending_skill: state[:pending_effect_skill_id],
         cycle_memo_generated: state[:cycle_memo_generated]

@@ -2031,7 +2031,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     if Acquisition.source_complete?(telemetry, source) do
       :ok
     else
-      {:error, {:source_discovery_acquisition_incomplete, source}}
+      {:error, {:source_discovery_acquisition_incomplete, source, telemetry}}
     end
   end
 
