@@ -2,6 +2,22 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Calendar choices for delegated scheduling
+
+Assistant settings now let the user choose which Google account books meetings and which other accounts to check for conflicts. Web, iPhone, and Mac share the same saved preferences and account eligibility rules. Scheduling checks each selected account's primary calendar, including the booking account, and freezes that ordered set with the offer. Existing offers retain their saved calendars. Older settings preserve the first selected account as the organizer; new settings default to the task's Google account, with the existing personal-account fallback for non-Google sources.
+
+Assistant mailboxes are excluded. Unavailable saved accounts remain visible so the user can remove or replace them; they cannot silently become another booking identity. The optional preference lives in the existing encrypted payload and requires no database migration. Slot ranking and scheduling-link refinements remain unfinished.
+
+The Phoenix compile and both native builds passed, including Xcode project generation and the Mac signature check. Automated tests were not run under the current manual-first policy. Commit `e13771bd` deployed through successful workflow `35063819854`; revision `maraithon-00397-zds` serves all traffic. The live web form showed Kent's three eligible Google accounts and excluded October. Saving the unchanged preferences succeeded.
+
+The shared native controls are in `b30026df` and `dc8b68ed`. Manual Mac inspection caught a SwiftUI row-identity collision between calendar IDs and weekday indices. Distinct row identities and separate form sections fixed it. The corrected signed app is installed; all seven weekdays and the three calendar choices appear separately. Toggling a calendar left the working days unchanged, and saving the original settings through the native API succeeded. No physical iPhone interaction was performed.
+
+Mobile workflow `35064395623` succeeded. TestFlight 1.0.1 (`20260916063532`) is available to Founders, including Kent. The earlier native release was cancelled after the visual check found the row collision.
+
+The final scheduling review also found that one invitation copied across checked calendars counted more than once toward the daily meeting cap. Commit `c7ede090` counts matching iCalendar UIDs and intervals once, while retaining every busy interval for conflict checks. Events without a usable UID remain separate. The server compile passed; no live invitation was sent for this check.
+
+Workflow `35064779189` deployed that follow-up successfully. Revision `maraithon-00398-d27` serves all traffic.
+
 ## People loading on mobile
 
 The September 15 mobile request failed with HTTP 500 because the default People query compared its float ranking field to integer `0`. Ecto rejected that query before it reached PostgreSQL. Commit `b857905c` uses `0.0`, preserving the ranking and visibility rules. The iPhone People list and person detail now use the existing public error-copy helper instead of displaying raw error codes.

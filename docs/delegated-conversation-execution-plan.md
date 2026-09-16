@@ -218,6 +218,8 @@ Directive settlement uses `AgentDirectives.settle_ready_with/7` when a turn crea
 | `telegram_prepared_actions` | Add `authorization_kind` (`human_confirmed delegation_grant`), `delegation_id`, `delegation_turn_id`, `grant_version`; surface `delegation`. The existing binding spec stays unchanged so stored MACs remain valid. The same references travel inside the encrypted payload and are cross-checked against the columns at execution, and a check constraint requires all three when `authorization_kind = 'delegation_grant'`. |
 | `crm_observations` | Persist `internet_message_id`, `in_reply_to`, `references` in `metadata`. |
 
+The preferences payload also carries an optional `booking_calendar_account_id`. It selects the meeting organizer's account; `calendar_account_ids` adds accounts to check for conflicts. The booking account is always checked. All selections must be connected Google accounts owned by the user, excluding dedicated assistant accounts. Older payloads keep the first selected account as their booking account. An offer freezes its calendar choices so later preference changes do not redirect an accepted invitation.
+
 Money is integer micro-USD. Provider IDs and timestamps are strings. User IDs come from authentication or job authority, never from model arguments. Every new table gets the erasure write-fence trigger, catalog registration, `PrivacyRetention` handling for encrypted copies, and a manifest refresh in the same migration. Erasure overrides an active delegation.
 
 ## One wake, one bounded turn
