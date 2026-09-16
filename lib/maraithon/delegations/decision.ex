@@ -19,7 +19,7 @@ defmodule Maraithon.Delegations.Decision do
     Voice
   }
 
-  alias Maraithon.Runtime.{BackgroundJob, DatabaseClock}
+  alias Maraithon.Runtime.{BackgroundJob, DatabaseClock, PeriodicJobs}
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @opts [max_wall_clock_ms: 120_000, max_llm_turns: 3, max_tool_steps: 1]
@@ -69,7 +69,7 @@ defmodule Maraithon.Delegations.Decision do
       end
     else
       {:ok, :superseded} -> {:ok, :superseded}
-      {:error, reason} -> hold(job, reason)
+      {:error, reason} -> read_error(job, reason)
     end
   end
 
@@ -162,12 +162,6 @@ defmodule Maraithon.Delegations.Decision do
       {:ok, :superseded} ->
         {:ok, :superseded}
 
-      {:error, {:rate_limited, seconds, _}} when is_integer(seconds) ->
-        Jobs.provider_wait(job, seconds)
-
-      {:error, {:rate_limited, _}} ->
-        Jobs.provider_wait(job, 30)
-
       {:error, reason}
       when reason in [:invalid_message, :unverified_slot_wording, :invalid_question] ->
         if response["stage"] == "compose" do
@@ -177,7 +171,14 @@ defmodule Maraithon.Delegations.Decision do
         end
 
       {:error, reason} ->
-        hold(job, reason)
+        read_error(job, reason)
+    end
+  end
+
+  defp read_error(job, reason) do
+    case PeriodicJobs.retry_after_seconds_for(reason) do
+      {:ok, seconds} -> Jobs.provider_wait(job, seconds, reason)
+      :none -> hold(job, reason)
     end
   end
 
@@ -436,7 +437,8 @@ defmodule Maraithon.Delegations.Decision do
             "The last decision was interrupted. Please review this conversation before I continue."
 
           :policy_review_required ->
-            "I need your review before taking the next step in this conversation."
+            Policy.review_explanation(Continuation.response(context.run)) ||
+              "I need your review before taking the next step in this conversation."
 
           :invalid_scheduling_request ->
             "I couldn't resolve the requested meeting length and dates. Please clarify those details."

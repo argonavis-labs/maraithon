@@ -301,6 +301,16 @@ defmodule Maraithon.Delegations.Policy do
       (decision["kind"] != "complete" or verdict["outcome_proven"] == true)
   end
 
+  @doc "A bounded review explanation for the user's private conversation history."
+  def review_explanation(%{
+        "stage" => "policy",
+        "verdict" => %{"allowed" => false, "reason" => reason}
+      }) do
+    if text?(reason, 2_000), do: "I paused before acting: " <> String.trim(reason)
+  end
+
+  def review_explanation(_), do: nil
+
   def slot_id(slot), do: Scope.hash(Map.take(slot, ~w(start_at end_at timezone)))
 
   defp slot_ids(slots),

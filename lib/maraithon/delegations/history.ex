@@ -2,7 +2,8 @@ defmodule Maraithon.Delegations.History do
   @moduledoc "Bounded, user-scoped conversation history. Decisions never stand in for delivery receipts."
   import Ecto.Query
   alias Maraithon.{Delegations, Repo}
-  alias Maraithon.Delegations.{Event, EvidenceLinks}
+  alias Maraithon.Delegations.{Event, EvidenceLinks, Policy, Turn}
+  alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @page_size 30
   @kinds ~w(user_action inbound_message decision send_receipt send_unknown send_deferred
@@ -22,6 +23,7 @@ defmodule Maraithon.Delegations.History do
       query = if cursor, do: where(query, [e], e.seq < ^cursor), else: query
       rows = Repo.all(query)
       events = rows |> Enum.take(@page_size) |> Enum.map(&Event.hydrate/1)
+      reviews = review_explanations(user_id, d.id, events)
       accounts = EvidenceLinks.accounts(user_id)
       scope = Delegations.current_grant(d).data["scope"]
       team = scope["team_id"]
@@ -37,7 +39,7 @@ defmodule Maraithon.Delegations.History do
                id: event.id,
                occurred_at: DateTime.to_iso8601(event.occurred_at),
                title: title,
-               detail: detail,
+               detail: Map.get(reviews, event.id) || detail,
                links: event_links(event, d, accounts, team)
              }
            end),
@@ -60,6 +62,35 @@ defmodule Maraithon.Delegations.History do
       nil -> {:error, :not_found}
       error -> error
     end
+  end
+
+  # Older holds retain a generic question. Read their saved verdict without
+  # rewriting events or putting private review text in operational logs.
+  defp review_explanations(user_id, delegation_id, events) do
+    holds =
+      Enum.filter(events, fn event ->
+        event.kind == "failure" and event.data["failure_code"] == "policy_review_required"
+      end)
+
+    ids = Enum.map(holds, & &1.data["run_id"]) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    runs =
+      if ids == [] do
+        %{}
+      else
+        from(r in Run,
+          join: t in Turn,
+          on: t.run_id == r.id,
+          where:
+            r.user_id == ^user_id and t.user_id == ^user_id and
+              t.delegation_id == ^delegation_id and r.id in ^ids,
+          limit: @page_size
+        )
+        |> Repo.all()
+        |> Map.new(&{&1.id, Policy.review_explanation(Continuation.response(&1))})
+      end
+
+    Map.new(holds, &{&1.id, runs[&1.data["run_id"]]})
   end
 
   defp cursor(nil), do: {:ok, nil}

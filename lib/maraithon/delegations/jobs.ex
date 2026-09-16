@@ -148,7 +148,7 @@ defmodule Maraithon.Delegations.Jobs do
 
   def provider_wait(job, seconds, reason \\ :source_rate_limited) do
     case transaction(job, fn %{delegation: d} ->
-           provider = if d.provider == "gmail", do: "Gmail", else: "Slack"
+           provider = if d.provider == "gmail", do: "Google", else: "Slack"
            label = "Waiting for #{provider}'s request limit before continuing."
 
            d

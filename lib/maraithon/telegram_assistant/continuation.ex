@@ -29,6 +29,10 @@ defmodule Maraithon.TelegramAssistant.Continuation do
 
   def present?(%Run{} = run), do: is_map((run.result_summary || %{})[@key])
 
+  @doc "The saved public response for private history, never execution authority."
+  def response(%Run{} = run),
+    do: get_in(Run.hydrate_payloads(run).result_summary || %{}, [@key, "response"])
+
   def upgrade(run, checkpoint, profile, state, opts) do
     policy = AssistantHarness.runtime_policy(opts).loop
     original_start = checkpoint["deadline_ms"] - checkpoint["policy"]["max_wall_clock_ms"]
