@@ -10,6 +10,12 @@ The live web Assistant settings page and installed Mac app both showed October w
 
 ## Conversation across releases
 
+The eval preflight now uses the same operator command as start, status and memory checks. The workflow forwards the chosen actor, and report collection still runs when a Cloud Run execution fails. A read-only diagnostic accepts one controlled execution ID and reports exception classes, fixed failure reasons and application source locations without exposing inspected arguments or provider bodies.
+
+Commit `2ea1f5f4` passed shell syntax checks and deployed through workflow `35103948234` to revision `maraithon-00417-f72`. Diagnostic workflow `35104296534` confirmed the earlier launcher stopped with `eval_preflight_required`. Corrected assistant preflight `35104584209` then passed for both Kent accounts and October, with Muse, active development spending, sending access and assistant isolation intact. It made zero model calls, sent no messages and created no events. The earlier failed preflight did not retain its detailed report, so its particular failed check is unknown.
+
+Verification now restores the final reply ID from its delivered message after a lost eval checkpoint. The canary also requires settled receipts showing the actual configured model for every counted call. A refused launch emits its preflight report before exiting unsuccessfully. These changes passed `make build` with warnings treated as errors. Automated tests were not run under the manual-first policy.
+
 The `durable_memory` controlled Gmail scenario collects four facts, one reply at a time. Before the final reply, it saves a baseline and schedules the existing eval job for at least six hours later, inside the user's working hours. It does not poll during that interval. The final reply also waits for a different serving revision. Each inspection reports elapsed time and current counters without reading provider messages or calling a model.
 
 The baseline covers the grant, scope, task owner, saved ledger, source revision, model calls, unresolved reservations, recorded cost and sent-message count. The unchanged interval is committed before the final reply can send. Active launches deduplicate per actor, and prepared replies keep their deterministic action IDs. The scenario has a three-day deadline and uses the existing controlled-recipient gate, signatures, request admission, send limits and independent review.

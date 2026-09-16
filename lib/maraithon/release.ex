@@ -39,18 +39,27 @@ defmodule Maraithon.Release do
   end
 
   def delegation_eval_start do
-    delegation_eval(
-      fn ->
-        case Maraithon.Delegations.EvaluationRunner.start(
-               System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply"),
-               System.get_env("DELEGATION_EVAL_ACTOR", "as_user")
-             ) do
-          {:ok, report} -> report
-          {:error, reason} -> raise "Delegation eval could not start: #{reason}"
-        end
-      end,
-      "DELEGATION_EVAL="
-    )
+    report =
+      delegation_eval(
+        fn ->
+          case Maraithon.Delegations.EvaluationRunner.start(
+                 System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply"),
+                 System.get_env("DELEGATION_EVAL_ACTOR", "as_user")
+               ) do
+            {:ok, report} ->
+              report
+
+            {:error, {:eval_preflight_required, report}} ->
+              Map.merge(report, %{"phase" => "start_refused", "reason" => "eval_preflight_required"})
+
+            {:error, reason} ->
+              %{"phase" => "start_refused", "reason" => Maraithon.Redaction.error_class(reason)}
+          end
+        end,
+        "DELEGATION_EVAL="
+      )
+
+    if report["phase"] == "start_refused", do: raise("Delegation eval refused; see its report")
   end
 
   def delegation_eval_status do
@@ -81,6 +90,7 @@ defmodule Maraithon.Release do
         end)
 
       IO.puts(prefix <> Jason.encode!(report))
+      report
     after
       Supervisor.stop(tool_call_supervisor)
       GenServer.stop(vault)

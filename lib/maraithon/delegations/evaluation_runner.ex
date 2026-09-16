@@ -78,6 +78,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     else
       {:error, :account_cost_hold} = error -> error
       {:error, :eval_work_window_too_short} = error -> error
+      %{"phase" => "preflight"} = report -> {:error, {:eval_preflight_required, report}}
       _ -> {:error, :eval_preflight_required}
     end
   end
@@ -505,6 +506,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         Map.merge(state, %{
           "reply_count" => count,
           "reply_message_id" => message.message_id,
+          "reply_message_ids" =>
+            Map.put(state["reply_message_ids"] || %{}, to_string(count - 1), message.message_id),
           "accepted_slot" =>
             Enum.at(
               d.data["offered_slots"] || [],
