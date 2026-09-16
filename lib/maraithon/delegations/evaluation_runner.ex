@@ -196,7 +196,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     else
       %{
         actions: action_details(job, nil),
-        proposal_runtime: EvaluationProposal.diagnostics(job)
+        proposal_runtime: EvaluationProposal.diagnostics(job),
+        source_failures: EvaluationProposal.source_failures(job)
       }
     end
   end

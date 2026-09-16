@@ -39,6 +39,25 @@ defmodule Maraithon.Delegations.EvaluationProposal do
 
   def diagnostics(_job), do: nil
 
+  def source_failures(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
+    since = DateTime.add(DateTime.utc_now(), -1, :hour)
+
+    Repo.all(
+      from j in Maraithon.Runtime.BackgroundJob,
+        where: j.user_id == ^job.user_id and j.status == "failed" and j.updated_at >= ^since,
+        where:
+          j.job_type in [
+            "runtime_partition:source_account_discovery",
+            "runtime_partition:source_account_closure_acquire"
+          ],
+        order_by: [desc: j.updated_at],
+        limit: 8,
+        select: %{job_id: j.id, job_type: j.job_type, error: j.last_error, at: j.updated_at}
+    )
+  end
+
+  def source_failures(_job), do: []
+
   def prepare(job, todo, message) do
     JobAuthority.transaction(job, fn ->
       account = Repo.get_by!(ConnectedAccount, id: todo.source_account_id, user_id: job.user_id)

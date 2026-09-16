@@ -235,6 +235,30 @@ defmodule Maraithon.Redaction do
     end
   end
 
+  @doc "Keep an exception's type and first application frame, without its message or arguments."
+  def exception_location(%module{}, stacktrace) do
+    location =
+      Enum.find_value(stacktrace, fn
+        {m, f, arity, meta} when is_atom(m) and is_atom(f) and is_list(meta) ->
+          if String.starts_with?(Atom.to_string(m), "Elixir.Maraithon.") do
+            {m, f, if(is_list(arity), do: length(arity), else: arity), meta[:line] || 0}
+          end
+
+        _ ->
+          nil
+      end)
+
+    {:exception, module, location}
+  end
+
+  def exception_summary({:exception, class, {module, function, arity, line}})
+      when is_atom(class) and is_atom(module) and is_atom(function) and is_integer(arity) and
+             is_integer(line),
+      do: "#{class} at #{module}.#{function}/#{arity}:#{line}"
+
+  def exception_summary({:exception, class, nil}) when is_atom(class), do: Atom.to_string(class)
+  def exception_summary(_), do: "exception"
+
   @doc """
   Return a closed error class without inspecting provider-controlled detail.
   """

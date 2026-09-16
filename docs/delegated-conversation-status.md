@@ -843,6 +843,22 @@ Read-only status `35140500627` then confirmed `waiting_for_proposal` with
 The only recorded action is the same executed initial email. Proposal generation
 and acceptance remain unverified.
 
+Status workflow `35143224581` again found the original job waiting for a
+proposal at `19:58:21Z`, with its single initial action unchanged. The first
+checkpoint diagnostic returned no agents because it only selected direct
+Chief of Staff installations. The lookup now includes packaged installations
+and unwraps their source state. That empty result does not prove absence.
+The live Activity page showed running Chief of Staff work, failed scheduled
+model steps and repeated failed Gmail discovery and completion jobs. The saved
+generic errors do not establish their cause.
+
+Background and source workers now preserve a bounded exception type and first
+application code location. Exception messages, arguments and provider bodies
+are excluded. The controlled proposal status includes at most eight recent
+source-worker failures for its user. A provider-free calculation retained the
+exception type and location without its private marker. `make build` passed;
+no automated tests ran. Deployment and diagnosis of a fresh failure are pending.
+
 ## Read earlier conversation windows
 
 The date-window history reader is now implemented. A model may use its existing
@@ -892,8 +908,10 @@ tasks without a binding keep their existing lookup path.
 
 `make build` passed with warnings treated as errors. This removes unnecessary
 cross-mailbox reads; the fixture's original provider error was not retained, so
-it does not establish the sole cause of that warning. Deployment and a fresh
-live source read are pending. No automated tests ran under the current policy.
+it does not establish the sole cause of that warning. Commit `1e68ecdf`
+deployed through successful workflow `35143818000` to revision
+`maraithon-00440-ml5`, serving all traffic. A fresh live source read is pending.
+No automated tests ran under the current policy.
 
 ## Remaining work
 

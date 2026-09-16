@@ -40,12 +40,42 @@
       "initial_action_id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
       "initial_action_status": "executed",
       "recorded_action_count": 1
+    },
+    {
+      "workflow": 35143224581,
+      "reported_at": "2026-09-16T19:58:21Z",
+      "error": null,
+      "status": "pending",
+      "result": {
+        "phase": "waiting_for_proposal",
+        "proposal_candidate_ready": true,
+        "recovered_at": "2026-09-16T19:23:21.433062Z",
+        "recovered_initial_failure": "background_job_error",
+        "todo_id": "ae3d2027-04b2-4768-8826-d5ba1e3a1ce0"
+      },
+      "details": {
+        "actions": [
+          {
+            "id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+            "status": "executed",
+            "failure": null,
+            "inserted_at": "2026-09-16T19:05:45.071313Z",
+            "action_type": "gmail_send",
+            "delegation_id": null
+          }
+        ],
+        "proposal_runtime": []
+      },
+      "scheduled_at": "2026-09-16T19:58:43.176102Z",
+      "observation": null,
+      "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
     }
   ],
   "verdict": "pending_proposal",
   "limitations": [
     "The failed attempt retained no exception detail.",
     "A provider-free calculation reproduced an invalid fixture workflow; this does not prove it was the only failure.",
-    "No Chief of Staff proposal or UI acceptance has been verified yet."
+    "No Chief of Staff proposal or UI acceptance has been verified yet.",
+    "The first checkpoint diagnostic queried native Chief of Staff agents only and missed packaged installations; its empty list does not prove absence."
   ]
 }

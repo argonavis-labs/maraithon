@@ -1748,7 +1748,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     handler.execute(job)
   rescue
     exception ->
-      {:error, Exception.format(:error, exception, __STACKTRACE__)}
+      {:error, Maraithon.Redaction.exception_location(exception, __STACKTRACE__)}
   catch
     kind, reason ->
       {:error, "#{kind}: #{inspect(reason)}"}
@@ -1764,7 +1764,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   rescue
     exception ->
-      {:error, Exception.format(:error, exception, __STACKTRACE__)}
+      {:error, Maraithon.Redaction.exception_location(exception, __STACKTRACE__)}
   catch
     kind, reason ->
       {:error, "#{kind}: #{inspect(reason)}"}
@@ -1774,7 +1774,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     handler.execute(job)
   rescue
     exception ->
-      {:error, Exception.format(:error, exception, __STACKTRACE__)}
+      {:error, Maraithon.Redaction.exception_location(exception, __STACKTRACE__)}
   catch
     kind, reason ->
       {:error, "#{kind}: #{inspect(reason)}"}
@@ -1809,6 +1809,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp closed_failure_text({:rate_limited, _provider_detail}), do: "rate_limited"
   defp closed_failure_text({:rate_limited, _seconds, _provider_detail}), do: "rate_limited"
+  defp closed_failure_text({:exception, _, _} = reason),
+    do: Maraithon.Redaction.exception_summary(reason)
+
   defp closed_failure_text({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp closed_failure_text({kind, _detail, _extra}) when is_atom(kind), do: Atom.to_string(kind)
   defp closed_failure_text(kind) when is_atom(kind), do: Atom.to_string(kind)

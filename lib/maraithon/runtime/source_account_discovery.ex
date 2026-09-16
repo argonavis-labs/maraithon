@@ -136,7 +136,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       _other -> {:error, :invalid_source_discovery_result}
     end
   rescue
-    error -> {:error, Maraithon.Redaction.error_class(error)}
+    error -> {:error, Maraithon.Redaction.exception_location(error, __STACKTRACE__)}
   catch
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
@@ -184,7 +184,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       _other -> {:error, :invalid_source_discovery_payload}
     end
   rescue
-    error -> {:error, Maraithon.Redaction.error_class(error)}
+    error -> {:error, Maraithon.Redaction.exception_location(error, __STACKTRACE__)}
   catch
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
@@ -232,7 +232,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       _other -> {:error, :invalid_source_discovery_finalizer}
     end
   rescue
-    error -> {:error, Maraithon.Redaction.error_class(error)}
+    error -> {:error, Maraithon.Redaction.exception_location(error, __STACKTRACE__)}
   catch
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
