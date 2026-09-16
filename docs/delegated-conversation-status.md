@@ -2,6 +2,18 @@
 
 Updated September 15, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Delegation suggestions
+
+The Chief of Staff now ranks source-backed delegation candidates inside its existing cycle memo. It scans at most 40 open Gmail or Slack tasks and passes at most 12 eligible candidates to that call. Eligibility requires work owned by the user, an outbound next action, a resolved person, and evidence bound to the connected account and conversation. Work owned by Charlie or another person does not qualify. The memo may suggest up to three tasks, each with a one-line reason.
+
+A suggestion records an insight through AttentionArbiter and updates the existing task. It creates no duplicate task, grant, or conversation. Replays cannot duplicate the suggestion. A changed task, source, or account prevents publication of a stale memo. The next task review expires the suggestion; dismissing it leaves the task open. The brief lists current suggestions in one row.
+
+Web, Mac, and iPhone share the suggested actor and task type. Opening “Delegate to October?” uses the existing fresh grant preview before accepting the work. This adds no model call, though eligible candidates add bounded input to the memo already being generated. Quiet cycles do not create a memo just to produce suggestions.
+
+The server, signed Mac, and iPhone simulator builds passed. All 18 focused proposal and reporting checks passed, including the memo callback, ownership exclusions, stale-source rejection, replay, dismissal, expiry, Slack binding, public JSON, and web component rendering. Commit `b38175da` deployed through workflow `35037908722` to revision `maraithon-00379-skh`, serving all traffic. The Mac update is installed and opens connected. The iPhone release passed in workflow `35037908692`; TestFlight 1.0.1 (`20260915235739`) is available to Founders. The authenticated web task list also loads after deployment. [Proposal evidence](evidence/delegated-conversations/2026-09-15-proposals.json).
+
+Read-only production execution `maraithon-todo-validation-vtbrg` loaded the new module and confirmed Muse Spark Contributor, development spending, the labelled Gmail eval restriction, and disabled Slack sends. It found no eligible live proposals, made no provider or model calls, and sent no messages. Live proposal acceptance is still unverified. The existing October memory eval remains pending for September 16 at 08:00 Eastern; its durable job survived this release.
+
 ## Slack delivery adapter
 
 The delegated Slack sender now freezes the exact member or bot, workspace, channel, thread, and message hash. It verifies the live credential before posting, preserves October's configured name and icon, and sends mentions as literal text. The source member takes precedence over the person who installed the Slack app. Both the OAuth request and committed app manifest include `chat:write.customize`; existing installations still need to grant that scope before October can send.
@@ -269,7 +281,7 @@ The completed information task is visible on the authenticated web app as Comple
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
-3. Add delegation proposals. Brief reporting is deployed and verified against production records.
+3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage; the production gate currently admits no eligible proposal.
 4. Finish mailbox-wide quota coordination, the whole-app recovery and race checks, schema evolution, and a real longevity canary.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 

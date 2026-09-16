@@ -1,0 +1,98 @@
+{
+  "date": "2026-09-15",
+  "commit": "b38175daccd6699f2fbc9655b997e6ea0d343e16",
+  "behavior": {
+    "candidate_scan_limit": 40,
+    "memo_candidate_limit": 12,
+    "proposal_limit_per_memo": 3,
+    "additional_model_calls": 0,
+    "ranking": "The existing cycle memo selects candidates and writes one-line reasons.",
+    "publication": "An insight through AttentionArbiter and metadata on the existing todo, without a grant or conversation.",
+    "expiry": "Next task review, task change, dismissal, disabled preference, or attached delegation.",
+    "acceptance": "The existing grant preview, with the suggested actor and kind, on web, Mac, and iPhone."
+  },
+  "local_verification": {
+    "command": "MIX_ENV=test MIX_TEST_PARTITION=_delegation_ready_eval mix test test/maraithon/delegations/proposals_test.exs test/maraithon/delegations/reports_test.exs",
+    "tests": 18,
+    "failures": 0,
+    "coverage": [
+      "Chief of Staff memo round trip and attention arbitration",
+      "No duplicate todo or automatic conversation",
+      "Exclusion of another person's work, manual work, drafts, and unverified people",
+      "Changed task, source, mailbox, and disconnected account",
+      "Exact Slack workspace and channel, with eval-only gating",
+      "Assistant name and scheduling kind in public JSON and action card",
+      "Replay, dismissal, expiry, settings and send gates",
+      "Polished copy and web component rendering",
+      "Brief ownership, cost boundaries, isolation and source-label escaping"
+    ],
+    "builds": {
+      "server": "passed",
+      "signed_mac": "passed",
+      "iphone_simulator": "passed"
+    },
+    "local_model_calls": 0,
+    "live_provider_calls": 0
+  },
+  "mac": {
+    "installed_path": "/Users/kent/Applications/Maraithon.app",
+    "signature_verified": true,
+    "manual_check": "Updated app opens connected with 21 active tasks and the work/personal selector. Tracking is currently empty; no live proposal was displayed.",
+    "tracking_explanation": "The insurance task is already done and still records Charlie Feng as owner. No open task currently has an external owner."
+  },
+  "deployment": {
+    "server_workflow": 35037908722,
+    "mobile_workflow": 35037908692,
+    "status": "passed",
+    "server_revision": "maraithon-00379-skh",
+    "traffic_percent": 100,
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:8c4749cf4f779aa3b8d64aad50f1ca1bb5a4bdd85389100f4798c4920c4990a1",
+    "mobile_version": "1.0.1",
+    "mobile_build": "20260915235739",
+    "testflight_group": "Founders"
+  },
+  "limits": [
+    "No live proposal acceptance has been verified on a controlled source-backed task.",
+    "The production eval restriction remains in place; suggestions cannot extend the authorized recipients.",
+    "Native builds passed; a visible proposal on an iPhone has not been manually verified.",
+    "Kent deferred live Slack evals."
+  ],
+  "queued_memory_eval": {
+    "job_id": "04a64f25-c24a-42ee-a819-a94cbe07e917",
+    "scheduled_at": "2026-09-16T12:00:00Z",
+    "local_time": "September 16 at 8:00 a.m. America/Toronto",
+    "status": "pending, confirmed after deployment; do not start a duplicate"
+  },
+  "production_check": {
+    "execution": "maraithon-todo-validation-vtbrg",
+    "probe": {
+      "model_calls": 0,
+      "provider_calls": 0,
+      "messages_sent": 0,
+      "conversation_writes": 0
+    },
+    "checked_at": "2026-09-16T00:04:42.262405Z",
+    "image_module_loaded": true,
+    "settings": {
+      "model": "meta/muse-spark-1.3-contributor",
+      "eval_only": true,
+      "development_spending": true,
+      "gmail_sends": true,
+      "slack_sends": false
+    },
+    "eligible_candidates": 0,
+    "current_proposals": 0,
+    "active_workflows": {
+      "waiting": 1,
+      "you_own": 21
+    },
+    "memory_eval": {
+      "id": "04a64f25-c24a-42ee-a819-a94cbe07e917",
+      "status": "pending",
+      "scheduled_at": "2026-09-16T12:00:00.000000Z"
+    }
+  },
+  "web": {
+    "manual_check": "Authenticated /todos loaded after deployment with the task views and All, Personal, Work filters."
+  }
+}
