@@ -845,6 +845,24 @@ and acceptance remain unverified.
 
 ## Remaining work
 
+The date-window history reader is now implemented. A model may use its existing
+single research step to request up to 31 days of earlier conversation evidence.
+The reader examines at most 49 event rows, selects at most six distinct messages,
+and verifies their provider content under the original or current granted
+account and thread. Slack selections retain their recorded revision digest.
+The response reports truncation; empty results cannot establish silence or
+completion. It accepts no model-supplied account or destination.
+
+The result and coverage are saved in the existing encrypted run snapshot. A
+retry reuses the saved read. Composition and independent review keep the
+three-call ceiling; no new process, model stage or queue was added. The
+read-only memory probe now also clears the fact ledger in memory and checks
+that the delivered answer can be recovered through this history path.
+`make build` passed, and a provider-free request check accepted a bounded window
+while rejecting an oversized window, an account override and a fact write.
+Automated tests were not run under the manual-first policy. Deployment and live
+history verification are pending.
+
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage. The recovered controlled task now passes the production candidate gate and is waiting for the Chief of Staff's proposal.

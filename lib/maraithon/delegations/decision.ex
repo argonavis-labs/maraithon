@@ -23,7 +23,7 @@ defmodule Maraithon.Delegations.Decision do
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @opts [max_wall_clock_ms: 120_000, max_llm_turns: 3, max_tool_steps: 1]
-  @prompt_version 4
+  @prompt_version 5
   def prompt_version, do: @prompt_version
 
   def execute(%BackgroundJob{job_type: "delegation_decide"} = job) do
@@ -144,7 +144,7 @@ defmodule Maraithon.Delegations.Decision do
              else: Policy.validate(context, decision)
            ) do
       case {response["stage"], decision["kind"]} do
-        {"compose", kind} when kind in ~w(read_evidence find_times) ->
+        {"compose", kind} when kind in ~w(read_evidence read_history find_times) ->
           call(job, context, checkpoint, state, "researched", nil)
 
         {stage, _} when stage in ~w(compose researched repair) ->
@@ -183,7 +183,7 @@ defmodule Maraithon.Delegations.Decision do
   end
 
   defp read_phase(stage, %{"kind" => kind} = decision)
-       when kind in ~w(read_evidence find_times) do
+       when kind in ~w(read_evidence read_history find_times) do
     if stage == "compose" and Policy.read_request?(decision) do
       :ok
     else
@@ -195,16 +195,18 @@ defmodule Maraithon.Delegations.Decision do
   defp read_phase(_, _), do: :ok
 
   defp recall(job, context, decision) do
-    with {:ok, recalled} <- Toolbox.read(context, decision),
+    with {:ok, recalled, history} <- read_sources(context, decision),
          {:ok, scheduling} <- requested_scheduling(context, decision) do
       if recalled == (context.run.prompt_snapshot["recalled_sources"] || []) and
-           scheduling == context.run.prompt_snapshot["scheduling"] do
+           scheduling == context.run.prompt_snapshot["scheduling"] and
+           history == context.run.prompt_snapshot["history_read"] do
         {:ok, context}
       else
         Jobs.transaction(job, fn current ->
           snapshot =
             Map.merge(current.run.prompt_snapshot, %{
               "recalled_sources" => recalled,
+              "history_read" => history,
               "scheduling" => scheduling
             })
 
@@ -217,6 +219,14 @@ defmodule Maraithon.Delegations.Decision do
         end)
       end
     end
+  end
+
+  defp read_sources(context, %{"kind" => "read_history"} = decision),
+    do: Toolbox.history(context, decision)
+
+  defp read_sources(context, decision) do
+    with {:ok, recalled} <- Toolbox.read(context, decision),
+         do: {:ok, recalled, context.run.prompt_snapshot["history_read"]}
   end
 
   defp requested_scheduling(context, %{"kind" => "find_times"} = decision) do
@@ -308,7 +318,7 @@ defmodule Maraithon.Delegations.Decision do
         %{
           "role" => "user",
           "content" =>
-            "The requested evidence is in last_messages or older_messages, and calendar results are in available_slots. The read step is used. Return a decision, not another read_evidence or find_times request. Save supported task-relevant facts with their source IDs."
+            "The requested evidence is in last_messages or older_messages; history_read describes any bounded history selection, and calendar results are in available_slots. The read step is used. Return a decision, not another read request. Save supported task-relevant facts with their source IDs."
         }
       ]
   end

@@ -1,8 +1,28 @@
 defmodule Maraithon.Delegations.Toolbox do
-  @moduledoc "Bounded reads of cited facts and the original task message under the frozen grant."
+  @moduledoc "Bounded reads of conversation evidence under the frozen grant."
   alias Maraithon.PromptBudget
   alias Maraithon.Connectors.{Gmail, Slack}
-  alias Maraithon.Delegations.{GmailSource, Ledger, SlackIdentity, SlackSource}
+  alias Maraithon.Delegations.{GmailSource, HistoryRead, Ledger, SlackIdentity, SlackSource}
+
+  def history(context, request) do
+    with {:ok, window} <- HistoryRead.window(request) do
+      saved = context.run.prompt_snapshot["history_read"]
+
+      if is_map(saved) and saved["window"] == window do
+        {:ok, context.run.prompt_snapshot["recalled_sources"] || [], saved}
+      else
+        {refs, coverage} = HistoryRead.select(context, window)
+
+        if length(Enum.uniq_by(refs, & &1["message_id"])) == length(refs) do
+          with {:ok, recalled} <-
+                 read_all(context, Enum.map(refs, &{:ok, &1, &1["provider"] == "gmail"})),
+               do: {:ok, recalled, coverage}
+        else
+          {:error, :unverified_evidence}
+        end
+      end
+    end
+  end
 
   def read(context, decision) do
     with {:ok, requested} <- Ledger.requested_ids(decision) do
@@ -34,30 +54,33 @@ defmodule Maraithon.Delegations.Toolbox do
           {:error, :recalled_evidence_limit}
 
         true ->
-          Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, found} ->
-            case reference(context, id, refs) do
-              {:ok, ref, origin?} ->
-                with true <- allowed?(context, ref),
-                     {:ok, message} <- cached_or_fetch(context, ref),
-                     ref =
-                       if(origin?, do: Map.put(ref, "digest", Ledger.digest(message)), else: ref),
-                     true <- matches?(message, ref) do
-                  found = found ++ [%{"reference" => ref, "message" => message}]
-
-                  if PromptBudget.encoded_bytes(found) <= 128_000,
-                    do: {:cont, {:ok, found}},
-                    else: {:halt, {:error, :recalled_evidence_limit}}
-                else
-                  {:error, _} = error -> {:halt, error}
-                  _ -> {:halt, {:error, :recalled_evidence_changed}}
-                end
-
-              _ ->
-                {:halt, {:error, :unverified_evidence}}
-            end
-          end)
+          read_all(context, Enum.map(ids, &reference(context, &1, refs)))
       end
     end
+  end
+
+  defp read_all(context, references) do
+    Enum.reduce_while(references, {:ok, []}, fn reference, {:ok, found} ->
+      case reference do
+        {:ok, ref, fresh?} ->
+          with true <- allowed?(context, ref),
+               {:ok, message} <- cached_or_fetch(context, ref),
+               ref = if(fresh?, do: Map.put(ref, "digest", Ledger.digest(message)), else: ref),
+               true <- matches?(message, ref) do
+            found = found ++ [%{"reference" => ref, "message" => message}]
+
+            if PromptBudget.encoded_bytes(found) <= 128_000,
+              do: {:cont, {:ok, found}},
+              else: {:halt, {:error, :recalled_evidence_limit}}
+          else
+            {:error, _} = error -> {:halt, error}
+            _ -> {:halt, {:error, :recalled_evidence_changed}}
+          end
+
+        _ ->
+          {:halt, {:error, :unverified_evidence}}
+      end
+    end)
   end
 
   # A legacy conversation may not have learned any facts yet. Its original

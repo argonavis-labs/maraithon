@@ -63,6 +63,16 @@ defmodule Maraithon.Delegations.EvaluationMemory do
         do: Toolbox.read(context, %{"evidence" => ids}),
         else: {:error, :bounded_saved_evidence_required}
 
+    uncited_context = put_in(context, [:run, Access.key(:prompt_snapshot), "fact_ledger"], %{})
+
+    history =
+      Toolbox.history(uncited_context, %{
+        "start_at" =>
+          context.delegation.inserted_at |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
+        "end_at" =>
+          context.delegation.updated_at |> DateTime.add(1, :second) |> DateTime.to_iso8601()
+      })
+
     checks = %{
       "expected_fact_saved" =>
         is_binary(expected) and expected != "" and
@@ -77,6 +87,17 @@ defmodule Maraithon.Delegations.EvaluationMemory do
         Maraithon.Delegations.Reports.model_receipts_verified?([context.turn], spec["model"]),
       "cited_sources_recalled" =>
         match?({:ok, items} when length(items) == length(refs), recalled),
+      "uncited_history_recalled" =>
+        case history do
+          {:ok, items, _coverage} ->
+            Enum.any?(items, fn item ->
+              item["reference"]["message_id"] == job.result["reply_message_id"] and
+                item["reference"]["account_id"] == context.delegation.connected_account_id
+            end)
+
+          _ ->
+            false
+        end,
       "ledger_within_limit" => Ledger.valid_storage?(Ledger.snapshot(context))
     }
 
@@ -93,6 +114,11 @@ defmodule Maraithon.Delegations.EvaluationMemory do
       "recall_error" =>
         case recalled do
           {:ok, _} -> nil
+          {:error, reason} -> Maraithon.Redaction.error_class(reason)
+        end,
+      "history_error" =>
+        case history do
+          {:ok, _, _} -> nil
           {:error, reason} -> Maraithon.Redaction.error_class(reason)
         end,
       "model_calls" => 0,
