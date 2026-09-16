@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.Budget do
   import Ecto.Query
   alias Maraithon.{HTTP, LLM, Repo}
   alias Maraithon.LLM.CostMonitor
-  alias Maraithon.Delegations.{Authority, Binding, Delegation, Preferences, Turn}
+  alias Maraithon.Delegations.{Audit, Authority, Binding, Decision, Delegation, Preferences, Turn}
   alias Maraithon.Runtime.{BackgroundJob, DatabaseClock, JobAuthority, RecurringJobs}
 
   @output_tokens 2_048
@@ -126,6 +126,7 @@ defmodule Maraithon.Delegations.Budget do
           Map.merge(quote, %{
             "state" => "entered",
             "entered_at" => DateTime.to_iso8601(now),
+            "prompt_version" => Decision.prompt_version(),
             "development_spending" => development?
           })
 
@@ -136,6 +137,24 @@ defmodule Maraithon.Delegations.Budget do
           data: Map.put(turn.data, "model_entries", Map.put(entries, key, entry))
         })
         |> Repo.update!()
+
+        Audit.note!(
+          context.delegation,
+          "model_entry",
+          "model-entry:#{turn.id}:#{key}",
+          %{
+            "turn_id" => turn.id,
+            "run_id" => turn.run_id,
+            "grant_id" => context.grant.id,
+            "grant_version" => turn.grant_version,
+            "policy_version" => context.grant.policy_version,
+            "model_stage" => key,
+            "model" => turn.model,
+            "prompt_version" => entry["prompt_version"],
+            "reserved_micro_usd" => amount
+          },
+          %{occurred_at: now}
+        )
 
         :ok
     end
@@ -186,6 +205,36 @@ defmodule Maraithon.Delegations.Budget do
         d
         |> Delegation.changeset(%{lifetime_micro_usd: d.lifetime_micro_usd + micro})
         |> Repo.update!()
+
+        now = DatabaseClock.now!()
+
+        duration_ms =
+          case DateTime.from_iso8601(entry["entered_at"] || "") do
+            {:ok, entered_at, _} -> max(0, DateTime.diff(now, entered_at, :millisecond))
+            _ -> nil
+          end
+
+        Audit.note!(
+          d,
+          "model_receipt",
+          "model-receipt:#{turn.id}:#{key}",
+          %{
+            "turn_id" => turn.id,
+            "run_id" => turn.run_id,
+            "grant_id" => context.grant.id,
+            "grant_version" => turn.grant_version,
+            "policy_version" => context.grant.policy_version,
+            "model_stage" => key,
+            "model" => turn.model,
+            "actual_model" => response[:model],
+            "prompt_version" => entry["prompt_version"],
+            "cost_micro_usd" => micro,
+            "input_tokens" => response[:tokens_in],
+            "output_tokens" => response[:tokens_out],
+            "duration_ms" => duration_ms
+          },
+          %{occurred_at: now}
+        )
       else
         # Missing billable receipts leave the reservation outstanding. Neither
         # a retry nor the passage of a budget window refunds unknown spend.

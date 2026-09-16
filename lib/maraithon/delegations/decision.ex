@@ -22,6 +22,8 @@ defmodule Maraithon.Delegations.Decision do
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @opts [max_wall_clock_ms: 120_000, max_llm_turns: 3, max_tool_steps: 1]
+  @prompt_version 1
+  def prompt_version, do: @prompt_version
 
   def execute(%BackgroundJob{job_type: "delegation_decide"} = job) do
     job = BackgroundJob.hydrate_payloads(job)
@@ -457,7 +459,11 @@ defmodule Maraithon.Delegations.Decision do
       })
       |> Repo.update!()
 
-      Jobs.result!(context, "failure", %{"question" => question})
+      Jobs.result!(context, "failure", %{
+        "question" => question,
+        "failure_code" => Maraithon.Redaction.error_class(reason)
+      })
+
       %{state: "needs_user", run_id: context.run.id}
     end)
   end

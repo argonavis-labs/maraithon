@@ -22,6 +22,8 @@ defmodule Maraithon.SafeLogMetadata do
     candidatecount devicecount sourcecount itemcount rejected unregistered attempt iteration
     detected swept alerted count oldestageseconds activecandidatecount activejobcount
     activeeffectcount snapshotbytes
+    eventseq grantversion policyversion revision sourcerevision workflowrevision schemaversion
+    costmicrousd reservedmicrousd promptversion
   )
 
   @path_fields ~w(paths)
@@ -32,10 +34,33 @@ defmodule Maraithon.SafeLogMetadata do
     providerreference targetreference
     model reasoningeffort finishreason failurecode responseshape errorclass costsource
     transportclass callbackclass promptkind effecttype eventtype table
+    delegationid turnid runid actionid assignmentid eventid inputeventid grantid
+    actualmodel modelstage occurredat
   )
 
   @structured_fields [
     :request_id,
+    :delegation_id,
+    :turn_id,
+    :run_id,
+    :action_id,
+    :assignment_id,
+    :event_id,
+    :input_event_id,
+    :event_seq,
+    :grant_id,
+    :grant_version,
+    :policy_version,
+    :revision,
+    :source_revision,
+    :workflow_revision,
+    :schema_version,
+    :cost_micro_usd,
+    :reserved_micro_usd,
+    :prompt_version,
+    :actual_model,
+    :model_stage,
+    :occurred_at,
     :agent_id,
     :effect_id,
     :job_id,

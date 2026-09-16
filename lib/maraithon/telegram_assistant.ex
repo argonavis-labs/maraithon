@@ -2171,8 +2171,12 @@ defmodule Maraithon.TelegramAssistant do
           |> Map.put(@prepared_execution_lease_until_key, DateTime.to_iso8601(lease_until))
 
         case update_prepared_action(action, %{payload: claimed_payload}) do
-          {:ok, claimed_action} -> {:ok, claimed_action, token}
-          {:error, reason} -> Repo.rollback({:prepared_action_claim_failed, reason})
+          {:ok, claimed_action} ->
+            Maraithon.Delegations.Receipts.entered!(claimed_action, now)
+            {:ok, claimed_action, token}
+
+          {:error, reason} ->
+            Repo.rollback({:prepared_action_claim_failed, reason})
         end
     end
   end

@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Jobs do
   @moduledoc "Durable turn admission and worker results in the existing runtime lanes."
   import Ecto.Query
   alias Maraithon.{Accounts, LLM, Repo}
-  alias Maraithon.Delegations.{Authority, Binding, Delegation, Outbox, Turn}
+  alias Maraithon.Delegations.{Audit, Authority, Binding, Delegation, Outbox, Turn}
 
   alias Maraithon.Runtime.{
     BackgroundJob,
@@ -64,6 +64,22 @@ defmodule Maraithon.Delegations.Jobs do
 
       turn |> Turn.changeset(%{run_id: run_id}) |> Repo.update!()
       enqueue!("delegation_sync", d, binding, now)
+
+      Audit.note!(
+        d,
+        "turn_started",
+        "turn:#{turn.id}",
+        %{
+          "turn_id" => turn.id,
+          "run_id" => run_id,
+          "grant_id" => grant.id,
+          "grant_version" => grant.version,
+          "policy_version" => grant.policy_version,
+          "reminder" => turn.data["reminder"]
+        },
+        %{occurred_at: now}
+      )
+
       %{d | state: "syncing", next_wake_at: nil, data: Map.delete(d.data, "hold_reason")}
     end
   end
@@ -165,7 +181,12 @@ defmodule Maraithon.Delegations.Jobs do
       context.delegation,
       kind,
       "#{kind}:#{context.turn.id}",
-      Map.merge(data, Map.take(binding, ~w(turn_id grant_version run_id source_revision)))
+      data
+      |> Map.merge(Map.take(binding, ~w(turn_id grant_version run_id source_revision)))
+      |> Map.merge(%{
+        "grant_id" => context.grant.id,
+        "policy_version" => context.grant.policy_version
+      })
     )
   end
 

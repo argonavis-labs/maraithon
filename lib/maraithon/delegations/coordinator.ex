@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Coordinator do
   @moduledoc "Bounded reduction under the coordinator's existing directive lease. No provider I/O."
   import Ecto.Query
   alias Maraithon.{Repo, Delegations}
-  alias Maraithon.Delegations.{Delegation, Event, Turn, Outbox, StateMachine, Commands}
+  alias Maraithon.Delegations.{Audit, Delegation, Event, Turn, Outbox, StateMachine, Commands}
 
   def drain(user_id, agent_id, now, opts \\ []) do
     unless Repo.in_transaction?(),
@@ -71,13 +71,30 @@ defmodule Maraithon.Delegations.Coordinator do
     {_d, last} =
       Enum.reduce(Enum.take(events, 25), {d, 0}, fn event, {current, last} ->
         grant = Delegations.current_grant(current)
+        accepted? = acceptable?(current, grant, event)
 
         next =
-          if acceptable?(current, grant, event),
+          if accepted?,
             do: reduce!(current, grant, event, now),
             else: current
 
         event |> Event.changeset(%{wake_state: "consumed"}) |> Repo.update!()
+
+        Audit.note!(
+          next,
+          if(accepted?, do: "event_accepted", else: "event_ignored"),
+          "accepted:#{event.id}",
+          %{
+            "input_event_id" => event.id,
+            "grant_id" => grant.id,
+            "grant_version" => grant.version,
+            "turn_id" => event.data["turn_id"],
+            "action_id" => event.data["action_id"],
+            "duration_ms" => max(0, DateTime.diff(now, event.inserted_at, :millisecond))
+          },
+          %{occurred_at: now}
+        )
+
         {next, max(last, event.seq)}
       end)
 
@@ -191,7 +208,7 @@ defmodule Maraithon.Delegations.Coordinator do
   # alone is not evidence that workflow changes succeeded. These rows never wake work.
   defp record_transition(before, saved, grant, event, now) do
     if before.state != saved.state do
-      Outbox.append!(
+      Audit.note!(
         saved,
         "state_changed",
         "state:#{saved.revision}",
@@ -199,6 +216,7 @@ defmodule Maraithon.Delegations.Coordinator do
           "state" => saved.state,
           "previous_state" => before.state,
           "revision" => saved.revision,
+          "grant_id" => grant.id,
           "grant_version" => grant.version,
           "turn_id" => event.data["turn_id"],
           "action_id" => event.data["action_id"],
@@ -208,8 +226,6 @@ defmodule Maraithon.Delegations.Coordinator do
         },
         %{occurred_at: now}
       )
-      |> Event.changeset(%{wake_state: "consumed"})
-      |> Repo.update!()
     end
   end
 

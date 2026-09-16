@@ -2,6 +2,16 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Redacted delegation trace
+
+The existing encrypted event ledger now records model entry, billed cost, turn admission, coordinator acceptance or rejection, and executor entry. Grant controls, decisions, policy holds, delivery receipts, uncertain delivery, reconciliation and applied state changes use their existing events. Observation records are consumed on insertion, so they do not wake another job or appear in the user's conversation history. No new worker, table, provider request or model call is needed.
+
+Each background job, user control and coordinator reduction collects at most 256 event IDs in its process. After its transactions end, it reads the committed rows and emits selected IDs, revisions, versions, timing and cost fields. Rolled-back rows produce no log receipt. Bodies, prompts, recipients and execution tokens are excluded. Executor entry remains an attempt, not proof of delivery. Its deduplication key uses a digest of the execution claim because local rate-limit deferral can reset the numeric attempt count.
+
+Logs are best effort. Process death, a full buffer or a failed log read can leave a committed event without a log line. `Maraithon.Delegations.Audit.page(user_id, delegation_id, before)` reads up to 100 redacted records directly from the durable ledger for operator inspection. It does not dispatch work or authorise another send. Job records include the job and assignment IDs when available. Coordinator records retain the agent ID; they do not invent a job or assignment ID.
+
+`make build` passed with warnings treated as errors. Tests were not run under the manual-first policy. This change has not yet been exercised through a fresh live conversation or a worker-loss scenario. Earlier event rows are readable but are not backfilled with metadata that was never recorded. Local Google Cloud reauthentication is expired; the existing keyless deployment workflow remains available.
+
 ## Conversation history on web, Mac and iPhone
 
 Tasks now expose a read-only conversation history from the existing encrypted events and fact ledger. It shows user controls, received messages, planned actions, confirmed receipts, uncertain delivery, holds, and saved facts with their source links. Pages contain at most 30 events and use a sequence cursor scoped to the authenticated user and delegation. Opening history makes no provider or model calls. The same server copy and response drive both native apps and the web view.
@@ -14,7 +24,7 @@ Server commit `78d0f158` and Gmail-link correction `a66fbfec` deployed successfu
 
 Older calendar receipts discarded Google's event URL. Commit `d6084e4c` preserves it on future direct and reconciled receipts; history only links to a retained Google Calendar URL. It does not invent links or fetch old events during display. This follow-up passed the Phoenix build and deployed through workflow `35082619194`; revision `maraithon-00408-5b5` serves all traffic. The Mac history refreshed against this revision. A fresh live booking still needs to verify URL retention.
 
-Physical iPhone interaction, pagination beyond the first page, the saved-fact disclosure, and newly recorded applied transitions remain unverified in production. The plan's complete redacted operational event stream is still unfinished. The latest UI checks cover existing saved records, not the whole recovery matrix.
+Physical iPhone interaction, pagination beyond the first page, the saved-fact disclosure, and newly recorded applied transitions remain unverified in production. The operational trace is described above; its live recovery checks remain outstanding. The latest UI checks cover existing saved records, not the whole recovery matrix.
 
 ## Durable conversation checks before delegation
 

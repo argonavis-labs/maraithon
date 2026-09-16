@@ -1178,7 +1178,16 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     # Every provider call this job makes carries its job type in the log line.
     Logger.metadata(job_type: job.job_type)
     # The job's user picks the model for every provider call it makes.
-    Maraithon.LLM.UserModel.with_user(job.user_id, fn -> safe_execute(handler, job) end)
+    Maraithon.Delegations.Audit.capture(
+      %{
+        "job_id" => job.id,
+        "job_type" => job.job_type,
+        "assignment_id" => job.coordination_task_assignment_id
+      },
+      fn ->
+        Maraithon.LLM.UserModel.with_user(job.user_id, fn -> safe_execute(handler, job) end)
+      end
+    )
   end
 
   defp persist_job_result(%BackgroundJob{} = job, handler_result) do

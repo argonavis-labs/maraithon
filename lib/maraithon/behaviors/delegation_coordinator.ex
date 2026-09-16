@@ -16,7 +16,12 @@ defmodule Maraithon.Behaviors.DelegationCoordinator do
 
   @impl true
   def handle_wakeup(%{"version" => 1} = state, %{write: write} = context) do
-    case write.(fn now -> Coordinator.drain(context.user_id, context.agent_id, now, limit: 25) end) do
+    result =
+      Maraithon.Delegations.Audit.capture(%{}, fn ->
+        write.(fn now -> Coordinator.drain(context.user_id, context.agent_id, now, limit: 25) end)
+      end)
+
+    case result do
       {:ok, result} ->
         Enum.each(result.changed, fn id ->
           case Maraithon.Delegations.get(context.user_id, id) do

@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Outbox do
   @moduledoc "Conversation events and idempotent, post-commit Agent wakes."
   import Ecto.Query
   alias Maraithon.{Repo, Runtime.AgentDirectives, Runtime.DatabaseClock}
-  alias Maraithon.Delegations.{Delegation, Event}
+  alias Maraithon.Delegations.{Audit, Delegation, Event}
 
   @doc "Append under the caller's authority and delegation lock, in its result transaction."
   def append!(%Delegation{} = delegation, kind, key, data, attrs \\ %{}) do
@@ -10,6 +10,7 @@ defmodule Maraithon.Delegations.Outbox do
 
     case Repo.get_by(Event, delegation_id: delegation.id, event_key: key) do
       nil ->
+        wake? = Map.get(attrs, :wake?, true)
         attrs = Map.take(attrs, [:source_ref, :source_revision, :occurred_at])
 
         %Event{user_id: delegation.user_id}
@@ -18,12 +19,14 @@ defmodule Maraithon.Delegations.Outbox do
             delegation_id: delegation.id,
             kind: kind,
             event_key: key,
-            data: data,
+            data: Audit.enrich(delegation, data),
             occurred_at: Map.get_lazy(attrs, :occurred_at, &DatabaseClock.now!/0),
-            wake_state: if(Delegation.live?(delegation), do: "pending", else: "consumed")
+            wake_state:
+              if(wake? and Delegation.live?(delegation), do: "pending", else: "consumed")
           })
         )
         |> Repo.insert!()
+        |> Audit.track()
 
       existing ->
         Event.hydrate(existing)

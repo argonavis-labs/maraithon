@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Receipts do
   @moduledoc "Atomic prepared-action outcomes, turn settlement and conversation wake intents."
   import Ecto.Query
   alias Maraithon.Repo
-  alias Maraithon.Delegations.{Authority, Binding, Delegation, Event, Outbox, Turn}
+  alias Maraithon.Delegations.{Audit, Authority, Binding, Delegation, Event, Outbox, Turn}
   alias Maraithon.TelegramAssistant.PreparedAction
 
   @result "_maraithon_execution_result"
@@ -11,6 +11,36 @@ defmodule Maraithon.Delegations.Receipts do
   @fields ~w(source message_id thread_id event_id team_id channel ts user bot_id text_sha256 reconciled html_link)
 
   def proof_fields, do: @fields
+
+  # Executor entry is conservative evidence of an attempt, not provider acceptance.
+  # Record it with the execution claim, never in a later best-effort callback.
+  def entered!(%PreparedAction{authorization_kind: "delegation_grant"} = action, now) do
+    %{delegation: d, turn: turn, grant: grant} = Authority.lock_action_scope!(action)
+    attempt = action.payload["_maraithon_execution_attempts"]
+
+    claim =
+      :crypto.hash(:sha256, action.payload["_maraithon_execution_token"])
+      |> Base.encode16(case: :lower)
+
+    Audit.note!(
+      d,
+      "send_entry",
+      "entry:#{action.id}:#{claim}",
+      %{
+        "turn_id" => turn.id,
+        "run_id" => turn.run_id,
+        "action_id" => action.id,
+        "effect_type" => action.action_type,
+        "grant_id" => grant.id,
+        "grant_version" => grant.version,
+        "policy_version" => grant.policy_version,
+        "attempt" => attempt
+      },
+      %{occurred_at: now}
+    )
+  end
+
+  def entered!(_, _), do: :ok
 
   # Called only after the provider worker returned a closed local admission
   # rejection, under the matching execution claim and the normal write fence.
@@ -47,7 +77,7 @@ defmodule Maraithon.Delegations.Receipts do
   # This remains writable after revocation: a receipt is evidence, not new authority.
   def record!(%PreparedAction{authorization_kind: "delegation_grant", status: status} = action)
       when status in ~w(executed execution_unknown failed) do
-    %{delegation: d, turn: turn, run: run} = Authority.lock_action_scope!(action)
+    %{delegation: d, turn: turn, run: run, grant: grant} = Authority.lock_action_scope!(action)
     key = "action:#{action.id}:#{status}"
 
     unless Repo.get_by(Event, delegation_id: d.id, event_key: key) do
@@ -138,9 +168,13 @@ defmodule Maraithon.Delegations.Receipts do
 
       payload = %{
         "turn_id" => turn.id,
+        "run_id" => run.id,
+        "grant_id" => grant.id,
         "grant_version" => turn.grant_version,
+        "policy_version" => grant.policy_version,
         "action_id" => action.id,
         "action_type" => action.action_type,
+        "effect_type" => action.action_type,
         "confirmed_payload_hash" => action.payload[@hash],
         "receipt" => receipt
       }

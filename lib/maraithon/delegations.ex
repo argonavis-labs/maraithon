@@ -192,7 +192,12 @@ defmodule Maraithon.Delegations do
       d,
       "user_action",
       "user:#{attrs["request_id"]}",
-      %{"action" => "start", "grant_version" => 1},
+      %{
+        "action" => "start",
+        "grant_id" => grant.id,
+        "grant_version" => grant.version,
+        "policy_version" => grant.policy_version
+      },
       %{occurred_at: now}
     )
 
@@ -280,7 +285,12 @@ defmodule Maraithon.Delegations do
               changed,
               "user_action",
               "user:#{attrs["request_id"]}",
-              %{"action" => action, "grant_version" => next_grant.version},
+              %{
+                "action" => action,
+                "grant_id" => next_grant.id,
+                "grant_version" => next_grant.version,
+                "policy_version" => next_grant.policy_version
+              },
               %{occurred_at: now}
             )
 
@@ -356,8 +366,8 @@ defmodule Maraithon.Delegations do
     end
   end
 
-  defp transaction(user_id, fun),
-    do:
+  defp transaction(user_id, fun) do
+    Maraithon.Delegations.Audit.capture(%{}, fn ->
       Repo.transaction(fn ->
         if job = Maraithon.AssistantChat.Execution.capture_authority(),
           do: Maraithon.Runtime.JobAuthority.fence!(job)
@@ -366,6 +376,8 @@ defmodule Maraithon.Delegations do
         WriteFence.lock_user_writable!(user_id)
         fun.()
       end)
+    end)
+  end
 
   defp after_control({:ok, d}, user_id) do
     job = Maraithon.AssistantChat.Execution.capture_authority()
