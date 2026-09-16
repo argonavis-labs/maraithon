@@ -5,6 +5,16 @@ defmodule Maraithon.TestSupport.DelegationRuntime do
   alias Maraithon.Repo
 
   def run_leased_job(node, partitions, type, fun) do
+    {task, identity} = start_leased_job(node, partitions, type, fun)
+    result = Task.await(task, 10_000)
+
+    assert {:ok, :completion} =
+             Maraithon.Runtime.Coordination.TaskSupervisor.terminate_exact(identity)
+
+    result
+  end
+
+  def start_leased_job(node, partitions, type, fun) do
     alias Maraithon.Runtime.{BackgroundJob, JobAuthority}
     alias Maraithon.Runtime.Coordination.{FairScheduler, TaskClaims, TaskSupervisor}
 
@@ -66,9 +76,7 @@ defmodule Maraithon.TestSupport.DelegationRuntime do
 
     assert :ok = TaskSupervisor.bind_task(identity, task.pid)
     send(task.pid, {:bound, gate})
-    result = Task.await(task, 10_000)
-    assert {:ok, :completion} = TaskSupervisor.terminate_exact(identity)
-    result
+    {task, identity}
   end
 
   def exact_authority(user_id) do

@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Wakes do
   @moduledoc "Bounded, tenant-fair repair of lost coordinator wake-ups. No model or provider calls."
   import Ecto.Query
   alias Maraithon.Repo
-  alias Maraithon.Delegations.{Delegation, Lifecycle}
+  alias Maraithon.Delegations.{Delegation, Lifecycle, Recovery}
   alias Maraithon.Runtime.{BackgroundJob, DatabaseClock, JobAuthority}
 
   def run_once(%BackgroundJob{} = job) do
@@ -37,7 +37,11 @@ defmodule Maraithon.Delegations.Wakes do
 
              users
            end) do
-      results = Enum.map(users, &Lifecycle.ensure(&1, job: job))
+      results =
+        Enum.map(users, fn user_id ->
+          with {:ok, _} <- Recovery.run_once(job, user_id),
+               do: Lifecycle.ensure(user_id, job: job)
+        end)
 
       {:ok,
        %{

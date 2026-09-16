@@ -47,9 +47,21 @@ defmodule Maraithon.Delegations.Decision do
     with {:ok, %{run: _} = context} <- prepare(job, context),
          {:ok, checkpoint, _profile, state} <- Continuation.load(context.run, attrs(context)) do
       case checkpoint["phase"] do
-        "ready" -> compose(job, context, checkpoint, state)
-        "decision" -> continue(job, context, checkpoint, state)
-        "model_entered" -> hold(job, :model_response_unknown)
+        "ready" ->
+          call(
+            job,
+            context,
+            checkpoint,
+            state,
+            checkpoint["retry_stage"] || "compose",
+            checkpoint["delegation_decision"]
+          )
+
+        "decision" ->
+          continue(job, context, checkpoint, state)
+
+        "model_entered" ->
+          hold(job, :model_response_unknown)
       end
     else
       {:ok, :superseded} -> {:ok, :superseded}
@@ -97,9 +109,6 @@ defmodule Maraithon.Delegations.Decision do
   end
 
   defp scheduling(_), do: {:ok, %{}}
-
-  defp compose(job, context, checkpoint, state),
-    do: call(job, context, checkpoint, state, "compose", nil)
 
   defp continue(job, context, checkpoint, state) do
     response = checkpoint["response"]
@@ -253,6 +262,7 @@ defmodule Maraithon.Delegations.Decision do
 
           checkpoint =
             checkpoint
+            |> Map.delete("retry_stage")
             |> Map.put("delegation_stage", stage)
             |> Map.put("delegation_decision", decision)
 

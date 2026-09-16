@@ -1180,7 +1180,12 @@ defmodule Maraithon.Delegations.IngressTest do
         :repair_fails,
         :fact_rejected,
         :older_fact,
-        :assistant_calendar
+        :assistant_calendar,
+        :interrupted_before_call,
+        :interrupted_compose,
+        :interrupted_after_save,
+        :interrupted_policy,
+        :recovery_exhausted
       ] do
     @tag admission: admission
     test "a leased model turn with #{admission} admission charges only provider entries", c do
@@ -1275,8 +1280,27 @@ defmodule Maraithon.Delegations.IngressTest do
         end
 
       calls = start_supervised!({Agent, fn -> 0 end})
+      parent = self()
+      prices = :atomics.new(1, [])
+
+      interrupted? =
+        c.admission in [
+          :interrupted_before_call,
+          :interrupted_compose,
+          :interrupted_after_save,
+          :interrupted_policy,
+          :recovery_exhausted
+        ]
+
+      unknown? = c.admission in [:interrupted_compose, :interrupted_policy]
 
       Bypass.expect(bypass, "GET", "/api/v1/models/#{model}/endpoints", fn conn ->
+        n = :atomics.add_get(prices, 1, 1)
+
+        if (c.admission in [:interrupted_before_call, :recovery_exhausted] and n == 1) or
+             (c.admission == :interrupted_after_save and n == 2),
+           do: decision_barrier(parent)
+
         json(conn, %{
           "data" => %{
             "id" => model,
@@ -1322,8 +1346,12 @@ defmodule Maraithon.Delegations.IngressTest do
         end
 
         assert c.admission != :cooldown
-        expected_calls = if c.admission == :repair, do: 3, else: 2
+        expected_calls = if c.admission == :repair or unknown?, do: 3, else: 2
         assert n <= expected_calls
+
+        if (c.admission == :interrupted_compose and n == 1) or
+             (c.admission == :interrupted_policy and n == 2),
+           do: decision_barrier(parent)
 
         if c.admission == :provider_cooldown do
           conn
@@ -1353,7 +1381,7 @@ defmodule Maraithon.Delegations.IngressTest do
               c.admission == :repair_fails or (c.admission == :repair and n == 1) ->
                 Map.delete(decision, "body")
 
-              n == 1 or (c.admission == :repair and n == 2) ->
+              n == 1 or (c.admission in [:repair, :interrupted_compose] and n == 2) ->
                 decision
 
               true ->
@@ -1447,117 +1475,234 @@ defmodule Maraithon.Delegations.IngressTest do
       on_exit(fn -> limiter.reset() end)
       if c.admission == :cooldown, do: limiter.record_rate_limit(60_000, :reasoning)
 
-      run_leased_job(node, partitions, "delegation_decide", fn job ->
-        expected =
-          case c.admission do
-            :cooldown -> "waiting_capacity"
-            :provider_cooldown -> "waiting_capacity"
-            :repair_fails -> "needs_user"
-            :fact_rejected -> "needs_user"
-            _ -> "decided"
+      if interrupted? do
+        alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs}
+        alias Maraithon.Runtime.Coordination.{TaskClaims, TaskSupervisor}
+        alias Maraithon.Delegations.Recovery
+
+        {task, identity} =
+          start_leased_job(node, partitions, "delegation_decide", &Decision.execute/1)
+
+        assert_receive {:decision_barrier, provider}, 10_000
+        on_exit(fn -> send(provider, :release) end)
+
+        old =
+          Repo.get_by!(BackgroundJob, job_type: "delegation_decide")
+          |> BackgroundJob.hydrate_payloads()
+
+        if c.admission in [:interrupted_before_call, :recovery_exhausted] do
+          assert {:ok, _} =
+                   Jobs.transaction(old, fn context ->
+                     if c.admission == :recovery_exhausted do
+                       context.turn
+                       |> Turn.changeset(%{
+                         data: Map.put(context.turn.data, "decision_recoveries", 2)
+                       })
+                       |> Repo.update!()
+                     else
+                       # Simulate an outage longer than this read-only attempt's deadline.
+                       summary =
+                         put_in(
+                           context.run.result_summary,
+                           ["execution_checkpoint", "deadline_ms"],
+                           0
+                         )
+
+                       context.run
+                       |> Maraithon.TelegramAssistant.Run.changeset(%{result_summary: summary})
+                       |> Repo.update!()
+                     end
+                   end)
+        end
+
+        original = Repo.one!(Turn) |> Turn.hydrate()
+
+        {:ok, sweep} =
+          BackgroundJobs.enqueue("runtime_recurring:delegation_due_sweep", %{user_id: c.user_id})
+
+        run_leased_job(node, partitions, sweep, fn sweep ->
+          assert {:ok, 0} = Recovery.run_once(sweep, c.user_id)
+          {:ok, %{checked: true}}
+        end)
+
+        monitor = Process.monitor(task.pid)
+        assert {:ok, :supervisor_down} = TaskSupervisor.terminate_exact(identity)
+        assert_receive {:DOWN, ^monitor, :process, _, _}, 5_000
+        assert catch_exit(Task.await(task))
+        send(provider, :release)
+        assert {:ok, _} = TaskClaims.reconcile_proven()
+        assert TaskClaims.get(old.coordination_task_assignment_id).state == "outcome_ambiguous"
+        assert Repo.get!(BackgroundJob, old.id).status == "failed"
+        assert {:error, _} = Jobs.transaction(old, fn _ -> flunk("stale worker wrote") end)
+
+        {:ok, sweep} =
+          BackgroundJobs.enqueue("runtime_recurring:delegation_due_sweep", %{user_id: c.user_id})
+
+        run_leased_job(node, partitions, sweep, fn sweep ->
+          if c.admission == :interrupted_before_call do
+            Application.put_env(:maraithon, :delegations_enabled, false)
+            assert {:ok, 0} = Recovery.run_once(sweep, c.user_id)
+            Application.put_env(:maraithon, :delegations_enabled, true)
           end
 
-        assert {:ok, %{state: ^expected}} = Decision.execute(job)
+          assert {:ok, 1} = Recovery.run_once(sweep, c.user_id)
+          assert {:ok, 0} = Recovery.run_once(sweep, c.user_id)
+          {:ok, %{recovered: true}}
+        end)
 
-        run =
-          Repo.get!(Maraithon.TelegramAssistant.Run, job.payload["run_id"])
-          |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
+        recovered = Repo.one!(Turn) |> Turn.hydrate()
+        assert recovered.id == original.id
+        assert recovered.model_calls == original.model_calls
+        assert recovered.reserved_micro_usd == original.reserved_micro_usd
+        assert recovered.cost_micro_usd == original.cost_micro_usd
 
-        assert is_binary(run.prompt_snapshot["voice"]["version"])
+        assert recovered.data["decision_recoveries"] ==
+                 if(c.admission == :recovery_exhausted, do: 2, else: 1)
 
-        ledger =
-          Repo.get!(Delegation, c.delegation.id)
-          |> Delegation.hydrate()
-          |> Map.fetch!(:data)
-          |> Map.get("ledger")
+        assert Repo.get!(BackgroundJob, old.id).status == "failed"
+      end
 
-        assert {:ok, %{state: ^expected}} = result = Decision.execute(job)
+      if c.admission == :recovery_exhausted do
+        refute Repo.exists?(
+                 from j in Maraithon.Runtime.BackgroundJob,
+                   where: j.job_type == "delegation_decide" and j.status == "pending"
+               )
 
-        assert (Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()).data["ledger"] ==
-                 ledger
-
-        retried =
-          Repo.get!(Maraithon.TelegramAssistant.Run, run.id)
-          |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
-
-        assert retried.prompt_snapshot["voice"] == run.prompt_snapshot["voice"]
-        result
-      end)
-
-      if c.admission in [:cooldown, :provider_cooldown] do
-        expected_calls = if c.admission == :provider_cooldown, do: 1, else: 0
-        assert Agent.get(calls, & &1) == expected_calls
-        turn = Repo.one!(Turn) |> Turn.hydrate()
-        assert turn.model_calls == expected_calls
-        assert turn.cost_micro_usd == 0
-
-        if c.admission == :provider_cooldown do
-          assert turn.reserved_micro_usd > 0
-          assert turn.data["model_entries"]["compose"]["state"] == "entered"
-        else
-          assert turn.reserved_micro_usd == 0
-          assert turn.data["model_entries"] == nil
-        end
-
-        assert {:ok, _} =
-                 Repo.transaction(fn ->
-                   d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
-
-                   event =
-                     Repo.one!(from e in Event, where: e.kind == "capacity_hold")
-                     |> Event.hydrate()
-
-                   {d, commands} = StateMachine.apply(d, event)
-
-                   next =
-                     Maraithon.Delegations.Commands.apply(
-                       d,
-                       nil,
-                       event,
-                       commands,
-                       DateTime.utc_now()
-                     )
-
-                   assert next.state == "waiting_capacity"
-                   assert DateTime.diff(next.next_wake_at, DateTime.utc_now()) in 59..61
-                   assert Repo.get!(Turn, turn.id).status == "superseded"
-                   assert Repo.get!(Turn, turn.id).reserved_micro_usd == turn.reserved_micro_usd
-
-                   assert {%{state: "ready"}, [:enqueue_sync]} =
-                            StateMachine.apply(next, %{
-                              kind: "timer_due",
-                              occurred_at: next.next_wake_at
-                            })
-                 end)
+        assert Repo.aggregate(from(e in Event, where: e.kind == "failure"), :count) == 1
+        run = Repo.get!(Maraithon.TelegramAssistant.Run, Repo.one!(Turn).run_id)
+        assert run.status == "degraded"
+        assert run.error == "decision_recovery_exhausted"
+        assert Agent.get(calls, & &1) == 0
       else
-        expected_calls = if c.admission == :repair, do: 3, else: 2
-        assert Agent.get(calls, & &1) == expected_calls
-        turn = Repo.one!(Turn) |> Turn.hydrate()
-        rejected? = c.admission in [:repair_fails, :fact_rejected]
-        assert turn.status == if(rejected?, do: "deciding", else: "validated")
-        assert turn.model_calls == expected_calls
-        assert turn.reserved_micro_usd == 0
-        assert turn.cost_micro_usd == expected_calls * 100
-        assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == expected_calls * 100
-        expected_decisions = if rejected?, do: 0, else: 1
-        ledger = (Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()).data["ledger"]
+        decision_job =
+          Repo.one!(
+            from j in Maraithon.Runtime.BackgroundJob,
+              where: j.job_type == "delegation_decide" and j.status == "pending"
+          )
 
-        if rejected? do
-          assert ledger == nil
+        run_leased_job(node, partitions, decision_job, fn job ->
+          expected =
+            case c.admission do
+              :cooldown -> "waiting_capacity"
+              :provider_cooldown -> "waiting_capacity"
+              :repair_fails -> "needs_user"
+              :fact_rejected -> "needs_user"
+              _ -> "decided"
+            end
+
+          assert {:ok, %{state: ^expected}} = Decision.execute(job)
+
+          run =
+            Repo.get!(Maraithon.TelegramAssistant.Run, job.payload["run_id"])
+            |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
+
+          assert is_binary(run.prompt_snapshot["voice"]["version"])
+
+          ledger =
+            Repo.get!(Delegation, c.delegation.id)
+            |> Delegation.hydrate()
+            |> Map.fetch!(:data)
+            |> Map.get("ledger")
+
+          assert {:ok, %{state: ^expected}} = result = Decision.execute(job)
+
+          assert (Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()).data["ledger"] ==
+                   ledger
+
+          retried =
+            Repo.get!(Maraithon.TelegramAssistant.Run, run.id)
+            |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
+
+          assert retried.prompt_snapshot["voice"] == run.prompt_snapshot["voice"]
+          result
+        end)
+
+        if c.admission in [:cooldown, :provider_cooldown] do
+          expected_calls = if c.admission == :provider_cooldown, do: 1, else: 0
+          assert Agent.get(calls, & &1) == expected_calls
+          turn = Repo.one!(Turn) |> Turn.hydrate()
+          assert turn.model_calls == expected_calls
+          assert turn.cost_micro_usd == 0
+
+          if c.admission == :provider_cooldown do
+            assert turn.reserved_micro_usd > 0
+            assert turn.data["model_entries"]["compose"]["state"] == "entered"
+          else
+            assert turn.reserved_micro_usd == 0
+            assert turn.data["model_entries"] == nil
+          end
+
+          assert {:ok, _} =
+                   Repo.transaction(fn ->
+                     d = Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()
+
+                     event =
+                       Repo.one!(from e in Event, where: e.kind == "capacity_hold")
+                       |> Event.hydrate()
+
+                     {d, commands} = StateMachine.apply(d, event)
+
+                     next =
+                       Maraithon.Delegations.Commands.apply(
+                         d,
+                         nil,
+                         event,
+                         commands,
+                         DateTime.utc_now()
+                       )
+
+                     assert next.state == "waiting_capacity"
+                     assert DateTime.diff(next.next_wake_at, DateTime.utc_now()) in 59..61
+                     assert Repo.get!(Turn, turn.id).status == "superseded"
+                     assert Repo.get!(Turn, turn.id).reserved_micro_usd == turn.reserved_micro_usd
+
+                     assert {%{state: "ready"}, [:enqueue_sync]} =
+                              StateMachine.apply(next, %{
+                                kind: "timer_due",
+                                occurred_at: next.next_wake_at
+                              })
+                   end)
         else
-          assert ledger["facts"]["project_colour"]["text"] =~ "indigo"
+          expected_calls = if c.admission == :repair or unknown?, do: 3, else: 2
+          assert Agent.get(calls, & &1) == expected_calls
+          turn = Repo.one!(Turn) |> Turn.hydrate()
+          rejected? = c.admission in [:repair_fails, :fact_rejected]
+          assert turn.status == if(rejected?, do: "deciding", else: "validated")
+          assert turn.model_calls == expected_calls
 
-          assert hd(ledger["facts"]["project_colour"]["evidence"])["message_id"] ==
-                   c.message.message_id
+          if unknown? do
+            assert turn.reserved_micro_usd > 0
+
+            assert Enum.count(turn.data["model_entries"], fn {key, entry} ->
+                     String.contains?(key, ":interrupted:") and entry["state"] == "entered"
+                   end) == 1
+          else
+            assert turn.reserved_micro_usd == 0
+          end
+
+          billed_calls = expected_calls - if(unknown?, do: 1, else: 0)
+          assert turn.cost_micro_usd == billed_calls * 100
+          assert Repo.get!(Delegation, c.delegation.id).lifetime_micro_usd == billed_calls * 100
+          expected_decisions = if rejected?, do: 0, else: 1
+          ledger = (Repo.get!(Delegation, c.delegation.id) |> Delegation.hydrate()).data["ledger"]
+
+          if rejected? do
+            assert ledger == nil
+          else
+            assert ledger["facts"]["project_colour"]["text"] =~ "indigo"
+
+            assert hd(ledger["facts"]["project_colour"]["evidence"])["message_id"] ==
+                     c.message.message_id
+          end
+
+          assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) ==
+                   expected_decisions
+
+          if c.admission in [:repair, :repair_fails],
+            do: assert(turn.data["model_entries"]["repair"]["state"] == "settled")
+
+          assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
         end
-
-        assert Repo.aggregate(from(e in Event, where: e.kind == "decision"), :count) ==
-                 expected_decisions
-
-        if c.admission in [:repair, :repair_fails],
-          do: assert(turn.data["model_entries"]["repair"]["state"] == "settled")
-
-        assert Repo.aggregate(Maraithon.TelegramAssistant.PreparedAction, :count) == 0
       end
     end
   end
@@ -2119,6 +2264,17 @@ defmodule Maraithon.Delegations.IngressTest do
 
         assert Repo.aggregate(from(e in Event, where: e.kind == "send_receipt"), :count) == 1
       end
+    end
+  end
+
+  defp decision_barrier(parent) do
+    Process.flag(:trap_exit, true)
+    send(parent, {:decision_barrier, self()})
+
+    receive do
+      :release -> :ok
+    after
+      20_000 -> flunk("decision fixture was not released")
     end
   end
 
