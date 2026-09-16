@@ -2,6 +2,18 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Read older evidence before deciding
+
+The delegated model can now request one bounded evidence read before composing its decision. It can read sources already cited in the fact ledger and, for Gmail, the original task message identified by the frozen grant. This gives an older conversation with no saved facts access to its originating email even after that email leaves the six-message window. The request cannot select another account, destination, or arbitrary message.
+
+The existing read-only toolbox retrieves the source, checks its account and thread, and saves the message and digest in the encrypted run snapshot. The next composition sees that evidence. New facts still require the independent policy review before entering the ledger, and a send rechecks the source digest. A repeated read request holds with an explanation. Ordinary turns retain their current path; a turn that needs the read uses at most three model calls, including review, under the existing budget.
+
+The new composition stage uses the existing continuation and model-entry reservation. Proven worker-termination recovery recognizes the stage and preserves unknown spend. Retrying a saved read can reuse its authenticated source snapshot. Cross-account message-ID collisions and conflicting references remain errors. Origin citations use the ledger's canonical reference shape.
+
+Commits `da804e25` and `3099666b` passed the server compile. Automated tests were not run under the current manual-first policy. This path has not had a live provider or model eval. Selecting uncaptured historical messages beyond the pinned origin and existing fact citations remains unfinished.
+
+Workflow `35066122312` deployed the final change successfully. Revision `maraithon-00400-nm7` serves all traffic. The scheduled September 16 memory eval remains pending; this deployment did not start another eval or send a message.
+
 ## Calendar choices for delegated scheduling
 
 Assistant settings now let the user choose which Google account books meetings and which other accounts to check for conflicts. Web, iPhone, and Mac share the same saved preferences and account eligibility rules. Scheduling checks each selected account's primary calendar, including the booking account, and freezes that ordered set with the offer. Existing offers retain their saved calendars. Older settings preserve the first selected account as the organizer; new settings default to the task's Google account, with the existing personal-account fallback for non-Google sources.
@@ -465,6 +477,6 @@ Commit `c5fa81d3` deployed through workflow `35055281619`. Revision `maraithon-0
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. Send recovery, older coordinator checkpoints, and interrupted model decisions now pass local whole-BEAM kills. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Reduce model calls per turn and daily workload volume. The information eval used two calls per turn, above the plan's target below 1.3. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 
-The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack history reuse across turns, durable long-thread preflight, scheduling preference refinements, and the full conversation ledger remain unfinished. Cited recall has local coverage; live memory verification is pending. Older conversations without saved facts still need a bounded way to seed their ledger from historical evidence. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
+The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack history reuse across turns, durable long-thread preflight, scheduling preference refinements, and the full conversation ledger remain unfinished. Cited recall has local coverage; live memory verification is pending. The original task email can now supply evidence for reviewed facts; bounded selection of other uncaptured historical messages remains unfinished. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
 The live gate remains restricted to the labelled Kent-pair eval. The code and evidence do not justify enabling general autonomous outreach yet.
