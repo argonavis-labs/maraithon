@@ -12,13 +12,18 @@ defmodule Maraithon.Delegations.EvaluationProposal do
   def diagnostics(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
     Repo.all(
       from a in Maraithon.Agents.Agent,
-        where: a.user_id == ^job.user_id and a.behavior == "ai_chief_of_staff",
+        where: a.user_id == ^job.user_id,
+        where:
+          a.behavior == "ai_chief_of_staff" or
+            (a.behavior == "manifest_agent" and
+               fragment("?->>'source_behavior'", a.config) == "ai_chief_of_staff"),
         order_by: [desc: a.updated_at],
         limit: 3
     )
     |> Enum.map(fn agent ->
       snapshot = Maraithon.Runtime.Snapshot.latest(agent.id) || %{}
       state = snapshot[:behavior_state] || %{}
+      state = state[:source_state] || state
 
       %{
         agent_id: agent.id,
