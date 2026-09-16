@@ -8,6 +8,7 @@ public enum AssistantSettings {
         public let enabled: Bool
         let accounts: [Account]?
         let calendarAccounts: [Account]?
+        let bookingLinks: [BookingLink]?
         let selectedAccount: Int?
         let aliases: [Address]?
         let identity: [String: Value]?
@@ -19,6 +20,7 @@ public enum AssistantSettings {
             case enabled, accounts, aliases, identity, preferences, timezones, error
             case selectedAccount = "selected_account", numericPreferences = "numeric_preferences"
             case calendarAccounts = "calendar_accounts"
+            case bookingLinks = "booking_links"
         }
     }
     struct Account: Decodable, Identifiable, Sendable {
@@ -26,6 +28,7 @@ public enum AssistantSettings {
         var selectionID: String { "calendar-\(id)" }
     }
     struct Address: Decodable, Sendable { let email: String; let primary: Bool }
+    struct BookingLink: Decodable, Identifiable, Sendable { let id: String; let label: String }
     struct Timezone: Decodable, Sendable { let value: String; let label: String }
     struct NumericPreference: Decodable, Sendable {
         let key: String; let label: String; let min: Int; let max: Int

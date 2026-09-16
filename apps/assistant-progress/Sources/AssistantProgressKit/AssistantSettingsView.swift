@@ -108,6 +108,15 @@ public struct AssistantSettingsView: View {
                 }
             }
             TextField("Video link", text: preferenceText("video_link"))
+            if let links = settings.bookingLinks {
+                Picker("Preferred booking link", selection: preferenceText("calendar_link_id")) {
+                    Text("Choose for this task").tag("")
+                    ForEach(links) { Text($0.label).tag($0.id) }
+                }
+                if let webURL, let url = URL(string: "/settings#calendar-links", relativeTo: webURL) {
+                    Link("Manage booking links", destination: url)
+                }
+            }
             Toggle("Suggest tasks to delegate", isOn: preferenceBool("proposals_enabled"))
             Button("Save preferences") { Task { await savePreferences() } }
         }.disabled(busy)
@@ -153,6 +162,7 @@ public struct AssistantSettingsView: View {
         let keys = ["timezone", "work_days", "work_start", "work_end", "video_link", "proposals_enabled"]
             + (settings?.numericPreferences ?? []).map(\.key)
             + (settings?.calendarAccounts == nil ? [] : ["booking_calendar_account_id", "calendar_account_ids"])
+            + (settings?.bookingLinks == nil ? [] : ["calendar_link_id"])
         await perform(path: "delegation-settings/preferences", fields: preferences.filter { keys.contains($0.key) })
     }
     @MainActor private func perform(path: String, fields: [String: AssistantSettings.Value]? = nil) async {
