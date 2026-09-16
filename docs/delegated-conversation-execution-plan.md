@@ -349,7 +349,7 @@ Quality comes from evidence and checks, not from spending. Model calls, provider
 | Sync | Only the missing messages of the bound thread through the existing per-account sync. No per-delegation mailbox scans. |
 | Reconciliation | Bounded provider reads, at most 12 per action, no model. |
 
-Context stays compact: the fact ledger (32 KB cap), the last six messages of the thread, the todo's facts, one line per counterparty from People, and the actor's voice context, under the existing `PromptBudget`. Older evidence is fetched only when the ledger cites it for the decision at hand. Six months of history is never replayed into a prompt.
+Context stays compact: the fact ledger (32 KB cap), the last six messages of the thread, the todo's facts, one line per counterparty from People, and the actor's voice context, under the existing `PromptBudget`. A research step can reread cited evidence or request an earlier window of up to 31 days in the granted conversation. The history reader examines at most 49 synchronized event rows and returns at most six verified messages, with explicit truncation and a shared 128 KB evidence bound. The model cannot choose a different account or destination. Empty or truncated results never prove silence or completion. Research and independent review still fit within three calls; six months of history is never replayed into a prompt.
 
 The coordinator Agent is created on a user's first delegation. Its steady cost is lease renewal and the 5-second directive poll, paid only for users with live delegations. After seven days with none, the Agent is stopped through the existing lifecycle operations and recreated on the next delegation. There is no process, timer, or model context per conversation.
 

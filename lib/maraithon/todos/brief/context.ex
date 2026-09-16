@@ -296,7 +296,7 @@ defmodule Maraithon.Todos.Brief.Context do
           }
           |> compact()
 
-        case Tools.execute("gmail_get_message", args, %{surface: "internal", user_id: user_id}) do
+        case gmail_message(user_id, todo, args) do
           {:ok, result} ->
             message = read_map(result, :message)
             thread_id = read_string(message, :thread_id) || read_string(metadata, "thread_id")
@@ -306,7 +306,13 @@ defmodule Maraithon.Todos.Brief.Context do
               "status" => "available",
               "provider" => "gmail",
               "message" => gmail_message_section(message),
-              "thread" => gmail_thread_messages(user_id, thread_id, message_provider, message_id)
+              "thread" =>
+                gmail_thread_messages(
+                  Map.get(result, :access) || user_id,
+                  thread_id,
+                  message_provider,
+                  message_id
+                )
             }
             |> compact()
 
@@ -316,6 +322,25 @@ defmodule Maraithon.Todos.Brief.Context do
             |> Map.put("status", "unavailable")
             |> Map.put("reason", safe_reason(reason))
         end
+    end
+  end
+
+  # A saved account ID is authoritative. Labels and draft metadata can be
+  # missing or stale; searching every mailbox adds latency and can read a
+  # different copy of the message. Never fall back from a missing binding.
+  defp gmail_message(user_id, %Todo{source_account_id: nil}, args),
+    do: Tools.execute("gmail_get_message", args, %{surface: "internal", user_id: user_id})
+
+  defp gmail_message(user_id, todo, args) do
+    with {:ok, account} <-
+           Maraithon.Connectors.GoogleAccount.resolve(user_id, todo.source_account_id),
+         false <- Maraithon.AssistantIdentities.assistant_account?(account),
+         {:ok, access} <- Maraithon.Connectors.GmailAccess.for_account(user_id, account.id),
+         {:ok, message} <- Gmail.fetch_message_content(access, args["message_id"]) do
+      {:ok, %{message: Map.put(message, :google_provider, account.provider), access: access}}
+    else
+      true -> {:error, :assistant_account_excluded}
+      error -> error
     end
   end
 

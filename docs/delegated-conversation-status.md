@@ -877,7 +877,23 @@ to the model from history selection, so older snapshots with larger caches
 remain readable. The build passed. Proposal diagnostics now report a bounded
 Chief of Staff checkpoint summary without memo text or source content, to help
 explain why an eligible task has not received a proposal. That build also passed;
-these follow-ups have not deployed yet.
+both follow-ups deployed through successful workflow `35142795714` to revision
+`maraithon-00439-7vv`, serving all traffic.
+
+## Bound Gmail sources in task briefs
+
+The Mac proposal fixture showed a source-verification warning even though its
+candidate had a saved Gmail account and observation. Inspection found that the
+brief reader ignored `source_account_id`, relying on labels and draft metadata
+or searching all personal inboxes. It now resolves the owned connected account
+and uses the same account-bound access for the message and thread. A missing,
+disconnected or assistant account cannot fall back to another mailbox. Legacy
+tasks without a binding keep their existing lookup path.
+
+`make build` passed with warnings treated as errors. This removes unnecessary
+cross-mailbox reads; the fixture's original provider error was not retained, so
+it does not establish the sole cause of that warning. Deployment and a fresh
+live source read are pending. No automated tests ran under the current policy.
 
 ## Remaining work
 
