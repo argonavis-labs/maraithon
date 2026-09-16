@@ -445,6 +445,60 @@ defmodule Maraithon.Delegations.SlackIngressTest do
     end
   end
 
+  @tag new_dm: true, actor: "as_assistant"
+  test "a reply arriving after the grant interrupts the assistant's initial source read", c do
+    alias Maraithon.Delegations.Jobs
+    alias Maraithon.Runtime.BackgroundJob
+    {node, partitions} = exact_authority(c.user_id)
+    bypass = Bypass.open()
+    original = Application.get_env(:maraithon, :slack, [])
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+    on_exit(fn -> Application.put_env(:maraithon, :slack, original) end)
+
+    Bypass.expect_once(
+      bypass,
+      "POST",
+      "/api/auth.test",
+      &json(&1, %{
+        "ok" => true,
+        "team_id" => "T123",
+        "user_id" => "UOWN"
+      })
+    )
+
+    Bypass.expect_once(bypass, "GET", "/api/conversations.replies", fn conn ->
+      assert URI.decode_query(conn.query_string)["channel"] == "DORIGINAL"
+      late = Map.put(c.message, "ts", ts(DateTime.add(DateTime.utc_now(), 2)))
+      json(conn, %{"ok" => true, "messages" => [c.root, late]})
+    end)
+
+    {:ok, job} =
+      Repo.transaction(fn ->
+        d = reload(c)
+
+        next =
+          Jobs.start_sync!(
+            d,
+            Maraithon.Delegations.current_grant(d),
+            %{id: Ecto.UUID.generate(), kind: "user_action"},
+            DateTime.utc_now()
+          )
+
+        d |> Delegation.changeset(%{state: next.state}) |> Repo.update!()
+        Repo.get_by!(BackgroundJob, job_type: "delegation_sync")
+      end)
+
+    assert {:ok, %{state: "new_messages"}} =
+             run_leased_job(node, partitions, job, &Sources.execute/1)
+
+    assert reload(c).source_revision == 1
+    refute Repo.exists?(PreparedAction)
+    refute Repo.exists?(from e in Event, where: e.kind == "sync_result")
+    turn = Repo.one!(Turn)
+    assert turn.model_calls == 0
+    refute (Repo.get!(Run, turn.run_id) |> Run.hydrate_payloads()).prompt_snapshot["sources"]
+  end
+
   for {dm?, edited?} <- [{false, false}, {true, false}, {false, true}] do
     @tag timeout: 120_000, dm: dm?, edited: edited?
     test "long Slack history resumes across leases and expired cursors (DM #{dm?}, edited #{edited?})",

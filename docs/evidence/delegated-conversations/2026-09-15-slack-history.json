@@ -2,17 +2,23 @@
   "date": "2026-09-15",
   "change": "Resumable Slack conversation pages and compact evidence snapshots",
   "deployment": {
-    "status": "pending"
+    "workflow": 35043381626,
+    "status": "success",
+    "revision": "maraithon-00383-qs5",
+    "traffic_percent": 100,
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:5108459fb5e82b22447ee1decd15bffaa0553a848e0db10bad6b79c365597d1a",
+    "checked_at": "2026-09-16T01:19:46.684144+00:00"
   },
   "validation": {
     "build": "make build passed",
-    "focused_tests": 109,
+    "focused_tests": 110,
     "failures": 0,
     "new_paid_model_calls": 0,
     "new_live_messages": 0,
     "logs": [
       "/tmp/maraithon-slack-pages-build.log",
-      "/tmp/maraithon-slack-pages-final-tests.log"
+      "/tmp/maraithon-slack-pages-final-tests.log",
+      "/tmp/maraithon-slack-initial-reply-test.log"
     ]
   },
   "local_fixtures": {
@@ -24,7 +30,8 @@
     "separate_leased_workers": true,
     "expired_cursor_recovered": true,
     "provider_cooldown_preserves_progress": true,
-    "older_edit_prevents_send": true
+    "older_edit_prevents_send": true,
+    "new_reply_interrupts_initial_assistant_read": true
   },
   "limits": [
     "Live Slack evaluation remains deferred; no real Slack messages were sent.",
@@ -32,5 +39,13 @@
     "New turns still scan bound history; fetching only missing messages remains unfinished.",
     "Worker resumption is covered locally. Whole-app recovery and a real longevity canary are not proven by these tests.",
     "This server-only change uses existing native summary fields; native builds were not repeated."
-  ]
+  ],
+  "commit": "fb6218569f2af496d5564dbb2f4bc1f362d4118f",
+  "settings": {
+    "LLM_MODEL": "meta/muse-spark-1.3-contributor",
+    "LLM_DEVELOPMENT_SPENDING": "true",
+    "DELEGATION_EVAL_ONLY": "true",
+    "DELEGATION_GMAIL_SENDS_ENABLED": "true",
+    "DELEGATION_SLACK_SENDS_ENABLED": "false"
+  }
 }
