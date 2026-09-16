@@ -881,6 +881,18 @@ at least the configured wake interval before triggering another quiet-cycle
 call. The review digest and attempt time survive checkpoints. `make build`
 passed; live proposal verification remains open.
 
+The cadence change deployed through `35146212539` to revision
+`maraithon-00443-22z`. A manual digest calculation confirmed that a polling-only
+fingerprint change is ignored and a changed next action is detected.
+
+Live Activity also exposed a remaining assistant-account queueing gap. The
+completion scheduler enumerated all connected accounts and its common source
+wakeup could enqueue discovery for October, despite the discovery acquisition
+guard. Both scheduling paths now exclude each user's designated assistant.
+Completion acquisition also checks the designation before consuming live or
+saved source bundles, covering already queued work. No address is hard-coded.
+`make build` passed; live verification of this queueing fix is pending.
+
 ## Read earlier conversation windows
 
 The date-window history reader is now implemented. A model may use its existing

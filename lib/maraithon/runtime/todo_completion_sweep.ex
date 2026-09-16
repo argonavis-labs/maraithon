@@ -198,6 +198,9 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   defp acquire_account_delta(account, source_scope, opts) when is_list(opts) do
     cond do
+      Maraithon.AssistantIdentities.assistant_account?(account) ->
+        {:error, :assistant_account_excluded}
+
       Keyword.has_key?(opts, :source_bundle) ->
         {:ok, Keyword.get(opts, :source_bundle), Keyword.get(opts, :proposed_watermarks, [])}
 

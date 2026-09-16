@@ -114,7 +114,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       when is_list(opts) do
     now = Keyword.get(opts, :now, database_now!())
 
-    with :ok <- ensure_source_fanout_parallelism(account),
+    with false <- Maraithon.AssistantIdentities.assistant_account?(account),
+         :ok <- ensure_source_fanout_parallelism(account),
          {:ok, result} <-
            enqueue_source_graph(fn ->
              case enqueue_source_account_discovery(account, now) do
@@ -141,6 +142,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
            end) do
       {:ok, result}
     else
+      true -> {:ok, %{outcome: "skipped", reason: "assistant_account_excluded"}}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1371,6 +1373,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       {:ok, %{discovery: %{reason: "source_account_reserved"}}} ->
         {:skip, :source_account_reserved}
 
+      {:ok, %{reason: "assistant_account_excluded"}} ->
+        {:skip, :assistant_account_excluded}
+
       {:ok, result} ->
         {:error, {:source_account_cycle_incomplete, result}}
 
@@ -1388,6 +1393,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
     query =
       ConnectedAccount
+      |> Maraithon.AssistantIdentities.user_accounts()
       |> join(:inner, [account], source_token in Token,
         on: source_token.user_id == account.user_id and source_token.provider == account.provider
       )
