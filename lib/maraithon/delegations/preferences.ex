@@ -18,6 +18,7 @@ defmodule Maraithon.Delegations.Preferences do
     "lead_time_hours" => 24,
     "max_meetings_per_day" => 6,
     "calendar_account_ids" => [],
+    "calendar_mirror_bindings" => %{},
     "booking_calendar_account_id" => nil,
     "video_link" => nil,
     "calendar_link_id" => nil,
@@ -68,6 +69,7 @@ defmodule Maraithon.Delegations.Preferences do
         )
 
       with :ok <- validate(data),
+           :ok <- validate_mirrors(user_id, attrs, data),
            true <-
              owned_calendars?(user_id, calendar_ids(data)) and
                owned_link?(user_id, data["calendar_link_id"]) do
@@ -90,6 +92,13 @@ defmodule Maraithon.Delegations.Preferences do
         where: a.provider == "google" or like(a.provider, "google:%"),
         order_by: [asc: fragment("? <> 'google'", a.provider), asc: a.id]
     )
+  end
+
+  defp validate_mirrors(user_id, attrs, data) do
+    if not Map.has_key?(attrs, "calendar_mirror_bindings") or
+         Maraithon.LocalCalendar.Mirror.valid_bindings?(user_id, data["calendar_mirror_bindings"]),
+       do: :ok,
+       else: :invalid_calendar_mirrors
   end
 
   def calendar_ids(prefs),

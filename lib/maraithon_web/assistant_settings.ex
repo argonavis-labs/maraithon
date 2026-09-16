@@ -83,7 +83,9 @@ defmodule MaraithonWeb.AssistantSettings do
         aliases: aliases,
         error: error,
         identity: Map.put(data, "gmail_mode", (identity && identity.gmail_mode) || "account"),
-        preferences: preferences,
+        preferences: Map.delete(preferences, "calendar_mirror_bindings"),
+        calendar_mirror_bindings: preferences["calendar_mirror_bindings"],
+        calendar_mirrors: Maraithon.LocalCalendar.Mirror.choices(user_id),
         timezones: Maraithon.Timezones.options(),
         choice_preferences: Maraithon.Delegations.SlotRanking.fields(),
         numeric_preferences:
@@ -115,7 +117,8 @@ defmodule MaraithonWeb.AssistantSettings do
       defaults = Preferences.defaults()
 
       values =
-        Map.new(Map.take(attrs, Map.keys(defaults)), fn {key, value} ->
+        Map.new(Map.take(attrs, Map.keys(defaults) -- ["calendar_mirror_bindings"]), fn {key,
+                                                                                         value} ->
           default = defaults[key]
 
           normalized =
@@ -143,6 +146,15 @@ defmodule MaraithonWeb.AssistantSettings do
         end)
 
       Preferences.put(user_id, values)
+    else
+      {:error, :delegations_disabled}
+    end
+  end
+
+  def save_calendar_mirrors(user_id, attrs) when is_map(attrs) do
+    if Gates.enabled?(user_id) do
+      bindings = Map.reject(attrs, fn {_key, value} -> value == "" end)
+      Preferences.put(user_id, %{"calendar_mirror_bindings" => bindings})
     else
       {:error, :delegations_disabled}
     end

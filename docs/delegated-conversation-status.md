@@ -703,6 +703,37 @@ The signed Xcode companion build also passed and has the same designated signing
 
 Commit `99433d52` deployed successfully through workflow `35130917709` to revision `maraithon-00430-9mm`, serving all traffic. The signed companion bundle was installed in place after the server rollout and opened in the background. Its designated signing requirement is unchanged.
 
+## Complete local availability and account matching
+
+The server now stores one bounded replacement availability window per paired
+Mac, separate from calendar history. Ingestion validates the complete calendar
+inventory and every event, rechecks the device token and revocation under its
+row lock, and applies the user erasure fence. Identical retries do not refresh
+capture time; older captures reject. Re-pairing, revocation and calendar purges
+clear the cache. Normal device queries do not load it. The privacy-only
+manifest migration checks all protocol proofs before and after its change.
+Commit `34c2cb7e` deployed through successful workflow `35132238452`.
+
+The companion sends a full upcoming window on its existing sync cycle, including
+unchanged events and empty calendars. Replacement handles local deletions.
+Settings on Web, Mac and iPhone let the user explicitly match owned Google
+accounts to primary calendars on the same paired Mac. Dedicated assistant
+accounts are excluded. No names are used to infer ownership, and no selections
+are applied automatically.
+
+Scheduling prefers the mirror only for a complete requested window captured
+within five minutes. Missing bindings, stale data, revocation and known calendar
+writes fall back to Google. Coverage records the source and capture receipt.
+Booking still checks Google immediately before the write. EventKit occurrence
+identifiers are namespaced separately from Google iCal UIDs for meeting counts.
+Local capture freshness does not establish the remote CalDAV sync time.
+
+The server, companion Swift build, signed Mac build and iPhone simulator build
+passed. XcodeGen regenerated the native projects; generated project files stay
+untracked. Tests were not run under the current policy. Deployment and live
+verification of the account-matching consumer are pending. No calendar binding
+or new live conversation was created for this change.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
@@ -710,7 +741,7 @@ Commit `99433d52` deployed successfully through workflow `35130917709` to revisi
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage; the production gate currently admits no eligible proposal.
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. Send recovery, older coordinator checkpoints, and interrupted model decisions now pass local whole-BEAM kills. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Verify the revised call budget across the remaining paths and reduce redundant calls and daily workload volume. The information eval's two calls per turn meet the revised ordinary-turn target; live research turns have three settled calls with independent review; repair still needs verification against that ceiling. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
-6. Implement the plan's preference for a sufficiently fresh local calendar mirror. Delegated availability currently uses complete, account-scoped Google reads. The new source-state contract carries local calendar identifiers, cancellation, availability and the user's response. Connected-account binding, completed-window receipts, deletion reconciliation and backfill of unchanged events still need implementation. A recent device heartbeat alone cannot prove complete availability for the selected calendars. Those mirror guarantees must precede using it to offer slots.
+6. Deploy and manually verify local availability capture and the account-matching consumer. The complete replacement window includes unchanged events and reconciles local deletions; explicit bindings and a five-minute limit control use in slot proposals. Final booking always checks Google. Live coverage must establish the selected window and fallback behavior; a local capture timestamp does not prove remote CalDAV freshness.
 
 The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. A later live model turn using that stored fact remains unverified. Compact People context still needs live verification. The original task email can now supply evidence for reviewed facts; bounded selection of other uncaptured historical messages remains unfinished. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 

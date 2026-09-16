@@ -74,6 +74,29 @@ captures are rejected. Revocation and token rotation are rechecked under the
 device row lock. Calendar purges, revocation and re-pairing clear the snapshot.
 The field is excluded from normal device queries and inspection output.
 
-This storage contract alone does not establish the Google account represented
-by a local calendar. Scheduling must continue using Google until explicit
-account binding and a fresh, complete window are available.
+The Mac submits the upcoming 45 days plus the previous day on each existing
+Calendar sync cycle, even when no event changed. Windows over the bounds are
+not truncated and do not refresh availability. The history cursor is separate.
+
+Settings → Assistant lets each user match their own connected Google accounts
+to primary calendars on one paired Mac. The same choices are available on Web,
+Mac and iPhone. The server validates account ownership, excludes dedicated
+assistant accounts, and rejects duplicate or cross-device bindings. Existing
+clients ignore the new top-level settings fields. No binding is inferred from
+a calendar title or source label.
+
+Slot proposals prefer this mirror only when all selected accounts are bound,
+the whole required window is covered and capture is at most five minutes old.
+A revoked device, missing calendar, pending calendar write or app write since
+capture causes a complete Google fallback. The coverage receipt records the
+source, capture time, bounds and bindings. Booking still makes fresh Google
+reads immediately before creating the invitation. A recent local read is not
+proof that CalDAV has already received every remote change.
+
+Cancelled, free and declined occurrences do not block time; unknown availability
+remains busy. All-day dates keep their floating calendar dates. Meeting counts
+use the opaque EventKit external identifier and exact occurrence times to
+recognize calendar copies. This identifier has a separate namespace from a
+Google iCal UID. Missing identifiers remain distinct. Apple's
+[identifier contract](https://developer.apple.com/documentation/eventkit/ekcalendaritem/calendaritemexternalidentifier)
+documents duplicate copies and shared recurring identifiers.

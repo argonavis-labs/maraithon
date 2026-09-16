@@ -23,6 +23,16 @@ defmodule MaraithonWeb.DelegationController do
     end
   end
 
+  def update_calendar_mirrors(conn, params) do
+    case MaraithonWeb.AssistantSettings.save_calendar_mirrors(
+           conn.assigns.current_user.id,
+           params
+         ) do
+      {:ok, _} -> settings(conn, %{})
+      error -> respond(conn, error)
+    end
+  end
+
   def preview(conn, %{"id" => todo_id, "async" => true} = params) do
     case Maraithon.Delegations.Preflight.preview(conn.assigns.current_user.id, todo_id, params) do
       {:ok, response} -> json(conn, response)

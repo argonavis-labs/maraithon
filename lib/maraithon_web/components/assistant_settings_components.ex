@@ -46,7 +46,30 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
         <div class="flex justify-end"><.button type="submit">Save assistant</.button></div>
       </.form>
       <.preferences preferences={@settings.preferences} calendar_accounts={@settings.calendar_accounts} booking_links={@settings.booking_links} />
+      <.calendar_mirrors settings={@settings} />
     </section>
+    """
+  end
+
+  attr :settings, :map, required: true
+
+  defp calendar_mirrors(assigns) do
+    ~H"""
+    <details :if={@settings.calendar_accounts != []} class="border-t border-zinc-950/10 pt-3">
+      <summary class="cursor-pointer text-sm/6 font-medium text-zinc-700">Calendars on your Mac</summary>
+      <p class="mt-3 text-sm/6 text-zinc-500">Match each account to its primary calendar on the same Mac. Maraithon can use recent Mac availability to suggest times and checks Google again before booking.</p>
+      <.form for={%{}} action={~p"/settings/calendar-mirrors"} method="post" class="mt-3 space-y-3">
+        <.field :for={account <- @settings.calendar_accounts} label={account.label} for={"calendar-mirror-#{account.id}"}>
+          <.c_select id={"calendar-mirror-#{account.id}"} name={"calendar_mirrors[#{account.id}]"}>
+            <option value="" selected={is_nil(@settings.calendar_mirror_bindings[to_string(account.id)])}>Use Google directly</option>
+            <option :if={@settings.calendar_mirror_bindings[to_string(account.id)] && not Enum.any?(@settings.calendar_mirrors, &(&1.id == @settings.calendar_mirror_bindings[to_string(account.id)]))} value={@settings.calendar_mirror_bindings[to_string(account.id)]} selected>Unavailable Mac calendar</option>
+            <option :for={calendar <- @settings.calendar_mirrors} value={calendar.id} selected={calendar.id == @settings.calendar_mirror_bindings[to_string(account.id)]}><%= calendar.label %></option>
+          </.c_select>
+        </.field>
+        <p :if={@settings.calendar_mirrors == []} class="text-sm/6 text-zinc-500">Open Maraithon on your Mac and enable Calendar to see its calendars here.</p>
+        <div class="flex justify-end"><.button type="submit">Save calendar choices</.button></div>
+      </.form>
+    </details>
     """
   end
 

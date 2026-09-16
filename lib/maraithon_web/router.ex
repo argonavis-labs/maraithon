@@ -114,6 +114,7 @@ defmodule MaraithonWeb.Router do
     post "/settings/booking-links", SettingsController, :update_booking_links
     post "/settings/assistant-identity", SettingsController, :update_assistant_identity
     post "/settings/delegation-preferences", SettingsController, :update_delegation_preferences
+    post "/settings/calendar-mirrors", SettingsController, :update_calendar_mirrors
 
     # Companion desktop app pairing flow
     get "/companion/auth", CompanionAuthController, :show
@@ -205,6 +206,7 @@ defmodule MaraithonWeb.Router do
     get "/delegation-settings", DelegationController, :settings
     post "/delegation-settings/identity", DelegationController, :update_identity
     post "/delegation-settings/preferences", DelegationController, :update_preferences
+    post "/delegation-settings/calendar-mirrors", DelegationController, :update_calendar_mirrors
     post "/todos/:id/delegation/preview", DelegationController, :preview
     post "/todos/:id/delegation", DelegationController, :create
     get "/delegations/:id", DelegationController, :show
@@ -329,6 +331,7 @@ defmodule MaraithonWeb.Router do
     get "/delegation-settings", DelegationController, :settings
     post "/delegation-settings/identity", DelegationController, :update_identity
     post "/delegation-settings/preferences", DelegationController, :update_preferences
+    post "/delegation-settings/calendar-mirrors", DelegationController, :update_calendar_mirrors
     post "/todos/:id/delegation/preview", DelegationController, :preview
     post "/todos/:id/delegation", DelegationController, :create
     get "/delegations/:id", DelegationController, :show

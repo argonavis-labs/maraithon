@@ -16,23 +16,24 @@ defmodule Maraithon.Delegations.Scheduling do
          :ok <- valid_preferences(prefs, request),
          {:ok, ids} <- account_ids(user_id, prefs, request[:default_account_id]),
          {read_first, read_last} = calendar_window(first, last, prefs),
-         {:ok, events} <- read_accounts(user_id, ids, read_first, read_last),
+         {:ok, events, source} <- proposal_events(user_id, ids, read_first, read_last, prefs),
          {:ok, slots} <- slots(events, request, prefs, now) do
       {:ok,
        %{
          "slots" => slots,
-         "coverage" => %{
-           "account_ids" => ids,
-           "read_at" => DateTime.to_iso8601(now),
-           "timezone" => prefs["timezone"],
-           "duration_min" => duration,
-           "slot_preferences" => SlotRanking.preferences(prefs, request),
-           "from" => DateTime.to_iso8601(first),
-           "until" => DateTime.to_iso8601(last),
-           "read_from" => DateTime.to_iso8601(read_first),
-           "read_until" => DateTime.to_iso8601(read_last),
-           "complete" => true
-         }
+         "coverage" =>
+           Map.merge(source, %{
+             "account_ids" => ids,
+             "read_at" => DateTime.to_iso8601(now),
+             "timezone" => prefs["timezone"],
+             "duration_min" => duration,
+             "slot_preferences" => SlotRanking.preferences(prefs, request),
+             "from" => DateTime.to_iso8601(first),
+             "until" => DateTime.to_iso8601(last),
+             "read_from" => DateTime.to_iso8601(read_first),
+             "read_until" => DateTime.to_iso8601(read_last),
+             "complete" => true
+           })
        }}
     else
       false -> {:error, :invalid_meeting_duration}
@@ -177,6 +178,17 @@ defmodule Maraithon.Delegations.Scheduling do
     end)
   end
 
+  defp proposal_events(user_id, ids, first, last, prefs) do
+    case Maraithon.LocalCalendar.Mirror.read(user_id, ids, first, last, prefs) do
+      {:ok, events, receipt} ->
+        {:ok, events, receipt}
+
+      :unavailable ->
+        with {:ok, events} <- read_accounts(user_id, ids, first, last),
+             do: {:ok, events, %{"source" => "google"}}
+    end
+  end
+
   defp busy_events(events, prefs) do
     Enum.reduce_while(events, {:ok, []}, fn event, {:ok, acc} ->
       cond do
@@ -197,7 +209,7 @@ defmodule Maraithon.Delegations.Scheduling do
                     start: first,
                     end: last,
                     event_id: event[:event_id],
-                    ical_uid: event[:ical_uid]
+                    occurrence_key: occurrence_key(event)
                   }
                   | acc
                 ]}}
@@ -216,13 +228,19 @@ defmodule Maraithon.Delegations.Scheduling do
     |> Enum.filter(&overlaps?(&1, first, last))
     |> Enum.with_index()
     |> Enum.uniq_by(fn {event, index} ->
-      case event.ical_uid do
-        uid when is_binary(uid) and uid != "" -> {uid, event.start, event.end}
-        _ -> index
+      case event.occurrence_key do
+        nil -> index
+        key -> {key, event.start, event.end}
       end
     end)
     |> length()
   end
+
+  defp occurrence_key(%{occurrence_key: {:eventkit, id}}) when is_binary(id) and id != "",
+    do: {:eventkit, id}
+
+  defp occurrence_key(%{ical_uid: uid}) when is_binary(uid) and uid != "", do: {:ical, uid}
+  defp occurrence_key(_), do: nil
 
   defp interval(%{start: %{date: first}, end: %{date: last}}, prefs) do
     with {:ok, first} <- Date.from_iso8601(first),

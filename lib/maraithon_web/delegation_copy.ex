@@ -44,6 +44,10 @@ defmodule MaraithonWeb.DelegationCopy do
   def error(:invalid_calendar_accounts),
     do: "Choose a connected calendar or scheduling link that belongs to you."
 
+  def error(:invalid_calendar_mirrors),
+    do:
+      "Choose a different primary calendar for each account, all on the same Mac, or use Google directly."
+
   def error(_),
     do: "Could not verify this delegation. Refresh the task and check its source account."
 

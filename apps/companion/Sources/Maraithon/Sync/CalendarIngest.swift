@@ -87,6 +87,23 @@ struct CalendarIngest: Sendable {
                 // state diverges from ours after a reconnect.
             }
         }
+        let result = try await post(body, path: path)
+        if let spotlight { await spotlight(events) }
+        return result
+    }
+
+    func pushAvailability(deviceId: UUID, snapshot: CalendarAvailabilityPayload) async throws -> SyncOutcome {
+        try await post(AvailabilityBody(deviceID: deviceId, snapshot: snapshot),
+                       path: "/api/v1/companion/calendar-availability")
+    }
+
+    private struct AvailabilityBody: Encodable {
+        let deviceID: UUID
+        let snapshot: CalendarAvailabilityPayload
+        enum CodingKeys: String, CodingKey { case deviceID = "device_id", snapshot }
+    }
+
+    private func post(_ body: some Encodable, path: String) async throws -> SyncOutcome {
         let bodyData = try Self.encoder.encode(body)
         let gzipped = try Gzip.compress(bodyData)
 
@@ -122,9 +139,6 @@ struct CalendarIngest: Sendable {
             throw MaraithonClientError.serverError(status: http.statusCode)
         }
         let decoded = try JSONDecoder().decode(IngestResponse.self, from: data)
-        if let spotlight {
-            await spotlight(events)
-        }
         return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate, invalid: decoded.invalid)
     }
 

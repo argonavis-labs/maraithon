@@ -68,6 +68,16 @@ struct CalendarEventReader: @unchecked Sendable {
         let createdAt: Date?
         let modifiedAt: Date?
         var sourceState: CalendarEventState? = nil
+        var startDate: String? = nil
+        var endDate: String? = nil
+    }
+
+    struct Window: Sendable {
+        let events: [Snapshot]
+        let calendars: [CalendarAvailabilityPayload.Calendar]?
+        let capturedAt: Date
+        let from: Date
+        let until: Date
     }
 
     private let store: EKEventStore
@@ -132,11 +142,16 @@ struct CalendarEventReader: @unchecked Sendable {
     /// events into one `EKEvent` per occurrence inside the window, so
     /// the caller never has to re-evaluate RRULEs.
     func fetchEvents(start: Date, end: Date) async throws -> [Snapshot] {
+        try await fetchWindow(start: start, end: end).events
+    }
+
+    func fetchWindow(start: Date, end: Date) async throws -> Window {
         guard authorizationState() == .authorized else {
             throw ReaderError.notAuthorized
         }
         if let fetchOverride {
-            return try await fetchOverride(start, end)
+            return Window(events: try await fetchOverride(start, end), calendars: nil,
+                          capturedAt: Date(), from: start, until: end)
         }
         // Query through a store created *after* authorization was
         // granted. A store instantiated pre-grant (app launch on a
@@ -145,14 +160,18 @@ struct CalendarEventReader: @unchecked Sendable {
         // loop even though access is now authorized. The long-lived
         // `store` is still what `requestAccess()` prompts through.
         return await Task.detached(priority: .utility) {
+            let capturedAt = Date()
             let store = EKEventStore()
+            let calendars = store.calendars(for: .event)
             let predicate = store.predicateForEvents(
                 withStart: start,
                 end: end,
-                calendars: nil
+                calendars: calendars
             )
             let events = store.events(matching: predicate)
-            return events.map(Self.snapshot(from:))
+            return Window(events: events.map(Self.snapshot(from:)),
+                          calendars: calendars.map(CalendarAvailabilityPayload.Calendar.init),
+                          capturedAt: capturedAt, from: start, until: end)
         }.value
     }
 
@@ -196,7 +215,9 @@ struct CalendarEventReader: @unchecked Sendable {
             attendeeEmails: attendeeEmails,
             createdAt: event.creationDate,
             modifiedAt: event.lastModifiedDate,
-            sourceState: CalendarEventState(event: event)
+            sourceState: CalendarEventState(event: event),
+            startDate: event.isAllDay ? CalendarAvailabilityPayload.localDate(event.startDate, timezone: event.timeZone) : nil,
+            endDate: event.isAllDay ? CalendarAvailabilityPayload.localDate(event.endDate, timezone: event.timeZone) : nil
         )
     }
 

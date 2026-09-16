@@ -39,6 +39,9 @@ defmodule MaraithonWeb.SettingsController do
   def update_delegation_preferences(conn, %{"delegation_preferences" => attrs}),
     do: save_delegation_settings(conn, &MaraithonWeb.AssistantSettings.save_preferences(&1, attrs))
 
+  def update_calendar_mirrors(conn, %{"calendar_mirrors" => attrs}),
+    do: save_delegation_settings(conn, &MaraithonWeb.AssistantSettings.save_calendar_mirrors(&1, attrs))
+
   defp save_delegation_settings(conn, save) do
     result = case conn.assigns[:current_user] do
       %{id: id} -> save.(id)

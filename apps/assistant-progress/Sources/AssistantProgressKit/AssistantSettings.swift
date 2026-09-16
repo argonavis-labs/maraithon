@@ -8,6 +8,8 @@ public enum AssistantSettings {
         public let enabled: Bool
         let accounts: [Account]?
         let calendarAccounts: [Account]?
+        let calendarMirrors: [BookingLink]?
+        let calendarMirrorBindings: [String: String]?
         let bookingLinks: [BookingLink]?
         let selectedAccount: Int?
         let aliases: [Address]?
@@ -21,6 +23,7 @@ public enum AssistantSettings {
             case enabled, accounts, aliases, identity, preferences, timezones, error
             case selectedAccount = "selected_account", numericPreferences = "numeric_preferences"
             case calendarAccounts = "calendar_accounts"
+            case calendarMirrors = "calendar_mirrors", calendarMirrorBindings = "calendar_mirror_bindings"
             case bookingLinks = "booking_links"
             case choicePreferences = "choice_preferences"
         }

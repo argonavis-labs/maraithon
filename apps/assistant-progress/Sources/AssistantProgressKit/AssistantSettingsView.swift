@@ -7,6 +7,7 @@ public struct AssistantSettingsView: View {
     @State private var settings: AssistantSettings.Settings?
     @State private var identity: [String: AssistantSettings.Value] = [:]
     @State private var preferences: [String: AssistantSettings.Value] = [:]
+    @State private var calendarMirrors: [String: String] = [:]
     @State private var accountID = 0
     @State private var busy = false
     @State private var error: String?
@@ -23,6 +24,7 @@ public struct AssistantSettingsView: View {
                 if settings.enabled {
                     identityForm(settings)
                     preferencesForm(settings)
+                    calendarMirrorsForm(settings)
                 } else {
                     Text("Delegation is not available for this account yet.")
                 }
@@ -130,6 +132,32 @@ public struct AssistantSettingsView: View {
     private func identityText(_ key: String) -> Binding<String> {
         Binding(get: { identity[key]?.string ?? "" }, set: { identity[key] = .string($0) })
     }
+
+    @ViewBuilder private func calendarMirrorsForm(_ settings: AssistantSettings.Settings) -> some View {
+        if let choices = settings.calendarMirrors, let accounts = settings.calendarAccounts, !accounts.isEmpty {
+            Section("Calendars on your Mac") {
+                Text("Match each account to its primary calendar on the same Mac. Maraithon can use recent Mac availability to suggest times and checks Google again before booking.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                ForEach(accounts) { account in
+                    let key = String(account.id)
+                    Picker(account.label, selection: Binding(get: { calendarMirrors[key] ?? "" }, set: { calendarMirrors[key] = $0 })) {
+                        Text("Use Google directly").tag("")
+                        if let selected = calendarMirrors[key], !selected.isEmpty, !choices.contains(where: { $0.id == selected }) {
+                            Text("Unavailable Mac calendar").tag(selected)
+                        }
+                        ForEach(choices) { Text($0.label).tag($0.id) }
+                    }
+                }
+                if choices.isEmpty {
+                    Text("Open Maraithon on your Mac and enable Calendar to see its calendars here.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Button("Save calendar choices") {
+                    Task { await perform(path: "delegation-settings/calendar-mirrors", fields: calendarMirrors.mapValues { .string($0) }) }
+                }
+            }.disabled(busy)
+        }
+    }
     private func identityBool(_ key: String) -> Binding<Bool> {
         Binding(get: { identity[key]?.bool ?? false }, set: { identity[key] = .bool($0) })
     }
@@ -186,6 +214,7 @@ public struct AssistantSettingsView: View {
                 }
             }
             if !path.hasSuffix("/identity") { preferences = value.preferences ?? [:] }
+            calendarMirrors = value.calendarMirrorBindings ?? [:]
             if fields != nil { notice = path.hasSuffix("/identity") ? "Assistant saved." : "Preferences saved." }
         } catch { self.error = error.localizedDescription }
     }
