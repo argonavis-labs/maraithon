@@ -146,16 +146,7 @@ struct TodayView: View {
         let sections = DailyBriefSections.sections(from: brief.body ?? "", title: brief.title)
 
         ForEach(sections) { section in
-            VStack(alignment: .leading, spacing: Runner.Spacing.small) {
-                RunnerSectionLabel(section.title)
-                RunnerCard {
-                    ForEach(section.blocks.indices, id: \.self) { index in
-                        if index > 0 { RunnerHairline() }
-                        BriefBlockView(block: section.blocks[index])
-                            .runnerCardRow()
-                    }
-                }
-            }
+            BriefSectionView(section: section, endTimes: brief.calendarEndTimes)
         }
 
         if !sections.contains(where: { $0.title == "Calendar" }) {

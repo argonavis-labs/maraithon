@@ -704,6 +704,7 @@ struct MobileAPIClient: Sendable {
         let title: String
         let summary: String?
         let body: String?
+        let calendarEndTimes: [String: Date]
         let status: String
         let scheduledFor: Date?
         let localDate: String?
@@ -717,6 +718,7 @@ struct MobileAPIClient: Sendable {
             case title
             case summary
             case body
+            case calendarEndTimes = "calendar_end_times"
             case status
             case scheduledFor = "scheduled_for"
             case localDate = "local_date"
@@ -732,6 +734,7 @@ struct MobileAPIClient: Sendable {
             title = try container.decode(String.self, forKey: .title)
             summary = try container.decodeIfPresent(String.self, forKey: .summary)
             body = try container.decodeIfPresent(String.self, forKey: .body)
+            calendarEndTimes = try container.decodeIfPresent([String: Date].self, forKey: .calendarEndTimes) ?? [:]
             status = try container.decodeIfPresent(String.self, forKey: .status) ?? "pending"
             scheduledFor = try container.decodeIfPresent(Date.self, forKey: .scheduledFor)
             localDate = try container.decodeIfPresent(String.self, forKey: .localDate)

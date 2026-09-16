@@ -119,16 +119,7 @@ struct BriefDetailView: View {
 
                 VStack(alignment: .leading, spacing: Runner.Spacing.large) {
                     ForEach(sections) { section in
-                        VStack(alignment: .leading, spacing: Runner.Spacing.small) {
-                            RunnerSectionLabel(section.title)
-                            RunnerCard {
-                                ForEach(section.blocks.indices, id: \.self) { index in
-                                    if index > 0 { RunnerHairline() }
-                                    BriefBlockView(block: section.blocks[index])
-                                        .runnerCardRow()
-                                }
-                            }
-                        }
+                        BriefSectionView(section: section, endTimes: brief.calendarEndTimes)
                     }
                 }
             }
@@ -143,8 +134,35 @@ struct BriefDetailView: View {
     }
 }
 
+/// The visible clock updates row emphasis without refreshing the saved brief.
+struct BriefSectionView: View {
+    let section: DailyBriefSections.Section
+    let endTimes: [String: Date]
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: Runner.Spacing.small) {
+                RunnerSectionLabel(section.title)
+                RunnerCard {
+                    ForEach(section.blocks.indices, id: \.self) { index in
+                        if index > 0 { RunnerHairline() }
+                        let block = section.blocks[index]
+                        BriefBlockView(
+                            block: block,
+                            ended: section.title == "Calendar"
+                                && endTimes[block.text].map { $0 <= context.date } == true
+                        )
+                        .runnerCardRow()
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct BriefBlockView: View {
     let block: BriefMarkdown.Block
+    var ended = false
 
     var body: some View {
         switch block {
@@ -154,9 +172,11 @@ struct BriefBlockView: View {
                 .foregroundStyle(Runner.Palette.foreground)
                 .fixedSize(horizontal: false, vertical: true)
         case .bullet(let text), .paragraph(let text):
-            Text(BriefMarkdown.inline(text))
+            Text(BriefMarkdown.inline(ended ? text.replacingOccurrences(of: "**", with: "") : text))
                 .font(Runner.Typography.body)
-                .foregroundStyle(Runner.Palette.foreground)
+                .foregroundStyle(ended ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
+                .tint(ended ? Runner.Palette.mutedForeground : Runner.Palette.accent)
+                .accessibilityValue(ended ? "Ended" : "")
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -169,6 +189,12 @@ enum BriefMarkdown {
         case heading(String)
         case bullet(String)
         case paragraph(String)
+
+        var text: String {
+            switch self {
+            case .heading(let text), .bullet(let text), .paragraph(let text): text
+            }
+        }
     }
 
     static func blocks(from body: String) -> [Block] {

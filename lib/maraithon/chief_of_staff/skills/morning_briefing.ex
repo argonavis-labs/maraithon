@@ -6324,6 +6324,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp compact_brief_input_for_metadata(input) do
     %{
       "date" => read_string(input, "date", nil),
+      "timezone" => read_string(input, "timezone", nil),
+      "timezone_offset_hours" => input["timezone_offset_hours"],
       "generated_at" => read_string(input, "generated_at", nil),
       "delegations" => read_map(input, "delegations"),
       "counts" => %{

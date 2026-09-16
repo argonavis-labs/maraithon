@@ -11,8 +11,15 @@ defmodule MaraithonWeb.BriefingLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: Process.send_after(self(), :clock_tick, 60_000)
     {:ok,
-     socket |> assign(:current_path, "/briefing") |> assign_identity_onboarding() |> refresh()}
+     socket |> assign(:current_path, "/briefing") |> assign(:now, DateTime.utc_now()) |> assign_identity_onboarding() |> refresh()}
+  end
+
+  @impl true
+  def handle_info(:clock_tick, socket) do
+    Process.send_after(self(), :clock_tick, 60_000)
+    {:noreply, assign(socket, :now, DateTime.utc_now())}
   end
 
   @impl true
@@ -226,7 +233,8 @@ defmodule MaraithonWeb.BriefingLive do
       <div :if={@selected_brief} class="mt-4 rounded-xl border border-zinc-200 bg-white p-6">
         <p class="text-sm font-medium text-zinc-700">{@selected_brief.summary}</p>
         <div class="mt-4 text-sm leading-6 text-zinc-600">
-          {Phoenix.HTML.raw(Markdown.to_html(@selected_brief.body))}
+          {Phoenix.HTML.raw(Markdown.to_html(@selected_brief.body,
+            end_times: Maraithon.Briefs.CalendarTiming.end_times(@selected_brief), now: @now))}
         </div>
       </div>
 

@@ -10,15 +10,19 @@ defmodule Maraithon.Briefs.Markdown do
   @doc """
   Converts briefing markdown to an HTML string.
   """
-  def to_html(nil), do: ""
+  def to_html(body, opts \\ []) do
+    body |> parse() |> Enum.map_join("\n", &render_block(&1, opts))
+  end
 
-  def to_html(body) when is_binary(body) do
+  @doc false
+  def parse(nil), do: []
+
+  def parse(body) when is_binary(body) do
     body
     |> String.replace("\r\n", "\n")
     |> String.split("\n")
     |> Enum.map(&String.trim_trailing/1)
     |> blocks([])
-    |> Enum.map_join("\n", &render_block/1)
   end
 
   @doc """
@@ -63,21 +67,31 @@ defmodule Maraithon.Briefs.Markdown do
 
   defp strip_bullet(line), do: Regex.replace(~r/^\s*[-*]\s+/, line, "")
 
-  defp render_block({:heading, text}) do
+  defp render_block({:heading, text}, _opts) do
     "<h2 style=\"margin:20px 0 8px;font-size:15px;font-weight:600;color:#18181b;\">#{inline(text)}</h2>"
   end
 
-  defp render_block({:list, items}) do
+  defp render_block({:list, items}, opts) do
     rendered =
       Enum.map_join(items, "", fn item ->
-        "<li style=\"margin:0 0 6px;\">#{inline(item)}</li>"
+        "<li style=\"margin:0 0 6px;\">#{timed_inline(item, opts)}</li>"
       end)
 
     "<ul style=\"margin:0 0 12px;padding-left:20px;\">#{rendered}</ul>"
   end
 
-  defp render_block({:paragraph, text}) do
-    "<p style=\"margin:0 0 12px;\">#{inline(text)}</p>"
+  defp render_block({:paragraph, text}, opts) do
+    "<p style=\"margin:0 0 12px;\">#{timed_inline(text, opts)}</p>"
+  end
+
+  defp timed_inline(text, opts) do
+    with end_time when is_binary(end_time) <- Keyword.get(opts, :end_times, %{})[text],
+         {:ok, at, _} <- DateTime.from_iso8601(end_time),
+         true <- DateTime.compare(at, Keyword.get(opts, :now, DateTime.utc_now())) != :gt do
+      "<span class=\"text-zinc-500 dark:text-zinc-400\">#{inline(String.replace(text, "**", ""))}<span class=\"sr-only\"> (Ended)</span></span>"
+    else
+      _ -> inline(text)
+    end
   end
 
   defp inline(text) do

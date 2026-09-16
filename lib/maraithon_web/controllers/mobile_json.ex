@@ -100,6 +100,7 @@ defmodule MaraithonWeb.MobileJSON do
       title: brief.title,
       summary: brief.summary,
       body: brief.body,
+      calendar_end_times: Maraithon.Briefs.CalendarTiming.end_times(brief),
       status: brief.status,
       scheduled_for: json_value(brief.scheduled_for),
       sent_at: json_value(brief.sent_at),
