@@ -18,6 +18,42 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
     end
   end
 
+  test "task chat retains the current calendar block without unrelated provider payloads" do
+    user_id = "context-calendar-block-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Maraithon.Todos.upsert_many(user_id, [
+        %{"source" => "manual", "title" => "Register for hockey"}
+      ])
+
+    block = %{
+      "event_id" => "owned-event-id",
+      "calendar_id" => "primary",
+      "start_at" => "2026-09-17T09:00:00-04:00",
+      "end_at" => "2026-09-17T09:30:00-04:00"
+    }
+
+    {:ok, _todo} =
+      Maraithon.Todos.record_calendar_block(
+        user_id,
+        todo.id,
+        Map.put(block, "provider_payload", "not needed in chat")
+      )
+
+    attrs = %{
+      user_id: user_id,
+      chat_id: "12345",
+      request_focus: :linked_item_context,
+      linked_todo_id: todo.id
+    }
+
+    assert Context.build(attrs).linked_item.todo.metadata["calendar_block"] == block
+
+    {:ok, _todo} = Maraithon.Todos.clear_calendar_block(user_id, todo.id, block["event_id"])
+    refute Map.has_key?(Context.build(attrs).linked_item.todo.metadata, "calendar_block")
+  end
+
   describe "connected account prompt context" do
     test "uses account labels without raw provider identifiers or scopes" do
       user_id = "context-connected-#{System.unique_integer([:positive])}@example.com"

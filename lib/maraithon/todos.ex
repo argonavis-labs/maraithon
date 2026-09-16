@@ -3194,10 +3194,16 @@ defmodule Maraithon.Todos do
       "scope_reasoning",
       "surface_quality"
     ])
+    |> maybe_put("calendar_block", summarize_calendar_block(metadata["calendar_block"]))
     |> maybe_put("record", summarize_record_metadata(fetch_attr(metadata, "record")))
   end
 
   defp summarize_metadata(_metadata), do: %{}
+
+  defp summarize_calendar_block(block) when is_map(block),
+    do: Map.take(block, ~w(event_id calendar_id start_at end_at created_at))
+
+  defp summarize_calendar_block(_block), do: nil
 
   defp summarize_record_metadata(record) when is_map(record) do
     summarized =
