@@ -255,7 +255,7 @@ struct ChatDetailView: View {
             .padding(.bottom, (Runner.Layout.controlHeight - Runner.Layout.compactControlHeight) / 2)
             .accessibilityLabel(ChatDetailCopy.messageOptionsAccessibilityLabel)
 
-            TextField(workspaceHeader == nil ? ChatDetailCopy.messageFieldPlaceholder : "Ask about this todo…", text: $draft, axis: .vertical)
+            TextField(workspaceHeader == nil ? ChatDetailCopy.messageFieldPlaceholder : "Tell Maraithon what to do…", text: $draft, axis: .vertical)
                 .focused($isComposerFocused)
                 .lineLimit(1...6)
                 .textFieldStyle(.plain)
@@ -271,7 +271,6 @@ struct ChatDetailView: View {
                 }
                 .submitLabel(.send)
                 .onSubmit(send)
-                .disabled(isComposerDisabled)
                 .accessibilityIdentifier("chat-message-field")
 
             Button(action: send) {
@@ -321,8 +320,8 @@ struct ChatDetailView: View {
 
     private var emptyConversation: some View {
         RunnerEmptyState(
-            title: ChatDetailCopy.emptyTitle,
-            description: ChatDetailCopy.emptyDescription,
+            title: workspaceHeader == nil ? ChatDetailCopy.emptyTitle : "What should I do with this task?",
+            description: workspaceHeader == nil ? ChatDetailCopy.emptyDescription : "Try “Add this to my calendar tomorrow.”",
             systemImage: "bubble.left.and.bubble.right"
         )
     }
@@ -385,7 +384,6 @@ struct ChatDetailView: View {
 
         errorMessage = nil
         lastFailedMessage = nil
-        isComposerFocused = false
         isSending = true
         sendTask?.cancel()
         sendTask = Task {
@@ -406,7 +404,9 @@ struct ChatDetailView: View {
                 return
             }
 
-            await refreshConversation()
+            // The acceptance response already merged the thread and run.
+            // Live observation delivers progress and the final result.
+            rebuildTimelineRows()
         }
     }
 

@@ -18,8 +18,6 @@ struct TodoActionSlotView: View {
             }
         case .suggestion(let action):
             TodoSuggestionCard(action: action, store: store, compact: !isPrimary)
-        case .prepare(let subtitle):
-            TodoPrepareCard(subtitle: subtitle, store: store)
         }
     }
 }

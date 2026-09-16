@@ -4,11 +4,8 @@
 import Foundation
 
 enum TodoActionCopy {
-    static let preparePrompt = "Prepare this todo for me. Gather the context, work through the next useful steps, and bring back a concrete action to review or the one decision you need from me."
-    static let prepareTitle = "Have Maraithon prepare this"
-    static let prepareSubtitle = "Gathers the context and brings back one concrete action to review."
-    static let emptyConversation = "Ask about this task, its source, or the people involved."
-    static let composerPlaceholder = "Talk to this todo…"
+    static let emptyConversation = "Tell Maraithon what to do with this task. Try “Add this to my calendar tomorrow.”"
+    static let composerPlaceholder = "Tell Maraithon what to do…"
     static let composerHint = "Return to send · Shift-Return for a new line"
     static let composerBusyHint = "Maraithon is working. A new message sends when it finishes."
 

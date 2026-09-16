@@ -53,14 +53,56 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           </div>
           <p :if={@brief_progress} role="status" class="text-sm/6 text-zinc-500"><%= @brief_progress %></p>
           <div :if={@todo.status in ~w(open snoozed)} class="flex flex-wrap items-center gap-3">
-            <.button data-workspace-prompt="Prepare this todo for me. Gather the context, work through the next useful steps, and bring back a concrete action to review or the one decision you need from me."
-              disabled={@state.busy? || @state.loading? || @run != nil || is_nil(@state.thread)}>
-              <.icon name="hero-sparkles" class="size-4" /> Prepare this for me
-            </.button>
             <.button :if={@brief_state not in [:generating, :waiting]} phx-click="regenerate_brief" variant="plain">Refresh context</.button>
           </div>
         </section>
 
+        <section :if={@reviews != []} aria-label="Action reviews" class="space-y-2">
+          <.draft_review :for={message <- @reviews} message={message} busy?={@state.busy? || @state.loading?} />
+        </section>
+
+        <section id="todo-conversation" class="min-w-0 scroll-mt-6" aria-labelledby="todo-conversation-title">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 id="todo-conversation-title" class="text-sm/6 font-semibold text-zinc-950">Chat</h2>
+            <.button variant="plain" phx-click="workspace_refresh" disabled={@state.loading? || @state.busy?} aria-label="Refresh conversation">
+              <.icon name="hero-arrow-path" class="size-4" />
+            </.button>
+          </div>
+          <div id={"todo-timeline-#{@todo.id}"} phx-hook="TodoTimeline" data-last-message={List.last(@messages) && List.last(@messages).id}
+            class="max-h-[28rem] min-h-40 space-y-5 overflow-y-auto overscroll-contain rounded-lg border border-zinc-950/10 bg-white p-4 sm:p-5"
+            role="log" aria-label="Todo conversation" tabindex="0">
+            <.button :if={@more?} variant="plain" phx-click="workspace_earlier">Load earlier messages</.button>
+            <p :if={is_nil(@state.thread)} role="status" class="text-sm/6 text-zinc-500">
+              <%= if @state.loading?, do: "Opening your conversation…", else: "Conversation unavailable. Refresh to try again." %>
+            </p>
+            <p :if={@state.thread && @messages == []} class="text-sm/6 text-zinc-500">Tell Maraithon what to do with this task. Try “Add this to my calendar tomorrow.”</p>
+            <article :for={message <- @messages} id={"workspace-message-#{message.id}"}
+              class={if(message.role == "user", do: "ml-6 rounded-lg bg-zinc-50 px-4 py-3", else: "min-w-0")}>
+              <p class="mb-1 text-xs/5 font-medium text-zinc-500"><%= if message.role == "user", do: "You", else: "Maraithon" %></p>
+              <p class="whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= message.body %></p>
+              <p :if={message.work_summary && message.work_summary["headline"]} class="mt-2 text-xs/5 text-zinc-500"><%= message.work_summary["headline"] %></p>
+              <.review_reference :if={message.structured_data["draft_card"]} message={message} reviews={@reviews} busy?={@state.busy? || @state.loading?} />
+            </article>
+            <div :if={@run} role="status" class="text-sm/6 text-zinc-500">
+              <span class="mr-2 inline-block size-2 animate-pulse rounded-full bg-zinc-400" />
+              <%= get_in(@run, [:work_summary, "headline"]) || "Working on your todo…" %>
+              <p :if={get_in(@run, [:work_summary, "preview"])} class="mt-2 whitespace-pre-wrap text-zinc-800"><%= @run.work_summary["preview"] %></p>
+            </div>
+          </div>
+          <p :if={@state.error} role="alert" class="mt-3 text-sm/6 text-red-700"><%= @state.error %></p>
+          <p data-workspace-status role="status" class="mt-2 text-sm/6 text-zinc-500" />
+          <.button data-retry-request hidden variant="outline" class="mt-2 [&[hidden]]:hidden" disabled={@state.busy? || @state.loading? || @run != nil}>Retry pending message</.button>
+          <form id={"todo-composer-#{@todo.id}"} data-workspace-composer class="mt-3">
+            <.c_textarea id="todo-chat-input" name="body" rows={3} maxlength="16000"
+              aria-label="Message about this todo" placeholder="Tell Maraithon what to do…" required />
+            <div class="mt-2 flex items-center justify-end gap-2">
+              <span data-workspace-connection hidden class="mr-auto text-xs text-amber-700">Reconnecting… Your draft is kept.</span>
+              <.button type="submit" disabled={is_nil(@state.thread) || @state.loading? || @state.busy? || not is_nil(@run)} data-workspace-send>
+                <.icon name="hero-arrow-up" class="size-4" /> <span data-send-label>Send</span>
+              </.button>
+            </div>
+          </form>
+        </section>
         <section :if={not @delegated? && @todo.status in ~w(open snoozed) && @actions != []} aria-labelledby="todo-next-actions-title">
           <h2 id="todo-next-actions-title" class="text-sm/6 font-semibold text-zinc-950">Suggested next actions</h2>
           <div class="mt-2 divide-y divide-zinc-950/10 border-y border-zinc-950/10">
@@ -80,52 +122,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           <div class="mt-3 space-y-4"><%= render_slot(@summary) %></div>
         </details>
 
-        <section :if={@reviews != []} aria-label="Action reviews" class="space-y-2">
-          <.draft_review :for={message <- @reviews} message={message} busy?={@state.busy? || @state.loading?} />
-        </section>
 
-        <section id="todo-conversation" class="min-w-0 scroll-mt-6" aria-labelledby="todo-conversation-title">
-          <div class="mb-3 flex items-center justify-between gap-3">
-            <h2 id="todo-conversation-title" class="text-sm/6 font-semibold text-zinc-950">Chat about this todo</h2>
-            <.button variant="plain" phx-click="workspace_refresh" disabled={@state.loading? || @state.busy?} aria-label="Refresh conversation">
-              <.icon name="hero-arrow-path" class="size-4" />
-            </.button>
-          </div>
-          <div id={"todo-timeline-#{@todo.id}"} phx-hook="TodoTimeline" data-last-message={List.last(@messages) && List.last(@messages).id}
-            class="max-h-[28rem] min-h-40 space-y-5 overflow-y-auto overscroll-contain rounded-lg border border-zinc-950/10 bg-white p-4 sm:p-5"
-            role="log" aria-label="Todo conversation" tabindex="0">
-            <.button :if={@more?} variant="plain" phx-click="workspace_earlier">Load earlier messages</.button>
-            <p :if={is_nil(@state.thread)} role="status" class="text-sm/6 text-zinc-500">
-              <%= if @state.loading?, do: "Opening your conversation…", else: "Conversation unavailable. Refresh to try again." %>
-            </p>
-            <p :if={@state.thread && @messages == []} class="text-sm/6 text-zinc-500">Ask about this todo, its source, or the people involved.</p>
-            <article :for={message <- @messages} id={"workspace-message-#{message.id}"}
-              class={if(message.role == "user", do: "ml-6 rounded-lg bg-zinc-50 px-4 py-3", else: "min-w-0")}>
-              <p class="mb-1 text-xs/5 font-medium text-zinc-500"><%= if message.role == "user", do: "You", else: "Maraithon" %></p>
-              <p class="whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= message.body %></p>
-              <p :if={message.work_summary && message.work_summary["headline"]} class="mt-2 text-xs/5 text-zinc-500"><%= message.work_summary["headline"] %></p>
-              <.review_reference :if={message.structured_data["draft_card"]} message={message} reviews={@reviews} busy?={@state.busy? || @state.loading?} />
-            </article>
-            <div :if={@run} role="status" class="text-sm/6 text-zinc-500">
-              <span class="mr-2 inline-block size-2 animate-pulse rounded-full bg-zinc-400" />
-              <%= get_in(@run, [:work_summary, "headline"]) || "Working on your todo…" %>
-              <p :if={get_in(@run, [:work_summary, "preview"])} class="mt-2 whitespace-pre-wrap text-zinc-800"><%= @run.work_summary["preview"] %></p>
-            </div>
-          </div>
-          <p :if={@state.error} role="alert" class="mt-3 text-sm/6 text-red-700"><%= @state.error %></p>
-          <p data-workspace-status role="status" class="mt-2 text-sm/6 text-zinc-500" />
-          <.button data-retry-request hidden variant="outline" class="mt-2 [&[hidden]]:hidden" disabled={@state.busy? || @state.loading? || @run != nil}>Retry pending message</.button>
-          <form id={"todo-composer-#{@todo.id}"} data-workspace-composer class="mt-3">
-            <.c_textarea id="todo-chat-input" name="body" rows={3} maxlength="16000"
-              aria-label="Message about this todo" placeholder="Ask Maraithon to help move this forward…" required />
-            <div class="mt-2 flex items-center justify-end gap-2">
-              <span data-workspace-connection hidden class="mr-auto text-xs text-amber-700">Reconnecting… Your draft is kept.</span>
-              <.button type="submit" disabled={is_nil(@state.thread) || @state.loading? || @state.busy? || not is_nil(@run)} data-workspace-send>
-                <.icon name="hero-arrow-up" class="size-4" /> <span data-send-label>Send</span>
-              </.button>
-            </div>
-          </form>
-        </section>
       </div>
 
       <aside class="min-w-0 border-t border-zinc-950/10 pt-5 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0" aria-labelledby="todo-people-title">

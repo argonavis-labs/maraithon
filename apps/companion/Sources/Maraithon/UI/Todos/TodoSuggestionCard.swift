@@ -1,7 +1,5 @@
 /// A next step from the brief, as an open card with a Prepare action or as a
-/// compact dashed row, plus the fallback card that asks Maraithon to prepare
-/// the whole todo. Each sends one request into the conversation; nothing
-/// executes without a later review.
+/// compact row. Each sends its specific request into the task conversation.
 import SwiftUI
 
 struct TodoSuggestionCard: View {
@@ -93,47 +91,5 @@ struct TodoSuggestionCard: View {
 
     private func send() {
         Task { await store.send(action.request) }
-    }
-}
-
-/// Shown when nothing specific is ready yet: one card that asks Maraithon to
-/// gather the context and come back with a concrete action to review.
-struct TodoPrepareCard: View {
-    let subtitle: String?
-    let store: TodoConversationStore
-
-    private var disabled: Bool {
-        store.thread == nil || store.isSending || store.pendingMessage != nil || store.isThinking
-    }
-
-    var body: some View {
-        RunnerCard {
-            VStack(alignment: .leading, spacing: Tokens.Spacing.snug) {
-                HStack(alignment: .top, spacing: Tokens.Spacing.snug) {
-                    Image(systemName: "sparkles")
-                        .font(Tokens.Typography.body)
-                        .foregroundStyle(Tokens.Palette.accent)
-                        .frame(width: Tokens.IconSize.inline, height: Tokens.IconSize.inline)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: Tokens.Spacing.xxsmall) {
-                        Text(TodoActionCopy.prepareTitle)
-                            .font(Tokens.Typography.bodyMedium)
-                            .foregroundStyle(Tokens.Palette.foreground)
-                        Text(subtitle ?? TodoActionCopy.prepareSubtitle)
-                            .font(Tokens.Typography.small)
-                            .foregroundStyle(Tokens.Palette.mutedForeground)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                HStack {
-                    Spacer()
-                    Button("Prepare") { Task { await store.send(TodoActionCopy.preparePrompt) } }
-                        .buttonStyle(RunnerButtonStyle(.primary, compact: true))
-                        .disabled(disabled)
-                }
-            }
-            .runnerCardRow()
-        }
     }
 }

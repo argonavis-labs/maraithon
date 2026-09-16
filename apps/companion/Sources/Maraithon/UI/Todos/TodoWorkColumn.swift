@@ -20,7 +20,7 @@ struct TodoWorkColumn: View {
                 canDelegate: todo.canDelegate == true, proposal: todo.delegationProposal, request: store.delegationRequest,
                 refreshTodo: { await store.refreshTodo() })
                 .id(todo.id)
-            if todo.canMarkDone && todo.delegation == nil { nextAction }
+            if todo.canMarkDone && todo.delegation == nil && plan.primary != nil { nextAction }
             people
         }
         .padding(.horizontal, Tokens.Spacing.page)

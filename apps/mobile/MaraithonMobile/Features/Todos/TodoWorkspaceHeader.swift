@@ -26,25 +26,37 @@ struct TodoWorkspaceHeader: View {
                 completedActions
             }
 
-            if todo.isActive && todo.delegation == nil {
-                if let outcome = todo.todoBrief?.doneWhen {
-                    TodoLabeledLine(label: "Done when:", text: outcome)
-                        .textSelection(.enabled)
-                }
-                decisionSection
-                suggestedActionsSection
-            }
+            DisclosureGroup("Task details") {
+                VStack(alignment: .leading, spacing: Runner.Spacing.medium) {
+                    if let workflow = todo.workflow {
+                        TodoLabeledLine(label: "Outcome:", text: workflow.outcome)
+                        if let next = workflow.nextAction {
+                            TodoLabeledLine(label: "Next:", text: next, textColor: Runner.Palette.foreground)
+                        }
+                    }
+                    if todo.isActive && todo.delegation == nil {
+                        if let outcome = todo.todoBrief?.doneWhen {
+                            TodoLabeledLine(label: "Done when:", text: outcome)
+                                .textSelection(.enabled)
+                        }
+                        decisionSection
+                        suggestedActionsSection
+                    }
 
-            if todo.delegation == nil, let action = todo.sourceAction {
-                DisclosureGroup {
-                    SourceActionCardView(action: action, showsContext: false, onSend: sourceSend)
-                        .padding(.top, Runner.Spacing.small)
-                } label: {
-                    Label("Source and suggested reply", systemImage: "text.bubble")
-                        .font(Runner.Typography.smallMedium)
-                        .foregroundStyle(Runner.Palette.foreground)
+                    if todo.delegation == nil, let action = todo.sourceAction {
+                        DisclosureGroup {
+                            SourceActionCardView(action: action, showsContext: false, onSend: sourceSend)
+                                .padding(.top, Runner.Spacing.small)
+                        } label: {
+                            Label("Source and suggested reply", systemImage: "text.bubble")
+                                .font(Runner.Typography.smallMedium)
+                                .foregroundStyle(Runner.Palette.foreground)
+                        }
+                    }
                 }
+                .padding(.top, Runner.Spacing.small)
             }
+            .font(Runner.Typography.small)
 
             RunnerHairline()
             RunnerSectionLabel("Conversation")
@@ -92,10 +104,6 @@ struct TodoWorkspaceHeader: View {
                     Button("Change", action: showWorkflow)
                         .buttonStyle(RunnerButtonStyle(.plain, compact: true))
                 }
-                TodoLabeledLine(label: "Outcome:", text: workflow.outcome)
-                if let next = workflow.nextAction {
-                    TodoLabeledLine(label: "Next:", text: next, textColor: Runner.Palette.foreground)
-                }
             }
         }
     }
@@ -123,12 +131,6 @@ struct TodoWorkspaceHeader: View {
 
     private var activeActions: some View {
         VStack(alignment: .leading, spacing: Runner.Spacing.small) {
-            Button("Prepare this for me", systemImage: "sparkles") {
-                send("Prepare this todo for me. Gather the context, work through the next useful steps, and bring back a concrete action to review or the one decision you need from me.")
-            }
-            .buttonStyle(RunnerButtonStyle(.primary, fullWidth: true))
-            .disabled(actionsDisabled)
-
             HStack(spacing: Runner.Spacing.small) {
                 Button("Mark done", systemImage: "checkmark.circle", action: complete)
                     .buttonStyle(RunnerButtonStyle(.secondary, compact: true))

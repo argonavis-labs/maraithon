@@ -7,13 +7,11 @@ struct TodoActionPlan {
     enum Slot: Identifiable {
         case review(CompanionConversation.Message, CompanionConversationDraft)
         case suggestion(CompanionTodoWorkspace.Action)
-        case prepare(subtitle: String?)
 
         var id: String {
             switch self {
             case .review(let message, _): return "review:" + message.id
             case .suggestion(let action): return "suggestion:" + action.id
-            case .prepare: return "prepare"
             }
         }
     }
@@ -51,10 +49,7 @@ struct TodoActionPlan {
         let suggestions = (todo.brief?.suggestedActions ?? []).filter { action in
             !reviews.contains { covers($0.1, action) }
         }
-        var slots: [Slot] = reviews.map { .review($0.0, $0.1) } + suggestions.map { .suggestion($0) }
-        if slots.isEmpty {
-            slots = [.prepare(subtitle: todo.brief?.recommendation ?? todo.recommendedMove)]
-        }
+        let slots: [Slot] = reviews.map { .review($0.0, $0.1) } + suggestions.map { .suggestion($0) }
         return TodoActionPlan(primary: slots.first, secondary: slots.count > 1 ? slots[1] : nil)
     }
 
