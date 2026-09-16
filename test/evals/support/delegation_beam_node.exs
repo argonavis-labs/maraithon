@@ -3,7 +3,7 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
   import ExUnit.Assertions
   alias Maraithon.Repo
   alias Maraithon.Delegations.{Delegation, Grant, Scope, Jobs, Sources, Turn, Execution}
-  alias Maraithon.Runtime.{BackgroundJob, JobAuthority}
+  alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.Runtime.{AgentDirectives, AgentLeases, AgentSupervisor, AgentWatcher}
   alias Maraithon.Runtime.Coordination.{Authority, Session}
   alias Maraithon.TelegramAssistant.{Run, PreparedAction, ActionReconciliation}
@@ -25,7 +25,7 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
       )
 
     # Run the real Session and task supervision, with periodic product producers
-    # disabled. Only the explicitly leased send and observer run in this eval.
+    # disabled. Only the explicitly leased eval jobs run.
     {:ok, _} =
       Supervisor.start_child(Maraithon.Runtime.Supervisor, {Session, required_workers: []})
 
@@ -47,11 +47,15 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
     {:ok, node, partitions} = scope(user_id)
 
     callback =
-      if job_type == "delegation_send",
-        do: &Execution.execute/1,
-        else: &ActionReconciliation.execute/1
+      case job_type do
+        "delegation_send" -> &Execution.execute/1
+        "delegation_decide" -> &Maraithon.Delegations.Decision.execute/1
+        "runtime_recurring:delegation_due_sweep" -> &Maraithon.Runtime.RecurringJobs.execute/1
+        "assistant_action_reconcile" -> &ActionReconciliation.execute/1
+      end
 
-    Maraithon.TestSupport.DelegationRuntime.run_leased_job(node, partitions, job_type, callback)
+    job = Repo.get_by!(BackgroundJob, job_type: job_type, status: "pending")
+    Maraithon.TestSupport.DelegationRuntime.run_leased_job(node, partitions, job, callback)
   end
 
   def stale_write(job) do
@@ -182,8 +186,20 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
     end)
   end
 
-  def seed do
+  def stale_model_response(job) do
+    Maraithon.Delegations.Budget.settle(job, "compose", %{usage: %{reported_cost: 0.0001}})
+  end
+
+  def seed(kind \\ :send) do
     user_id = "beam-eval@example.invalid"
+    runtime = Application.fetch_env!(:maraithon, Maraithon.Runtime)
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.put(runtime, :openrouter_model, "meta/muse-spark-1.3-contributor")
+    )
+
     Application.put_env(:maraithon, :delegations_enabled, true)
     Application.put_env(:maraithon, :delegation_user_allowlist, [user_id])
     Application.put_env(:maraithon, :delegation_eval_only, false)
@@ -279,54 +295,83 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
 
         run
         |> Run.changeset(%{
-          status: "completed",
+          status: if(kind == :send, do: "completed", else: "queued"),
           prompt_snapshot: Map.put(run.prompt_snapshot, "sources", sources)
         })
         |> Repo.update!()
 
-        turn
-        |> Turn.changeset(%{
-          status: "validated",
-          data:
-            Map.merge(turn.data, %{
-              "decision" => %{
-                "kind" => "send",
-                "body" => "Got it. Indigo.",
-                "reason" => "Confirm the answer",
-                "evidence" => [message.message_id]
-              },
-              "policy_review" => %{"allowed" => true, "reason" => "Matches the source"}
-            })
-        })
-        |> Repo.update!()
-
-        now = Maraithon.Runtime.DatabaseClock.now!()
-
-        next =
-          Execution.prepare!(
-            d,
-            grant,
-            %{id: Ecto.UUID.generate(), kind: "decision", data: %{"turn_id" => turn.id}},
-            now
-          )
-
-        assert next.state == "sending"
-        d |> Delegation.changeset(%{state: next.state}) |> Repo.update!()
-        action = Repo.one!(PreparedAction) |> PreparedAction.hydrate_payload()
-        # Only advance the fixture's undo deadline, never an ownership lease.
-        turn = Repo.get!(Turn, turn.id) |> Turn.hydrate()
-        turn |> Turn.changeset(%{available_at: DateTime.add(now, -1)}) |> Repo.update!()
+        action_id =
+          if kind == :send do
+            prepare_send!(d, grant, turn, message)
+          else
+            binding = run.prompt_snapshot[Maraithon.Delegations.Binding.key()]
+            Jobs.enqueue!("delegation_decide", d, binding, DateTime.utc_now())
+            seed_cost_monitor!()
+            nil
+          end
 
         %{
           user_id: user_id,
           delegation_id: d.id,
-          action_id: action.id,
+          action_id: action_id,
+          turn_id: turn.id,
+          run_id: run.id,
           grant_id: grant.id,
           message: message
         }
       end)
 
     fixture
+  end
+
+  defp prepare_send!(d, grant, turn, message) do
+    turn
+    |> Turn.changeset(%{
+      status: "validated",
+      data:
+        Map.merge(turn.data, %{
+          "decision" => %{
+            "kind" => "send",
+            "body" => "Got it. Indigo.",
+            "reason" => "Confirm the answer",
+            "evidence" => [message.message_id]
+          },
+          "policy_review" => %{"allowed" => true, "reason" => "Matches the source"}
+        })
+    })
+    |> Repo.update!()
+
+    now = Maraithon.Runtime.DatabaseClock.now!()
+
+    next =
+      Execution.prepare!(
+        d,
+        grant,
+        %{id: Ecto.UUID.generate(), kind: "decision", data: %{"turn_id" => turn.id}},
+        now
+      )
+
+    assert next.state == "sending"
+    d |> Delegation.changeset(%{state: next.state}) |> Repo.update!()
+    action = Repo.one!(PreparedAction) |> PreparedAction.hydrate_payload()
+    # Only advance the fixture's undo deadline, never an ownership lease.
+    turn = Repo.get!(Turn, turn.id) |> Turn.hydrate()
+    turn |> Turn.changeset(%{available_at: DateTime.add(now, -1)}) |> Repo.update!()
+    action.id
+  end
+
+  defp seed_cost_monitor! do
+    {:ok, _} =
+      BackgroundJobs.enqueue("runtime_recurring:llm_cost_monitor", %{
+        result: %{
+          "status" => "within_budget",
+          "checked_at" => DateTime.to_iso8601(DateTime.utc_now()),
+          "daily_cost_usd" => 0,
+          "rolling_cost_usd" => 0,
+          "key_fingerprint" =>
+            :crypto.hash(:sha256, "local-eval-only") |> Base.encode16(case: :lower)
+        }
+      })
   end
 
   def attest(assignment, evidence_id) do
