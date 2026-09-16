@@ -4,6 +4,7 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
   alias Maraithon.Repo
   alias Maraithon.Delegations.{Delegation, Grant, Scope, Jobs, Sources, Turn, Execution}
   alias Maraithon.Runtime.{BackgroundJob, JobAuthority}
+  alias Maraithon.Runtime.{AgentDirectives, AgentLeases, AgentSupervisor, AgentWatcher}
   alias Maraithon.Runtime.Coordination.{Authority, Session}
   alias Maraithon.TelegramAssistant.{Run, PreparedAction, ActionReconciliation}
 
@@ -12,6 +13,17 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
     System.put_env("GIT_SHA", String.duplicate("a", 40))
     Logger.configure(level: :warning)
     {:ok, _} = Application.ensure_all_started(:maraithon)
+    # Recovery is advanced explicitly so we can inspect the durable state
+    # between proof, receipt reconciliation and coordinator restoration.
+    :ok = Supervisor.terminate_child(Maraithon.Supervisor, AgentWatcher)
+    :ok = Supervisor.delete_child(Maraithon.Supervisor, AgentWatcher)
+
+    {:ok, _} =
+      Supervisor.start_child(
+        Maraithon.Supervisor,
+        {AgentWatcher, reconcile?: false, recover?: false}
+      )
+
     # Run the real Session and task supervision, with periodic product producers
     # disabled. Only the explicitly leased send and observer run in this eval.
     {:ok, _} =
@@ -45,6 +57,103 @@ defmodule Maraithon.TestSupport.DelegationBeamNode do
   def stale_write(job) do
     JobAuthority.transaction(job, fn ->
       job |> BackgroundJob.changeset(%{result: %{"stale_owner_wrote" => true}}) |> Repo.update!()
+    end)
+  end
+
+  def create_coordinator(fixture) do
+    {:ok, agent} =
+      Maraithon.Agents.create_agent(%{
+        user_id: fixture.user_id,
+        behavior: "delegation_coordinator",
+        status: "running",
+        started_at: DateTime.utc_now(),
+        config: %{}
+      })
+
+    {:ok, _} =
+      Maraithon.AgentIsolation.grant_binding_consent(
+        agent,
+        Maraithon.DataCase.binding_consent(agent)
+      )
+
+    {:ok, _} =
+      Repo.transaction(fn ->
+        Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(fixture.user_id)
+
+        Repo.get!(Delegation, fixture.delegation_id)
+        |> Delegation.hydrate()
+        |> Delegation.changeset(%{agent_id: agent.id})
+        |> Repo.update!()
+      end)
+
+    {:ok, _} =
+      AgentSupervisor.start_agent(agent,
+        admission: :bootstrap,
+        ttl_ms: 3_000,
+        renew_interval_ms: 500
+      )
+
+    {:ok, _} = wake(agent.id, "checkpoint")
+    agent.id
+  end
+
+  def restart_coordinator(agent_id, generation) do
+    agent = Maraithon.Agents.get_agent(agent_id)
+
+    {:ok, _} =
+      AgentSupervisor.start_agent(agent,
+        admission: :recovery,
+        recovery_generation: generation,
+        ttl_ms: 3_000,
+        renew_interval_ms: 500
+      )
+
+    :ok
+  end
+
+  def coordinator_state(agent_id) do
+    case Registry.lookup(Maraithon.Runtime.AgentRegistry, agent_id) do
+      [{pid, token}] ->
+        {phase, data} = :sys.get_state(pid)
+        {:ok, %{phase: phase, owner_token: token, state: data.behavior_state}}
+
+      [] ->
+        :waiting
+    end
+  end
+
+  def stale_agent_fence(agent_id, old_token),
+    do: Repo.transaction(fn -> AgentLeases.fence_ready!(agent_id, old_token) end)
+
+  def wake(agent_id, kind) do
+    agent = Maraithon.Agents.get_agent(agent_id)
+    id = Ecto.UUID.generate()
+
+    AgentDirectives.enqueue(
+      agent.id,
+      agent.user_id,
+      "manual_wake",
+      %{"job_id" => id, "job_type" => kind, "payload" => %{}},
+      "beam-eval:#{id}"
+    )
+  end
+
+  def attest_agent(incident, evidence_id, private_key) do
+    alias Maraithon.Runtime.AgentTerminations
+    digest = :crypto.hash(:sha256, evidence_id)
+    operator = "local-beam-eval@example.invalid"
+    payload = AgentTerminations.attestation_payload(incident, evidence_id, digest, operator)
+    signature = :crypto.sign(:eddsa, :none, payload, [private_key, :ed25519])
+
+    Repo.transaction(fn ->
+      Repo.query!("SET LOCAL ROLE maraithon_incident_operator")
+
+      AgentTerminations.attest_external(incident.id, %{
+        evidence_id: evidence_id,
+        evidence_digest: digest,
+        signature: signature,
+        proved_by: operator
+      })
     end)
   end
 

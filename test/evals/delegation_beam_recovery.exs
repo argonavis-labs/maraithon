@@ -11,6 +11,7 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
   alias Maraithon.Repo
   alias Maraithon.TestSupport.DelegationBeamNode, as: Node
   alias Maraithon.Runtime.{BackgroundJob, Coordination}
+  alias Maraithon.Runtime.{AgentLeases, AgentTerminations, Snapshot}
   alias Maraithon.Delegations.{Delegation, Grant, Event}
   alias Maraithon.TelegramAssistant.PreparedAction
 
@@ -69,10 +70,16 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
     start_supervised!(Repo)
     Node.activate()
     {:ok, _} = Application.ensure_all_started(:bypass)
-    :ok
+    {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    Application.put_env(:maraithon, AgentTerminations,
+      external_attestation_public_key: public_key
+    )
+
+    %{attestation_key: private_key}
   end
 
-  test "a destroyed BEAM cannot replay a provider-accepted send" do
+  test "a destroyed BEAM restores an older coordinator checkpoint without replaying a send", c do
     fixture = Node.seed()
     bypass = Bypass.open()
     accepted = start_supervised!({Agent, fn -> [] end})
@@ -143,6 +150,18 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
     config = peer_config(bypass.port, fixture.user_id)
     {first, os_pid} = peer(config)
     {:ok, old_node, _} = eventually(fn -> call(first, :scope, [fixture.user_id]) end)
+    agent_id = call(first, :create_coordinator, [fixture])
+
+    {:ok, old_snapshot} =
+      eventually(fn ->
+        case Snapshot.latest(agent_id) do
+          nil -> :waiting
+          snapshot -> {:ok, snapshot}
+        end
+      end)
+
+    {:ok, %{owner_token: old_agent_token}} = call(first, :coordinator_state, [agent_id])
+    assert byte_size(Jason.encode!(old_snapshot.behavior_state)) < 1_024
     :peer.cast(first, Node, :run, [fixture.user_id, "delegation_send"])
     assert_receive {:accepted_before_receipt, provider}, 30_000
     on_exit(fn -> send(provider, :release) end)
@@ -177,6 +196,7 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
     end)
 
     assert {:error, _} = call(second, :stale_write, [old_job])
+    assert {:error, _} = call(second, :stale_agent_fence, [agent_id, old_agent_token])
 
     # Still no physical proof in storage, so the old ownership remains draining.
     partition = Repo.get!(Coordination.Partition, old_job.partition_id)
@@ -190,6 +210,18 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
 
     evidence_id = "local-beam-exit:#{os_pid}:#{old_node.id}:#{status}"
     assert {:ok, {:ok, _}} = Node.attest(Coordination.TaskClaims.get(assignment.id), evidence_id)
+
+    {:ok, incident} =
+      eventually(fn ->
+        case AgentTerminations.request_expired(agent_id, old_agent_token, backoffs_ms: [0]) do
+          {status, incident} when status in [:requested, :duplicate] -> {:ok, incident}
+          _ -> :waiting
+        end
+      end)
+
+    assert AgentLeases.get(agent_id).owner_token == old_agent_token
+    assert {:ok, {:attested, _}} = Node.attest_agent(incident, evidence_id, c.attestation_key)
+    assert {:recorded, guard} = AgentTerminations.reconcile_incident(incident.id)
     {:ok, new_node, _} = eventually(fn -> call(second, :scope, [fixture.user_id]) end)
     refute new_node.id == old_node.id
     assert Coordination.TaskClaims.get(assignment.id).state == "outcome_ambiguous"
@@ -207,6 +239,29 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
     assert Repo.aggregate(Maraithon.Delegations.Turn, :sum, :model_calls) == 0
     assert length(Agent.get(accepted, & &1)) == 1
     assert {:error, _} = call(second, :stale_write, [old_job])
+
+    # The only checkpoint predates both receipt events. Restore it through the
+    # actual gen_statem; its old cursor must not override the committed rows.
+    assert Snapshot.latest(agent_id) == old_snapshot
+    assert :ok = call(second, :restart_coordinator, [agent_id, guard.generation])
+
+    {:ok, recovered} =
+      eventually(fn ->
+        with {:ok, %{phase: :idle} = current} <- call(second, :coordinator_state, [agent_id]),
+             false <- Repo.exists?(from e in Event, where: e.wake_state != "consumed") do
+          {:ok, current}
+        else
+          _ -> :waiting
+        end
+      end)
+
+    refute recovered.owner_token == old_agent_token
+    assert recovered.state["version"] == 1
+    assert Repo.get!(Delegation, fixture.delegation_id).state == "waiting_reply"
+    assert Repo.get!(Delegation, fixture.delegation_id).lifetime_sends == 1
+    assert {:error, _} = call(second, :stale_agent_fence, [agent_id, old_agent_token])
+    assert Repo.aggregate(from(e in Event, where: e.kind == "send_receipt"), :count) == 1
+    assert length(Agent.get(accepted, & &1)) == 1
     :ok = :peer.stop(second)
 
     IO.puts(
@@ -218,6 +273,10 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
           provider_send_count: 1,
           proven_send_count: 1,
           stale_writes_rejected: 2,
+          stale_agent_fences_rejected: 2,
+          older_coordinator_checkpoint_restored: true,
+          checkpoint_bytes: byte_size(Jason.encode!(old_snapshot.behavior_state)),
+          coordinator_owner_changed: true,
           model_calls: 0,
           provider: "local HTTP fixture",
           periodic_producers: false

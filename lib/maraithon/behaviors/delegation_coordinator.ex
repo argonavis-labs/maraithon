@@ -10,7 +10,7 @@ defmodule Maraithon.Behaviors.DelegationCoordinator do
   @impl true
   def snapshot_state(state), do: Map.take(state, ~w(version work_cursor next_wake_at))
   @impl true
-  def migrate_state(version, state, _), do: Map.put(state, "version", version)
+  def migrate_state(_stored_version, state, _), do: Map.put(state, "version", schema_version())
   @impl true
   def reconcile_restored_state(state, _), do: snapshot_state(state)
 
