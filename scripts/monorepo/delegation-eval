@@ -22,14 +22,16 @@ case "${1:-}" in
     ;;
   delegation-eval-start) task=delegation_eval_start ;;
   delegation-eval-status) task=delegation_eval_status ;;
-  delegation-eval-memory)
-    task=delegation_eval_memory
-    [[ "${DELEGATION_EVAL_JOB_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
-      echo "A completed controlled eval job UUID is required" >&2; exit 1;
-    }
-    ;;
+  delegation-eval-memory) task=delegation_eval_memory ;;
+  delegation-eval-resume) task=delegation_eval_resume ;;
   *) echo "Expected a controlled delegation eval operation" >&2; exit 1 ;;
 esac
+
+if [[ "${task}" == delegation_eval_memory || "${task}" == delegation_eval_resume ]]; then
+  [[ "${DELEGATION_EVAL_JOB_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+    echo "A controlled eval job UUID is required" >&2; exit 1;
+  }
+fi
 
 source "$(dirname "$0")/delegation-eval-config"
 scenario="${DELEGATION_EVAL_SCENARIO:-information_reply}"

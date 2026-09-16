@@ -25,11 +25,12 @@ on:
           - delegation-eval-status
           - delegation-eval-memory
           - delegation-eval-diagnose
+          - delegation-eval-resume
           - reset-rebuild-kent
           - replay-gmail
           - replay-slack
       delegation_eval_job_id:
-        description: Completed information eval job UUID for read-only memory verification
+        description: Controlled eval job UUID for memory verification or initial throttle recovery
         required: false
         type: string
       delegation_eval_execution_id:

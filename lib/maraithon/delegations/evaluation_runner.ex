@@ -4,7 +4,15 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   alias Maraithon.{Delegations, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
   alias Maraithon.Connectors.{Gmail, GoogleCalendar}
-  alias Maraithon.Delegations.{Evaluation, EvaluationCanary, Gates, Ingress, Policy, Turn}
+  alias Maraithon.Delegations.{
+    Evaluation,
+    EvaluationCanary,
+    EvaluationRecovery,
+    Gates,
+    Ingress,
+    Policy,
+    Turn
+  }
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.TelegramAssistant.{ActionReconciliation, PreparedAction, Run}
   alias Maraithon.Todos.{Todo, Workflow}
@@ -112,7 +120,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
             {:ok, next}
 
           {:error, reason} ->
-            fail(job, state, reason)
+            EvaluationRecovery.wait(state, reason) || fail(job, state, reason)
         end
       else
         _ -> fail(job, job.result || %{}, :eval_stopped)

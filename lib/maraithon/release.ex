@@ -39,13 +39,25 @@ defmodule Maraithon.Release do
   end
 
   def delegation_eval_start do
+    delegation_eval_launch(fn ->
+      Maraithon.Delegations.EvaluationRunner.start(
+        System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply"),
+        System.get_env("DELEGATION_EVAL_ACTOR", "as_user")
+      )
+    end)
+  end
+
+  def delegation_eval_resume do
+    delegation_eval_launch(fn ->
+      Maraithon.Delegations.EvaluationRecovery.resume(System.get_env("DELEGATION_EVAL_JOB_ID"))
+    end)
+  end
+
+  defp delegation_eval_launch(fun) do
     report =
       delegation_eval(
         fn ->
-          case Maraithon.Delegations.EvaluationRunner.start(
-                 System.get_env("DELEGATION_EVAL_SCENARIO", "information_reply"),
-                 System.get_env("DELEGATION_EVAL_ACTOR", "as_user")
-               ) do
+          case fun.() do
             {:ok, report} ->
               report
 

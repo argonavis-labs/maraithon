@@ -1,0 +1,40 @@
+{
+  "scenario": "durable_memory",
+  "actor": "as_assistant",
+  "job_id": "338b5a91-b56e-4536-b24c-9575848f3d8f",
+  "live_eval_passed": false,
+  "observations": [
+    {
+      "workflow_id": 35104584209,
+      "phase": "preflight",
+      "accounts_ready": true,
+      "assistant_ready": true,
+      "assistant_isolated_from_personal_sources": true,
+      "model": "meta/muse-spark-1.3-contributor",
+      "model_calls": 0,
+      "messages_sent": 0,
+      "events_created": 0
+    },
+    {
+      "workflow_id": 35105695496,
+      "execution_id": "maraithon-todo-validation-mmtrn",
+      "phase": "queued",
+      "scheduled_at": "2026-09-16T14:06:14.432965Z"
+    },
+    {
+      "workflow_id": 35106472132,
+      "job_status": "completed",
+      "phase": "failed",
+      "reason": "rate_limited",
+      "delegation_id": null,
+      "calendar_cleanup": "completed",
+      "scheduled_at": "2026-09-16T14:06:46.936214Z",
+      "initial_email_delivery": "not_yet_inspected"
+    }
+  ],
+  "limits": [
+    "No quiet interval or later memory turn has been verified.",
+    "A failed eval before a delegation exists does not prove that its initial email was unsent.",
+    "Recovery must preserve this job and its deterministic prepared-action IDs."
+  ]
+}
