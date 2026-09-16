@@ -96,11 +96,22 @@ defmodule Maraithon.CalendarLinks do
 
       nil ->
         Repo.transaction(fn ->
+          existing = Map.new(list_user_links(user_id), &{&1.url, &1})
+
+          links =
+            Enum.map(changesets, fn changeset ->
+              row = existing[Changeset.get_field(changeset, :url)] || %CalendarLink{}
+              attrs = changeset |> Changeset.apply_changes() |> Map.from_struct()
+              row |> CalendarLink.changeset(attrs) |> Repo.insert_or_update!()
+            end)
+
+          kept_ids = Enum.map(links, & &1.id)
+
           CalendarLink
-          |> where([link], link.user_id == ^user_id)
+          |> where([link], link.user_id == ^user_id and link.id not in ^kept_ids)
           |> Repo.delete_all()
 
-          Enum.map(changesets, &Repo.insert!/1)
+          links
         end)
     end
   end
@@ -121,6 +132,10 @@ defmodule Maraithon.CalendarLinks do
       duration = Keyword.get(opts, :duration_minutes) || infer_duration_minutes(context, text)
 
       links
+      |> Enum.filter(fn link ->
+        not Keyword.get(opts, :exact, false) or
+          (link.context == context and link.duration_minutes == duration)
+      end)
       |> Enum.map(fn link -> {link_score(link, context, duration, text), link} end)
       |> Enum.max_by(fn {score, link} -> {score, -(link.priority || 100)} end, fn -> {0, nil} end)
       |> case do

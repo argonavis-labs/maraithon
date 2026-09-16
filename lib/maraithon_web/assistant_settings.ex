@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.AssistantSettings do
   @moduledoc "Shared, credential-free assistant settings for web and native clients."
   import Ecto.Query
-  alias Maraithon.{AssistantIdentities, OAuth, Repo, SourceLabels}
+  alias Maraithon.{AssistantIdentities, CalendarLinks, OAuth, Repo, SourceLabels}
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Delegations.{Gates, Preferences}
 
@@ -60,11 +60,25 @@ defmodule MaraithonWeb.AssistantSettings do
 
       unavailable = Preferences.calendar_ids(preferences) -- Enum.map(calendars, & &1.id)
 
+      links =
+        Enum.map(
+          CalendarLinks.list_active_links(user_id),
+          &%{id: &1.id, label: "#{CalendarLinks.display_label(&1)} (#{&1.duration_minutes} min)"}
+        )
+
+      selected_link = preferences["calendar_link_id"]
+
+      links =
+        if selected_link not in [nil, ""] and not Enum.any?(links, &(&1.id == selected_link)),
+          do: links ++ [%{id: selected_link, label: "Unavailable booking link"}],
+          else: links
+
       %{
         enabled: true,
         accounts: accounts,
         calendar_accounts:
           calendars ++ Enum.map(unavailable, &%{id: &1, label: "Unavailable account"}),
+        booking_links: links,
         selected_account: selected,
         aliases: aliases,
         error: error,
@@ -107,6 +121,9 @@ defmodule MaraithonWeb.AssistantSettings do
             cond do
               key == "booking_calendar_account_id" ->
                 if value in [nil, ""], do: nil, else: integer(value) || value
+
+              key == "calendar_link_id" and value in [nil, ""] ->
+                nil
 
               is_integer(default) ->
                 integer(value)

@@ -45,13 +45,14 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
         </div>
         <div class="flex justify-end"><.button type="submit">Save assistant</.button></div>
       </.form>
-      <.preferences preferences={@settings.preferences} calendar_accounts={@settings.calendar_accounts} />
+      <.preferences preferences={@settings.preferences} calendar_accounts={@settings.calendar_accounts} booking_links={@settings.booking_links} />
     </section>
     """
   end
 
   attr :preferences, :map, required: true
   attr :calendar_accounts, :list, required: true
+  attr :booking_links, :list, required: true
 
   defp preferences(assigns) do
     ~H"""
@@ -91,7 +92,14 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
             <.c_input id={"delegation-#{key}"} name={"delegation_preferences[#{key}]"} type="number" value={@preferences[key]} min={min} max={max} required />
           </.field>
           <.field label="Video link" for="delegation-video-link"><.c_input id="delegation-video-link" name="delegation_preferences[video_link]" value={@preferences["video_link"]} type="url" /></.field>
+          <.field label="Preferred booking link" for="delegation-booking-link">
+            <.c_select id="delegation-booking-link" name="delegation_preferences[calendar_link_id]">
+              <option value="" selected={@preferences["calendar_link_id"] in [nil, ""]}>Choose for this task</option>
+              <option :for={link <- @booking_links} value={link.id} selected={link.id == @preferences["calendar_link_id"]}><%= link.label %></option>
+            </.c_select>
+          </.field>
         </div>
+        <.link href={~p"/settings#calendar-links"} class="text-sm text-zinc-600 underline">Manage booking links</.link>
         <.checkbox_field label="Suggest tasks to delegate" name="delegation_preferences[proposals_enabled]" checked={@preferences["proposals_enabled"]} />
         <div class="flex justify-end"><.button type="submit">Save preferences</.button></div>
       </.form>

@@ -94,6 +94,7 @@ defmodule Maraithon.Delegations.Receipts do
             "offered_slots" => slots,
             "offered_calendar_account_ids" => scheduling["coverage"]["account_ids"],
             "offered_scheduling_request" => scheduling["request"],
+            "offered_meeting_links" => scheduling["links"] || %{},
             "slot_reoffers" =>
               (data["slot_reoffers"] || 0) +
                 if(Maraithon.Delegations.Policy.reoffer?(%{delegation: d}, turn.data["decision"]),

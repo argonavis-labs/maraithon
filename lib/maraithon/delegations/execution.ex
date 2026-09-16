@@ -274,7 +274,10 @@ defmodule Maraithon.Delegations.Execution do
          "calendar_account_ids" => ids,
          "attendees" => scope["to"] ++ scope["cc"],
          "title" => scope["outcome"],
-         "description" => "Arranged by Maraithon.",
+         "description" =>
+           Maraithon.Delegations.SchedulingLinks.invitation_description(
+             context.delegation.data["offered_meeting_links"] || %{}
+           ),
          "todo_id" => context.delegation.todo_id
        })}
     else

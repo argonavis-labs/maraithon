@@ -12,6 +12,7 @@ defmodule Maraithon.Delegations.Decision do
     Ledger,
     Policy,
     Scheduling,
+    SchedulingLinks,
     Turn,
     Toolbox,
     Voice
@@ -117,7 +118,13 @@ defmodule Maraithon.Delegations.Decision do
              context.delegation.user_id,
              Map.put(opts, :default_account_id, context.grant.data["scope"]["source_account_id"])
            ) do
-      {:ok, Map.put(scheduling, "request", request)}
+      {:ok,
+       scheduling
+       |> Map.put("request", request)
+       |> Map.put(
+         "links",
+         SchedulingLinks.snapshot(context, scheduling["coverage"]["duration_min"])
+       )}
     end
   end
 
