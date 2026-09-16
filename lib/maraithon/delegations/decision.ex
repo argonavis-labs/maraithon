@@ -10,6 +10,7 @@ defmodule Maraithon.Delegations.Decision do
     Gates,
     Jobs,
     Ledger,
+    PeopleContext,
     Policy,
     Scheduling,
     SchedulingLinks,
@@ -22,7 +23,7 @@ defmodule Maraithon.Delegations.Decision do
   alias Maraithon.TelegramAssistant.{Continuation, Run}
 
   @opts [max_wall_clock_ms: 120_000, max_llm_turns: 3, max_tool_steps: 1]
-  @prompt_version 1
+  @prompt_version 2
   def prompt_version, do: @prompt_version
 
   def execute(%BackgroundJob{job_type: "delegation_decide"} = job) do
@@ -85,6 +86,7 @@ defmodule Maraithon.Delegations.Decision do
             |> Map.put("scheduling", scheduling)
             |> Map.put("fact_ledger", Ledger.snapshot(current))
             |> Voice.freeze(job.user_id, current.grant.data["scope"])
+            |> PeopleContext.freeze(job.user_id, current.grant.data["scope"])
 
           run =
             current.run
