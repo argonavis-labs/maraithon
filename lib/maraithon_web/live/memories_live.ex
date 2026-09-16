@@ -288,7 +288,7 @@ defmodule MaraithonWeb.MemoriesLive do
 
     memories =
       user_id
-      |> Memory.list_items(memory_opts(filters))
+      |> Memory.list_items(Keyword.put(memory_opts(filters), :include_assistant_sources, true))
       |> Enum.sort_by(&{status_rank(&1.status), &1.kind, &1.title})
 
     selected_memory =

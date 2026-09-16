@@ -673,7 +673,7 @@ Inspection also found that CRM observations lacked the three keys used for dedup
 
 Commit `e2ca0be2` deployed through successful workflow `35124043521` to revision `maraithon-00426-vcx`, serving all traffic.
 
-The central memory recall path and delegated People context now omit records whose saved provenance names a currently dedicated assistant account. The filter uses the authenticated user's account IDs and runs before records enter a model prompt. It keeps the existing candidate bounds and People ambiguity check. Stored records remain available for review; none are deleted. The server build passed.
+The central memory recall path and delegated People context now omit records whose saved provenance names a currently dedicated assistant account. The filter uses the authenticated user's account IDs and runs before records enter a model prompt. It keeps the existing candidate bounds and People ambiguity check. Stored records remain available for review; none are deleted. The server build passed. The regular memory-list path now applies the same exclusion, covering model tools, todo and briefing context, and voice context. The authenticated Memories management page explicitly includes these records for inspection. This follow-up also passed the server build.
 
 This is input provenance, not proof of each generated claim. It does not reconstruct older learning, preserve a complete history for every merged People field, or exclude every previously learned field after a later assistant designation. Those remain part of the isolation audit. Unknown input account identity stays unknown; no old records were deleted or rewritten.
 

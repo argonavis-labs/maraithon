@@ -63,6 +63,11 @@ defmodule Maraithon.Memory do
     |> order_by([item], desc: item.importance, desc: item.updated_at, desc: item.inserted_at)
     |> limit(^fetch_limit)
     |> Repo.all()
+    |> then(fn items ->
+      if Keyword.get(opts, :include_assistant_sources, false),
+        do: items,
+        else: Maraithon.RelationshipIntelligence.Sources.personal_context(user_id, items)
+    end)
     |> filter_items_by_text(query_text)
     |> Enum.take(limit)
   end
