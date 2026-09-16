@@ -377,7 +377,7 @@ It sent one autonomous email, received the counterpart's answer, and marked
 the todo Done with a citation to that exact inbound message. Two turns made
 four Muse calls for **US$0.001421**. This proves the controlled information
 case, not the remaining calendar, Slack, or assistant-identity cases. Two
-model calls per turn also remains above the plan's target of less than 1.3.
+model calls per turn exceeded the plan's target at the time, below 1.3.
 
 Evidence: [cost follow-up](../evidence/delegated-conversations/2026-09-15-cost-followup.json)
 and [live information eval](../evidence/delegated-conversations/2026-09-15-live-information.json).
@@ -391,6 +391,22 @@ later charges are outside this measurement. The warning remains active.
 These observations confirm useful work at materially lower measured model
 costs. They do not establish a full-day production cost below US$3. Keep the
 fixed projection and check the next full day with the billing counter.
+
+### September 16 decision and scheduling measurement
+
+Kent kept independent model review and replaced the call-count target. An
+ordinary substantive turn targets two calls: composition and independent
+review. Research or repair has a three-call ceiling, including final review.
+Waiting and ignored acknowledgements use zero calls and are counted separately.
+This decision keeps Muse Spark Contributor and does not change the spending
+warning or normal US$7 pause.
+
+The controlled October scheduling case passed with three settled research
+calls and two booking calls, costing **US$0.002583** in total. It verified the
+recipient's invitation and its description, then cancelled the test event.
+There were no unresolved reservations. This is evidence for those two turns,
+not a new daily cost projection or proof of the remaining repair path.
+[Scheduling receipts](../evidence/delegated-conversations/2026-09-16-requested-scheduling-passed.json).
 
 ## 5. What must not change
 

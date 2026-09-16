@@ -730,9 +730,28 @@ Local capture freshness does not establish the remote CalDAV sync time.
 
 The server, companion Swift build, signed Mac build and iPhone simulator build
 passed. XcodeGen regenerated the native projects; generated project files stay
-untracked. Tests were not run under the current policy. Deployment and live
-verification of the account-matching consumer are pending. No calendar binding
-or new live conversation was created for this change.
+untracked. Tests were not run under the current policy. Commit `3f32f749` deployed through successful workflow `35133254724` to revision
+`maraithon-00432-d7v`. The signed Mac bundle was installed in place. Mobile
+workflow `35133254684` published TestFlight 1.0.1 (`20260916181547`), with Kent
+verified in the Founders group. Web and Mac Settings both show October bound
+to Kent's user. The new web calendar selectors remain on Google directly.
+
+The first Mac availability upload was rejected with HTTP 422. Its diagnostic
+counts showed 17 calendars, 302 events, no empty calendar identity fields, no
+zero or negative durations, and a three-second capture age. Commit `69fa6765`
+deployed through successful workflow `35133975561` to revision
+`maraithon-00433-wf4`. Its bounded error codes identified invalid all-day dates:
+48 occurrences had non-increasing date strings. No event content was logged.
+
+The companion now interprets EventKit's floating dates in the Mac's default
+timezone and normalizes an end time within a day to the next day's exclusive
+boundary. Midnight stays exclusive. The Swift and signed Mac builds passed,
+and the bundle was installed in place with its signing requirement preserved.
+At 18:35 UTC, reloading live Web Settings showed all 17 Mac calendars in the
+selectors, confirming that the replacement snapshot was accepted. The account
+selectors remain on Google directly. No binding or new live conversation was
+created, so this proves ingestion and inventory presentation, not live use of
+the mirror for a scheduling proposal. No automated tests ran.
 
 ## Remaining work
 
@@ -741,7 +760,7 @@ or new live conversation was created for this change.
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage; the production gate currently admits no eligible proposal.
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. Send recovery, older coordinator checkpoints, and interrupted model decisions now pass local whole-BEAM kills. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Verify the revised call budget across the remaining paths and reduce redundant calls and daily workload volume. The information eval's two calls per turn meet the revised ordinary-turn target; live research turns have three settled calls with independent review; repair still needs verification against that ceiling. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
-6. Deploy and manually verify local availability capture and the account-matching consumer. The complete replacement window includes unchanged events and reconciles local deletions; explicit bindings and a five-minute limit control use in slot proposals. Final booking always checks Google. Live coverage must establish the selected window and fallback behavior; a local capture timestamp does not prove remote CalDAV freshness.
+6. Manually verify the account-matching consumer with explicit user-selected calendars. Deployment, complete availability ingestion and live inventory presentation are verified. The replacement window includes unchanged events and reconciles local deletions; explicit bindings and a five-minute limit control use in slot proposals. Final booking always checks Google. Live coverage must establish the selected window and fallback behavior; a local capture timestamp does not prove remote CalDAV freshness.
 
 The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. A later live model turn using that stored fact remains unverified. Compact People context still needs live verification. The original task email can now supply evidence for reviewed facts; bounded selection of other uncaptured historical messages remains unfinished. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 

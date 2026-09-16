@@ -64,9 +64,13 @@ sent. Calendar inventory includes calendars with no events. Each calendar has
 
 Each event has `guid`, `start_at`, `end_at`, `is_all_day` and the existing
 version 1 `source_state`, with calendar and source IDs matching the inventory.
-All-day occurrences also require floating `start_date` and exclusive `end_date`
-from the event's calendar timezone. Titles, notes, locations and attendees are
-excluded. Every occurrence must overlap the declared window.
+All-day occurrences also require floating `start_date` and exclusive `end_date`.
+EventKit returns floating dates in the Mac's default timezone. The companion
+preserves those dates and rounds an end time within a day up to the next day's
+boundary; midnight remains exclusive. Calendar arithmetic handles daylight
+saving changes. See Apple's [start-date contract](https://developer.apple.com/documentation/eventkit/ekevent/startdate).
+Titles, notes, locations and attendees are excluded. Every occurrence must
+overlap the declared window.
 
 Successful writes return the normal ingestion counts. An identical retry
 returns one duplicate without refreshing capture time; older or conflicting

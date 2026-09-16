@@ -70,14 +70,21 @@ struct CalendarAvailabilityPayload: Encodable, Sendable {
         self.events = events.map(Event.init)
     }
 
-    static func localDate(_ date: Date?, timezone: TimeZone?) -> String? {
-        guard let date else { return nil }
+    /// EventKit returns floating dates in the default zone. Cover every day
+    /// touched, including a last-day end time, while preserving midnight as exclusive.
+    static func allDayDates(start: Date?, end: Date?) -> (start: String, end: String)? {
+        guard let start, let end, end > start else { return nil }
+        var calendar = Foundation.Calendar(identifier: .gregorian)
+        calendar.timeZone = NSTimeZone.default
+        let endDay = calendar.startOfDay(for: end)
+        guard let exclusiveEnd = end > endDay
+                ? calendar.date(byAdding: .day, value: 1, to: endDay) : endDay else { return nil }
         let formatter = DateFormatter()
-        formatter.calendar = Foundation.Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timezone ?? .current
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        return (formatter.string(from: start), formatter.string(from: exclusiveEnd))
     }
 
     func failureMetadata(_ error: Error) -> [String: String] {
@@ -88,6 +95,10 @@ struct CalendarAvailabilityPayload: Encodable, Sendable {
         result["negative_duration"] = String(events.filter { $0.startAt > $0.endAt }.count)
         result["empty_calendar_fields"] = String(calendars.filter { $0.id.isEmpty || $0.sourceID.isEmpty || $0.name.isEmpty || $0.sourceName.isEmpty }.count)
         result["capture_age_seconds"] = String(Int(Date().timeIntervalSince(capturedAt)))
+        result["all_day_missing_dates"] = String(events.filter { $0.isAllDay && ($0.startDate == nil || $0.endDate == nil) }.count)
+        result["all_day_nonincreasing_dates"] = String(events.filter { $0.isAllDay && ($0.startDate ?? "") >= ($0.endDate ?? "") }.count)
+        result["all_day_bad_date_length"] = String(events.filter { $0.isAllDay && ($0.startDate?.count != 10 || $0.endDate?.count != 10) }.count)
+        result["timed_dates_present"] = String(events.filter { !$0.isAllDay && ($0.startDate != nil || $0.endDate != nil) }.count)
         if case MaraithonClientError.clientError(let status, let body) = error {
             result["http_status"] = String(status)
             if let data = body?.data(using: .utf8),

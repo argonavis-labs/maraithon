@@ -198,6 +198,9 @@ struct CalendarEventReader: @unchecked Sendable {
             attendeeEmails = []
         }
 
+        let dates = event.isAllDay
+            ? CalendarAvailabilityPayload.allDayDates(start: event.startDate, end: event.endDate) : nil
+
         return Snapshot(
             guid: guid,
             masterIdentifier: masterIdentifier,
@@ -216,8 +219,8 @@ struct CalendarEventReader: @unchecked Sendable {
             createdAt: event.creationDate,
             modifiedAt: event.lastModifiedDate,
             sourceState: CalendarEventState(event: event),
-            startDate: event.isAllDay ? CalendarAvailabilityPayload.localDate(event.startDate, timezone: event.timeZone) : nil,
-            endDate: event.isAllDay ? CalendarAvailabilityPayload.localDate(event.endDate, timezone: event.timeZone) : nil
+            startDate: dates?.start,
+            endDate: dates?.end
         )
     }
 
