@@ -15,6 +15,9 @@ struct TodoDelegationSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var pending: TodoDelegation.Request?
+    @State private var preflightID: String?
+    @State private var previewVersion = UUID()
+    @State private var previewAttempt = UUID()
     private let kind: String
 
     init(todoID: String, proposal: TodoDelegation.Proposal?, request: @escaping TodoDelegationPanel.Transport,
@@ -30,7 +33,7 @@ struct TodoDelegationSheet: View {
                 Picker("Send", selection: $actor) {
                     Text("As me").tag("as_user")
                     Text("As my assistant").tag("as_assistant")
-                }.disabled(busy)
+                }.disabled(busy && scope != nil)
                 if let scope {
                     Section {
                         LabeledContent("From", value: scope.identity.email ?? scope.identity.displayName ?? "Assistant")
@@ -48,42 +51,62 @@ struct TodoDelegationSheet: View {
                         TextField("Instruction (optional)", text: $instruction, axis: .vertical)
                     }.disabled(busy)
                 }
-                if busy { ProgressView("Checking conversation") }
+                if busy {
+                    ProgressView(scope == nil ? "Checking conversation" : "Starting delegation")
+                    if scope == nil { Text("You can close this and return later.").foregroundStyle(.secondary) }
+                }
                 if let error {
                     Text(error).foregroundStyle(.red)
-                    if scope == nil { Button("Retry") { Task { await preview() } } }
+                    if scope == nil { Button("Retry") { previewAttempt = UUID() }.disabled(busy) }
                 }
             }
             .formStyle(.grouped)
             .navigationTitle("Delegate this task")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy && scope != nil) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Delegate") { Task { await delegate() } }
                         .disabled(busy || scope == nil || outcome.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || outcome.count > 2_000 || instruction.count > 2_000)
                 }
             }
         }
-        .task(id: actor) { await preview() }
-        .interactiveDismissDisabled(busy)
+        .task(id: "\(actor):\(previewAttempt)") { await preview() }
+        .interactiveDismissDisabled(busy && scope != nil)
         #if os(macOS)
         .frame(minWidth: 460, idealWidth: 520, minHeight: 440)
         #endif
     }
 
     @MainActor private func preview() async {
-        busy = true; scope = nil; error = nil; pending = nil
-        defer { busy = false }
+        let version = UUID()
+        previewVersion = version
+        busy = true; scope = nil; error = nil; pending = nil; preflightID = nil
+        defer { if previewVersion == version { busy = false } }
         var input = TodoDelegation.Request()
         input.actor = actor
         input.kind = kind
+        input.asyncPreview = true
         do {
-            guard let value = try await request("todos/\(todoID)/delegation/preview", input).scope else {
-                throw URLError(.badServerResponse)
+            while !Task.isCancelled {
+                let response = try await request("todos/\(todoID)/delegation/preview", input)
+                try Task.checkCancellation()
+                guard previewVersion == version else { return }
+                if let value = response.scope {
+                    preflightID = response.preflight?.id
+                    scope = value; outcome = value.outcome
+                    recipients = value.to.joined(separator: ", "); cc = value.cc.joined(separator: ", ")
+                    return
+                }
+                guard let check = response.preflight, check.status == "pending" else {
+                    throw URLError(.badServerResponse)
+                }
+                input.preflightID = check.id
+                try await Task.sleep(for: .milliseconds(min(max(check.retryAfterMs ?? 2_000, 1_000), 30_000)))
             }
-            scope = value; outcome = value.outcome
-            recipients = value.to.joined(separator: ", "); cc = value.cc.joined(separator: ", ")
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard !Task.isCancelled, previewVersion == version else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     @MainActor private func delegate() async {
@@ -95,6 +118,7 @@ struct TodoDelegationSheet: View {
         input.outcome = outcome; input.instruction = instruction
         input.to = addresses(recipients); input.cc = addresses(cc)
         input.scopeHash = scope.scopeHash; input.expectedRevision = scope.workflowRevision
+        input.preflightID = preflightID
         if let pending { input.requestID = pending.requestID }
         if let pending, pending != input { input.requestID = UUID().uuidString }
         pending = input

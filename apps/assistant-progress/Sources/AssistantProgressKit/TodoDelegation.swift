@@ -36,6 +36,17 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
     public struct Response: Decodable, Sendable {
         public let delegation: TodoDelegation?
         public let scope: Scope?
+        public let preflight: Preflight?
+    }
+
+    public struct Preflight: Decodable, Sendable {
+        public let id: String
+        public let status: String
+        public let retryAfterMs: Int?
+        enum CodingKeys: String, CodingKey {
+            case id, status
+            case retryAfterMs = "retry_after_ms"
+        }
     }
 
     public struct Scope: Decodable, Sendable {
@@ -81,10 +92,13 @@ public struct TodoDelegation: Codable, Hashable, Sendable {
         public var expectedRevision: Int?
         public var requestID: String = UUID().uuidString
         public var answer: String?
+        public var asyncPreview: Bool?
+        public var preflightID: String?
         public init() {}
         enum CodingKeys: String, CodingKey {
             case actor, kind, outcome, instruction, to, cc, answer
             case scopeHash = "scope_hash", expectedRevision = "expected_revision", requestID = "request_id"
+            case asyncPreview = "async", preflightID = "preflight_id"
         }
     }
 }
