@@ -231,9 +231,23 @@ defmodule Maraithon.Crm do
   def create_person(_user_id, _attrs), do: {:error, :invalid_person_attrs}
 
   def update_person(%Person{} = person, attrs) when is_map(attrs) do
-    person
-    |> Person.changeset(apply_relationship_metric_growth(attrs, person))
-    |> Repo.update()
+    Repo.transaction(fn ->
+      Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(person.user_id)
+
+      case get_person_for_user(person.user_id, person.id) do
+        %Person{} = current ->
+          current
+          |> Person.changeset(apply_relationship_metric_growth(attrs, current))
+          |> Repo.update()
+
+        nil ->
+          {:error, :person_not_found}
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
     |> tap_refresh_embedding()
   end
 
@@ -483,6 +497,8 @@ defmodule Maraithon.Crm do
 
     result =
       Repo.transaction(fn ->
+        Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(user_id)
+
         with :ok <- reject_self_merge(surviving_id, merged_id),
              %Person{} = surviving <- get_person_for_user(user_id, surviving_id),
              %Person{} = merged <- get_person_for_user(user_id, merged_id),
@@ -811,7 +827,10 @@ defmodule Maraithon.Crm do
     attrs =
       %{
         contact_details: merged.contact_details || %{},
-        metadata: merged_survivor_metadata(surviving.metadata, merged.id, now),
+        metadata:
+          merged.metadata
+          |> Maraithon.RelationshipIntelligence.Sources.retain_accounts(surviving.metadata || %{})
+          |> merged_survivor_metadata(merged.id, now),
         interaction_count: (surviving.interaction_count || 0) + (merged.interaction_count || 0),
         relationship_strength:
           max(surviving.relationship_strength || 0, merged.relationship_strength || 0),

@@ -4,6 +4,9 @@ defmodule Maraithon.RelationshipIntelligence.Sources do
   alias Maraithon.{AssistantIdentities, ConnectedAccounts, Repo}
   alias Maraithon.Crm.Observation
 
+  @account_history "relationship_source_accounts"
+  @max_accounts 64
+
   @doc "Omit known assistant-derived records from personal prompt context without deleting them."
   def personal_context(user_id, records) do
     assistants = MapSet.new(AssistantIdentities.assistant_account_ids(user_id))
@@ -12,15 +15,51 @@ defmodule Maraithon.RelationshipIntelligence.Sources do
       records
     else
       Enum.reject(records, fn record ->
-        record.metadata
-        |> source_inputs()
-        |> Enum.any?(fn
-          %{"connected_account_id" => id} -> MapSet.member?(assistants, id)
-          _ -> false
-        end)
+        {ids, overflow?} = account_history(record.metadata)
+        overflow? or Enum.any?(ids, &MapSet.member?(assistants, &1))
       end)
     end
   end
+
+  @doc "Keep known input accounts when a People update or merge retains older fields."
+  def retain_accounts(existing, incoming) when is_map(incoming) do
+    {old_ids, old_overflow?} = account_history(existing)
+    {new_ids, new_overflow?} = account_history(incoming)
+    ids = Enum.uniq(old_ids ++ new_ids) |> Enum.sort()
+    overflow? = old_overflow? or new_overflow? or length(ids) > @max_accounts
+
+    if ids == [] and not overflow? do
+      incoming
+    else
+      Map.put(incoming, @account_history, %{
+        "ids" => Enum.take(ids, @max_accounts),
+        "overflow" => overflow?
+      })
+    end
+  end
+
+  def retain_accounts(existing, nil), do: retain_accounts(existing, %{})
+  def retain_accounts(_existing, incoming), do: incoming
+
+  defp account_history(metadata) when is_map(metadata) do
+    history = Map.get(metadata, @account_history)
+    history = if is_map(history), do: history, else: %{}
+
+    inputs =
+      metadata
+      |> source_inputs()
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(&Map.get(&1, "connected_account_id"))
+
+    ids =
+      (List.wrap(history["ids"]) ++ inputs)
+      |> Enum.filter(&(is_integer(&1) and &1 > 0))
+      |> Enum.uniq()
+
+    {ids, history["overflow"] == true}
+  end
+
+  defp account_history(_), do: {[], false}
 
   defp source_inputs(%{"source_provenance" => %{"inputs" => inputs}}) when is_list(inputs),
     do: inputs

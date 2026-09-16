@@ -753,6 +753,25 @@ selectors remain on Google directly. No binding or new live conversation was
 created, so this proves ingestion and inventory presentation, not live use of
 the mirror for a scheduling proposal. No automated tests ran.
 
+## People source-account retention
+
+The isolation audit found that later People learning could replace input
+provenance while retaining older fields. People updates and merges now retain
+the union of known source account IDs. Personal prompt filtering checks that
+history against the user's current and previous assistant accounts. Updates
+reload the person under the existing user write fence, and merges take that
+same fence before reading either person. This prevents concurrent updates from
+silently dropping the account history.
+
+The history holds up to 64 account IDs. Overflow is persistent and excludes the
+record from personal prompts while the user has an assistant account, rather
+than treating a truncated history as complete. This stores account attribution,
+not message contents or proof of individual claims. Older unattributed learning
+stays unknown; no historical person or memory was removed or rewritten.
+
+`make build` passed with warnings treated as errors. Automated tests were not
+run under the current development policy. Deployment is pending.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.

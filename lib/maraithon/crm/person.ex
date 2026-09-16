@@ -63,6 +63,7 @@ defmodule Maraithon.Crm.Person do
     person
     |> cast(normalize_attrs(attrs), @required_fields ++ @optional_fields)
     |> merge_contact_details_change()
+    |> retain_source_accounts()
     |> maybe_put_generated_display_name()
     |> validate_required([:user_id, :display_name])
     |> validate_length(:first_name, max: 120)
@@ -215,6 +216,15 @@ defmodule Maraithon.Crm.Person do
   end
 
   defp merge_contact_details_change(changeset), do: changeset
+
+  defp retain_source_accounts(changeset) do
+    update_change(changeset, :metadata, fn incoming ->
+      Maraithon.RelationshipIntelligence.Sources.retain_accounts(
+        changeset.data.metadata,
+        incoming
+      )
+    end)
+  end
 
   defp merge_contact_details(existing, incoming) do
     Map.merge(existing, incoming, fn _key, existing_value, incoming_value ->
