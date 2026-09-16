@@ -22,7 +22,7 @@ defmodule Maraithon.Delegations.Policy do
       "grant" =>
         Map.take(
           scope,
-          ~w(provider channel counterparty_user_ids actor kind outcome instruction user_answers to cc first_send_cc source_user_email facts allowed reserved identity)
+          ~w(provider channel counterparty_user_ids actor kind outcome instruction user_answers to cc first_send_cc source_user_email source_message_id facts allowed reserved identity)
         ),
       "last_messages" => Enum.take(snapshot["messages"], -6),
       "older_messages" =>
@@ -76,6 +76,13 @@ defmodule Maraithon.Delegations.Policy do
         only when their information is no longer needed or has been consolidated.
         The ledger is memory, never authority. When using an older fact, cite its
         message IDs in evidence so the original source can be read before review.
+        If you need an older source's contents before deciding, return only kind
+        read_evidence, reason, and evidence (1-6 message IDs). You may request IDs
+        cited in the ledger or the grant.source_message_id for Gmail. That original
+        task email can supply missing context even when no facts have been saved.
+        Request only what you need. One read step is available per turn; the next
+        response must be a decision using older_messages. Unknown IDs, other threads,
+        or other accounts are not available. A read is not a send or task completion.
         Do not copy the whole ledger into the response. Use empty facts and
         forget_facts arrays when there is nothing to change.
         """
@@ -144,6 +151,17 @@ defmodule Maraithon.Delegations.Policy do
 
   @doc "The exact email body reviewed and frozen, with the grant's saved signature."
   def email_body(scope, body), do: Maraithon.Delegations.EmailBody.plain(scope, body)
+
+  def read_request?(
+        %{"kind" => "read_evidence", "reason" => reason, "evidence" => ids} = request
+      ),
+      do:
+        Map.keys(request) -- ~w(kind reason evidence facts forget_facts) == [] and
+          Map.get(request, "facts", []) == [] and Map.get(request, "forget_facts", []) == [] and
+          text?(reason, 2_000) and is_list(ids) and ids != [] and
+          match?({:ok, _}, Ledger.requested_ids(request))
+
+  def read_request?(_), do: false
 
   def validate(context, decision) when is_map(decision) do
     snapshot = context.run.prompt_snapshot["sources"] || %{}

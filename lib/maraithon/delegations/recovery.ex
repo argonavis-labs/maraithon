@@ -163,7 +163,8 @@ defmodule Maraithon.Delegations.Recovery do
     stage = checkpoint["delegation_stage"]
     entries = context.turn.data["model_entries"] || %{}
 
-    if stage in ~w(compose repair policy) and get_in(entries, [stage, "state"]) == "entered" do
+    if stage in ~w(compose researched repair policy) and
+         get_in(entries, [stage, "state"]) == "entered" do
       archived = "#{stage}:interrupted:#{context.turn.model_calls}"
       entries = entries |> Map.put(archived, entries[stage]) |> Map.delete(stage)
 

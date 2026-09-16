@@ -1,5 +1,5 @@
 defmodule Maraithon.Delegations.Toolbox do
-  @moduledoc "Read only the older evidence cited by a decision, within its bound conversation."
+  @moduledoc "Bounded reads of cited facts and the original task message under the frozen grant."
   alias Maraithon.PromptBudget
   alias Maraithon.Connectors.{Gmail, Slack}
   alias Maraithon.Delegations.{GmailSource, Ledger, SlackIdentity, SlackSource}
@@ -8,14 +8,23 @@ defmodule Maraithon.Delegations.Toolbox do
     with {:ok, requested} <- Ledger.requested_ids(decision) do
       recent = Enum.take(context.run.prompt_snapshot["sources"]["messages"] || [], -6)
       ids = requested -- Enum.map(recent, & &1["message_id"])
-      refs = Ledger.references(context)
+
+      refs =
+        (Ledger.references(context) ++
+           Enum.map(context.run.prompt_snapshot["recalled_sources"] || [], & &1["reference"]))
+        |> Enum.uniq()
+
       account = context.run.prompt_snapshot["sources"]["account_id"]
+      scope = context.grant.data["scope"]
 
       collision? =
         Enum.any?(refs, fn ref ->
           ref["message_id"] in requested and ref["account_id"] != account and
             Enum.any?(recent, &(&1["message_id"] == ref["message_id"]))
-        end)
+        end) or
+          (context.delegation.provider == "gmail" and scope["source_account_id"] != account and
+             scope["source_message_id"] in requested and
+             Enum.any?(recent, &(&1["message_id"] == scope["source_message_id"])))
 
       cond do
         collision? ->
@@ -26,10 +35,12 @@ defmodule Maraithon.Delegations.Toolbox do
 
         true ->
           Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, found} ->
-            case Enum.filter(refs, &(&1["message_id"] == id)) do
-              [ref] ->
+            case reference(context, id, refs) do
+              {:ok, ref, origin?} ->
                 with true <- allowed?(context, ref),
                      {:ok, message} <- cached_or_fetch(context, ref),
+                     ref =
+                       if(origin?, do: Map.put(ref, "digest", Ledger.digest(message)), else: ref),
                      true <- matches?(message, ref) do
                   found = found ++ [%{"reference" => ref, "message" => message}]
 
@@ -46,6 +57,33 @@ defmodule Maraithon.Delegations.Toolbox do
             end
           end)
       end
+    end
+  end
+
+  # A legacy conversation may not have learned any facts yet. Its original
+  # task message is the one additional source the grant identifies exactly.
+  defp reference(context, id, refs) do
+    scope = context.grant.data["scope"]
+
+    case Enum.filter(refs, &(&1["message_id"] == id)) do
+      [ref] ->
+        {:ok, ref, false}
+
+      [] ->
+        if context.delegation.provider == "gmail" and id == scope["source_message_id"] do
+          {:ok,
+           %{
+             "provider" => "gmail",
+             "account_id" => scope["source_account_id"],
+             "thread_id" => scope["source_thread_id"],
+             "message_id" => id
+           }, true}
+        else
+          {:error, :unverified_evidence}
+        end
+
+      _ ->
+        {:error, :unverified_evidence}
     end
   end
 

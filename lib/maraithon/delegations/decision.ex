@@ -114,13 +114,21 @@ defmodule Maraithon.Delegations.Decision do
     response = checkpoint["response"]
     decision = response["decision"] || checkpoint["delegation_decision"]
 
-    with {:ok, context} <- recall(job, context, decision),
-         {:ok, decision} <- Policy.validate(context, decision) do
-      case response["stage"] do
-        stage when stage in ~w(compose repair) ->
+    with :ok <- read_phase(response["stage"], decision),
+         {:ok, context} <- recall(job, context, decision),
+         {:ok, decision} <-
+           if(Policy.read_request?(decision),
+             do: {:ok, decision},
+             else: Policy.validate(context, decision)
+           ) do
+      case {response["stage"], decision["kind"]} do
+        {"compose", "read_evidence"} ->
+          call(job, context, checkpoint, state, "researched", nil)
+
+        {stage, _} when stage in ~w(compose researched repair) ->
           call(job, context, checkpoint, state, "policy", decision)
 
-        "policy" ->
+        {"policy", _} ->
           if Policy.approved?(decision, response["verdict"]),
             do: publish(job, decision, response["verdict"]),
             else: hold(job, :policy_review_required)
@@ -151,6 +159,15 @@ defmodule Maraithon.Delegations.Decision do
     end
   end
 
+  defp read_phase(stage, %{"kind" => "read_evidence"} = decision),
+    do:
+      if(stage == "compose" and Policy.read_request?(decision),
+        do: :ok,
+        else: {:error, :invalid_evidence_request}
+      )
+
+  defp read_phase(_, _), do: :ok
+
   defp recall(job, context, decision) do
     with {:ok, recalled} <- Toolbox.read(context, decision) do
       if recalled == (context.run.prompt_snapshot["recalled_sources"] || []) do
@@ -174,11 +191,7 @@ defmodule Maraithon.Delegations.Decision do
     with true <- LLM.provider_name() == "openrouter",
          true <- Gates.scope_enabled?(context.delegation, context.grant),
          remaining when remaining > 1_000 <- Continuation.remaining_ms(checkpoint),
-         messages =
-           if(stage == "repair",
-             do: Policy.repair_messages(context, decision),
-             else: Policy.messages(context, decision)
-           ),
+         messages = messages(context, stage, decision),
          true <- PromptBudget.encoded_bytes(messages) <= 64_000,
          {:ok, quote} <- Budget.quote(context.turn.model) do
       params = %{
@@ -236,6 +249,21 @@ defmodule Maraithon.Delegations.Decision do
         hold(job, :decision_deadline_reached)
     end
   end
+
+  defp messages(context, "repair", decision), do: Policy.repair_messages(context, decision)
+
+  defp messages(context, "researched", _) do
+    Policy.messages(context, nil) ++
+      [
+        %{
+          "role" => "user",
+          "content" =>
+            "The requested evidence is now in last_messages or older_messages. The read step is used. Return a decision, not another read_evidence request. Save supported task-relevant facts with their source IDs."
+        }
+      ]
+  end
+
+  defp messages(context, _, decision), do: Policy.messages(context, decision)
 
   defp call_error(job, reason)
        when reason in [
@@ -295,7 +323,8 @@ defmodule Maraithon.Delegations.Decision do
                 "status" => "final",
                 "stage" => stage,
                 "tool_calls" => [],
-                "decision" => if(stage in ~w(compose repair), do: value, else: decision),
+                "decision" =>
+                  if(stage in ~w(compose researched repair), do: value, else: decision),
                 "verdict" => if(stage == "policy", do: value)
               }
 
@@ -359,6 +388,14 @@ defmodule Maraithon.Delegations.Decision do
 
           :policy_review_required ->
             "I need your review before taking the next step in this conversation."
+
+          reason
+          when reason in [
+                 :invalid_evidence_request,
+                 :unverified_evidence,
+                 :recalled_evidence_changed
+               ] ->
+            "I couldn't verify the older message needed for this reply. Please add the relevant details to this task."
 
           _ ->
             "I couldn't verify a safe next step. Please review this conversation."
