@@ -32,6 +32,8 @@ defmodule Maraithon.Delegations.Policy do
       "offered_slots" => slot_ids(context.delegation.data["offered_slots"] || []),
       "available_slots" =>
         Map.update(context.run.prompt_snapshot["scheduling"] || %{}, "slots", [], &slot_ids/1),
+      "delegated_at" => Map.get(context.delegation, :inserted_at),
+      "now" => Map.get(context.run, :started_at) || DateTime.utc_now(),
       "source_revision" => context.turn.source_revision,
       "wake_reason" => context.turn.wake_reason
     }
@@ -60,8 +62,10 @@ defmodule Maraithon.Delegations.Policy do
         display_label exactly into the body. Do not write ISO timestamps or relabel UTC
         times as local. Respect the requested date range and duration in the source;
         resolve relative dates such as next week from that message's internal_date.
-        If no computed slots satisfy the request, ask the user instead of offering
-        a different date or duration. Book only an explicitly accepted offered slot.
+        Resolve the original user instruction relative to delegated_at and later
+        user answers relative to their answered_at. Do not move an old request's
+        date range forward simply because this conversation resumed later.
+        Book only an explicitly accepted offered slot.
         Return one JSON object with kind (send, propose_times, book, complete,
         needs_user, wait), reason, and evidence (message IDs). Include body for sends,
         question for needs_user, body AND slot_ids for propose_times, accepted_slot_id for booking.
@@ -83,6 +87,17 @@ defmodule Maraithon.Delegations.Policy do
         Request only what you need. One read step is available per turn; the next
         response must be a decision using older_messages. Unknown IDs, other threads,
         or other accounts are not available. A read is not a send or task completion.
+        For scheduling, if the available slots use the wrong duration or date window,
+        use that same read step with kind find_times, reason, evidence, duration_min
+        (5-240), start_at, and end_at (ISO8601 timestamps with UTC offsets, at most
+        31 days apart). Interpret the request in available_slots.coverage.timezone.
+        Calendar reads never override working hours, notice, buffers, or daily caps.
+        Cite the requesting message IDs; evidence may be empty for an instruction
+        supplied directly by the user. Cited older sources are read in this step too.
+        Only request a duration and window supported by the grant or conversation.
+        The server computes all offered times. Never construct your own slots.
+        If the read still returns no suitable slots, ask the user a concrete question
+        rather than changing the requested duration or date window.
         Do not copy the whole ledger into the response. Use empty facts and
         forget_facts arrays when there is nothing to change.
         """
@@ -128,6 +143,11 @@ defmodule Maraithon.Delegations.Policy do
         Reject a candidate written as the wrong actor, including an as_user message
         calling itself the user's assistant. Check the source's requested date range
         and duration, resolving relative dates from the requesting message's date.
+        Resolve the original user instruction from delegated_at and later user answers
+        from their answered_at. Missing or ambiguous dates need clarification.
+        available_slots.request is a model's calendar query, not user authority.
+        Verify the proposed duration and dates against the grant and source evidence;
+        matching that query alone does not establish permission.
         A promise, a draft, an ambiguous acceptance, or silence never proves completion.
         For times, verify every offered date and timezone exactly matches the computed
         slots. Booking needs explicit acceptance by the actual counterparty of one
@@ -152,14 +172,19 @@ defmodule Maraithon.Delegations.Policy do
   @doc "The exact email body reviewed and frozen, with the grant's saved signature."
   def email_body(scope, body), do: Maraithon.Delegations.EmailBody.plain(scope, body)
 
-  def read_request?(
-        %{"kind" => "read_evidence", "reason" => reason, "evidence" => ids} = request
-      ),
-      do:
-        Map.keys(request) -- ~w(kind reason evidence facts forget_facts) == [] and
-          Map.get(request, "facts", []) == [] and Map.get(request, "forget_facts", []) == [] and
-          text?(reason, 2_000) and is_list(ids) and ids != [] and
-          match?({:ok, _}, Ledger.requested_ids(request))
+  def read_request?(%{"kind" => kind, "reason" => reason, "evidence" => ids} = request)
+      when kind in ~w(read_evidence find_times) do
+    {fields, valid?} =
+      if kind == "find_times",
+        do:
+          {~w(duration_min start_at end_at),
+           match?({:ok, _}, Scheduling.request_options(request))},
+        else: {[], is_list(ids) and ids != []}
+
+    Map.keys(request) -- (fields ++ ~w(kind reason evidence facts forget_facts)) == [] and
+      Map.get(request, "facts", []) == [] and Map.get(request, "forget_facts", []) == [] and
+      text?(reason, 2_000) and valid? and match?({:ok, _}, Ledger.requested_ids(request))
+  end
 
   def read_request?(_), do: false
 

@@ -310,7 +310,14 @@ defmodule Maraithon.Delegations do
       do: Repo.rollback(:invalid_answer)
 
     answers =
-      (scope["user_answers"] || []) ++ [%{"question" => d.data["question"], "answer" => answer}]
+      (scope["user_answers"] || []) ++
+        [
+          %{
+            "question" => d.data["question"],
+            "answer" => answer,
+            "answered_at" => DateTime.to_iso8601(DatabaseClock.now!())
+          }
+        ]
 
     if length(answers) > 20, do: Repo.rollback(:answer_history_full)
     Map.put(scope, "user_answers", answers)

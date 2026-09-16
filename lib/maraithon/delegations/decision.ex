@@ -99,16 +99,27 @@ defmodule Maraithon.Delegations.Decision do
     end
   end
 
-  defp scheduling(%{delegation: %{kind: "scheduling"} = d, grant: grant}) do
-    now = DateTime.utc_now()
-
-    Scheduling.propose_slots(d.user_id, %{
-      window: {now, DateTime.add(now, 14, :day)},
-      default_account_id: grant.data["scope"]["source_account_id"]
-    })
-  end
+  defp scheduling(%{delegation: %{kind: "scheduling"} = d} = context),
+    do: find_times(context, d.data["offered_scheduling_request"])
 
   defp scheduling(_), do: {:ok, %{}}
+
+  defp find_times(context, request) do
+    now = DateTime.utc_now()
+
+    with {:ok, opts} <-
+           if(is_nil(request),
+             do: {:ok, %{window: {now, DateTime.add(now, 14, :day)}}},
+             else: Scheduling.request_options(request)
+           ),
+         {:ok, scheduling} <-
+           Scheduling.propose_slots(
+             context.delegation.user_id,
+             Map.put(opts, :default_account_id, context.grant.data["scope"]["source_account_id"])
+           ) do
+      {:ok, Map.put(scheduling, "request", request)}
+    end
+  end
 
   defp continue(job, context, checkpoint, state) do
     response = checkpoint["response"]
@@ -122,7 +133,7 @@ defmodule Maraithon.Delegations.Decision do
              else: Policy.validate(context, decision)
            ) do
       case {response["stage"], decision["kind"]} do
-        {"compose", "read_evidence"} ->
+        {"compose", kind} when kind in ~w(read_evidence find_times) ->
           call(job, context, checkpoint, state, "researched", nil)
 
         {stage, _} when stage in ~w(compose researched repair) ->
@@ -159,26 +170,35 @@ defmodule Maraithon.Delegations.Decision do
     end
   end
 
-  defp read_phase(stage, %{"kind" => "read_evidence"} = decision),
-    do:
-      if(stage == "compose" and Policy.read_request?(decision),
-        do: :ok,
-        else: {:error, :invalid_evidence_request}
-      )
+  defp read_phase(stage, %{"kind" => kind} = decision)
+       when kind in ~w(read_evidence find_times) do
+    if stage == "compose" and Policy.read_request?(decision) do
+      :ok
+    else
+      {:error,
+       if(kind == "find_times", do: :invalid_scheduling_request, else: :invalid_evidence_request)}
+    end
+  end
 
   defp read_phase(_, _), do: :ok
 
   defp recall(job, context, decision) do
-    with {:ok, recalled} <- Toolbox.read(context, decision) do
-      if recalled == (context.run.prompt_snapshot["recalled_sources"] || []) do
+    with {:ok, recalled} <- Toolbox.read(context, decision),
+         {:ok, scheduling} <- requested_scheduling(context, decision) do
+      if recalled == (context.run.prompt_snapshot["recalled_sources"] || []) and
+           scheduling == context.run.prompt_snapshot["scheduling"] do
         {:ok, context}
       else
         Jobs.transaction(job, fn current ->
+          snapshot =
+            Map.merge(current.run.prompt_snapshot, %{
+              "recalled_sources" => recalled,
+              "scheduling" => scheduling
+            })
+
           run =
             current.run
-            |> Run.changeset(%{
-              prompt_snapshot: Map.put(current.run.prompt_snapshot, "recalled_sources", recalled)
-            })
+            |> Run.changeset(%{prompt_snapshot: snapshot})
             |> Repo.update!()
 
           %{current | run: run}
@@ -186,6 +206,24 @@ defmodule Maraithon.Delegations.Decision do
       end
     end
   end
+
+  defp requested_scheduling(context, %{"kind" => "find_times"} = decision) do
+    request = Map.take(decision, ~w(duration_min start_at end_at))
+    saved = context.run.prompt_snapshot["scheduling"] || %{}
+
+    cond do
+      context.delegation.kind != "scheduling" ->
+        {:error, :scheduling_not_granted}
+
+      saved["request"] == request ->
+        {:ok, saved}
+
+      true ->
+        find_times(context, request)
+    end
+  end
+
+  defp requested_scheduling(context, _), do: {:ok, context.run.prompt_snapshot["scheduling"]}
 
   defp call(job, context, checkpoint, state, stage, decision) do
     with true <- LLM.provider_name() == "openrouter",
@@ -258,7 +296,7 @@ defmodule Maraithon.Delegations.Decision do
         %{
           "role" => "user",
           "content" =>
-            "The requested evidence is now in last_messages or older_messages. The read step is used. Return a decision, not another read_evidence request. Save supported task-relevant facts with their source IDs."
+            "The requested evidence is in last_messages or older_messages, and calendar results are in available_slots. The read step is used. Return a decision, not another read_evidence or find_times request. Save supported task-relevant facts with their source IDs."
         }
       ]
   end
@@ -388,6 +426,9 @@ defmodule Maraithon.Delegations.Decision do
 
           :policy_review_required ->
             "I need your review before taking the next step in this conversation."
+
+          :invalid_scheduling_request ->
+            "I couldn't resolve the requested meeting length and dates. Please clarify those details."
 
           reason
           when reason in [

@@ -9,10 +9,13 @@ defmodule Maraithon.Delegations.Scheduling do
   def propose_slots(user_id, %{window: {first, last}} = request) do
     prefs = Preferences.get(user_id)
     now = DateTime.utc_now()
+    duration = Map.get(request, :duration_min, prefs["default_duration_min"])
 
     with :ok <- valid_window(first, last),
+         true <- is_integer(duration) and duration in 5..240,
          {:ok, ids} <- account_ids(user_id, prefs, request[:default_account_id]),
-         {:ok, events} <- read_accounts(user_id, ids, first, last),
+         {read_first, read_last} = calendar_window(first, last, prefs),
+         {:ok, events} <- read_accounts(user_id, ids, read_first, read_last),
          {:ok, slots} <- slots(events, request, prefs, now) do
       {:ok,
        %{
@@ -20,12 +23,45 @@ defmodule Maraithon.Delegations.Scheduling do
          "coverage" => %{
            "account_ids" => ids,
            "read_at" => DateTime.to_iso8601(now),
+           "timezone" => prefs["timezone"],
+           "duration_min" => duration,
            "from" => DateTime.to_iso8601(first),
            "until" => DateTime.to_iso8601(last),
+           "read_from" => DateTime.to_iso8601(read_first),
+           "read_until" => DateTime.to_iso8601(read_last),
            "complete" => true
          }
        }}
+    else
+      false -> {:error, :invalid_meeting_duration}
+      error -> error
     end
+  end
+
+  @doc "Validate a model's bounded calendar read before calling any provider."
+  def request_options(%{"duration_min" => duration, "start_at" => first, "end_at" => last})
+      when is_integer(duration) and duration in 5..240 and is_binary(first) and
+             is_binary(last) and byte_size(first) <= 40 and byte_size(last) <= 40 do
+    with {:ok, first, _} <- DateTime.from_iso8601(first),
+         {:ok, last, _} <- DateTime.from_iso8601(last),
+         :ok <- valid_window(first, last) do
+      {:ok, %{duration_min: duration, window: {first, last}}}
+    else
+      _ -> {:error, :invalid_scheduling_request}
+    end
+  end
+
+  def request_options(_), do: {:error, :invalid_scheduling_request}
+
+  # Even a narrow afternoon request needs the whole day's meeting count and
+  # meetings just outside its boundaries whose buffers could block a slot.
+  defp calendar_window(first, last, prefs) do
+    first_date = Preferences.local_time(first, prefs) |> DateTime.to_date()
+    last_date = Preferences.local_time(last, prefs) |> DateTime.to_date() |> Date.add(1)
+    buffer = prefs["buffer_min"] * 60
+
+    {Preferences.from_local(first_date, ~T[00:00:00], prefs) |> DateTime.add(-buffer),
+     Preferences.from_local(last_date, ~T[00:00:00], prefs) |> DateTime.add(buffer)}
   end
 
   @doc "Pure slot calculation over a complete read. Opaque all-day events block their local dates."
