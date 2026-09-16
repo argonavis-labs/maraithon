@@ -1,0 +1,54 @@
+{
+  "scenario": "requested_scheduling",
+  "actor": "as_assistant",
+  "commit": "ef2ebb35821a95d815d86b1d3138e42ed6cd0d02",
+  "deployment": {
+    "workflow_id": 35122185354,
+    "conclusion": "success",
+    "revision": "maraithon-00425-j96"
+  },
+  "launch": {
+    "workflow_id": 35122703977,
+    "conclusion": "failure",
+    "report": {
+      "accounts": [
+        {
+          "email": "kent@runner.now",
+          "failure": "rate_limited",
+          "status": "access_failed"
+        },
+        {
+          "account_id": 1,
+          "email": "kent.fenwick@gmail.com",
+          "status": "ready"
+        }
+      ],
+      "accounts_ready": false,
+      "actor": "as_assistant",
+      "assistant": {
+        "account_id": 9,
+        "disclose_ai": true,
+        "display_name": "October",
+        "email": "october@ewakened.com",
+        "isolated_from_personal_sources": true,
+        "status": "ready"
+      },
+      "budget_ready": true,
+      "development_spending": true,
+      "events_created": 0,
+      "execution_ready": true,
+      "expected_model": "meta/muse-spark-1.3-contributor",
+      "live_eval_passed": false,
+      "messages_sent": 0,
+      "model": "meta/muse-spark-1.3-contributor",
+      "model_calls": 0,
+      "model_ready": true,
+      "phase": "start_refused",
+      "reason": "eval_preflight_required"
+    }
+  },
+  "limits": [
+    "Preflight refused this launch. No new eval job or conversation was created.",
+    "The scheduling prompt correction has not yet completed a fresh live evaluation."
+  ]
+}
