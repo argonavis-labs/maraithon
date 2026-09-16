@@ -75,19 +75,21 @@ public struct AssistantSettingsView: View {
     }
 
     @ViewBuilder private func preferencesForm(_ settings: AssistantSettings.Settings) -> some View {
-        Section("Scheduling and follow-ups") {
-            if let accounts = settings.calendarAccounts {
+        if let accounts = settings.calendarAccounts {
+            Section("Calendars") {
                 Picker("Book meetings on", selection: bookingAccount) {
                     Text("Task's Google account").tag(0)
                     ForEach(accounts) { Text($0.label).tag($0.id) }
                 }
                 Text("Also check for conflicts").font(.headline)
-                ForEach(accounts) { account in
+                ForEach(accounts, id: \.selectionID) { account in
                     Toggle(account.label, isOn: preferenceSelection("calendar_account_ids", account.id))
                 }
                 Text("Checks each account's primary calendar, including the booking account.")
                     .font(.footnote).foregroundStyle(.secondary)
-            }
+            }.disabled(busy)
+        }
+        Section("Scheduling and follow-ups") {
             if let zones = settings.timezones {
                 Picker("Timezone", selection: preferenceText("timezone")) {
                     ForEach(zones, id: \.value) { Text($0.label).tag($0.value) }

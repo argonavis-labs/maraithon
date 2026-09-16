@@ -21,7 +21,10 @@ public enum AssistantSettings {
             case calendarAccounts = "calendar_accounts"
         }
     }
-    struct Account: Decodable, Identifiable, Sendable { let id: Int; let label: String }
+    struct Account: Decodable, Identifiable, Sendable {
+        let id: Int; let label: String
+        var selectionID: String { "calendar-\(id)" }
+    }
     struct Address: Decodable, Sendable { let email: String; let primary: Bool }
     struct Timezone: Decodable, Sendable { let value: String; let label: String }
     struct NumericPreference: Decodable, Sendable {
