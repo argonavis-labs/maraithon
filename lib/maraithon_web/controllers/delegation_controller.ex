@@ -43,6 +43,21 @@ defmodule MaraithonWeb.DelegationController do
   def show(conn, %{"id" => id}),
     do: respond(conn, {:ok, Delegations.get(conn.assigns.current_user.id, id)})
 
+  def history(conn, %{"id" => id} = params) do
+    case Delegations.History.fetch(conn.assigns.current_user.id, id, params["before"]) do
+      {:ok, history} ->
+        json(conn, %{history: history})
+
+      {:error, :not_found} ->
+        respond(conn, {:ok, nil})
+
+      {:error, :invalid_history_cursor} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "Refresh the conversation history, then try again."})
+    end
+  end
+
   def control(conn, %{"id" => id, "action" => action} = params) do
     user_id = conn.assigns.current_user.id
 

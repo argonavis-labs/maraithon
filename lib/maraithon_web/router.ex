@@ -208,6 +208,7 @@ defmodule MaraithonWeb.Router do
     post "/todos/:id/delegation/preview", DelegationController, :preview
     post "/todos/:id/delegation", DelegationController, :create
     get "/delegations/:id", DelegationController, :show
+    get "/delegations/:id/history", DelegationController, :history
     post "/delegations/:id/:action", DelegationController, :control
     post "/todos/:id/reply", MobileTodoController, :reply
     patch "/todos/:id", MobileTodoController, :update
@@ -330,6 +331,7 @@ defmodule MaraithonWeb.Router do
     post "/todos/:id/delegation/preview", DelegationController, :preview
     post "/todos/:id/delegation", DelegationController, :create
     get "/delegations/:id", DelegationController, :show
+    get "/delegations/:id/history", DelegationController, :history
     post "/delegations/:id/:action", DelegationController, :control
     get "/chat/threads/:id", MobileChatController, :show
     post "/chat/threads/:thread_id/messages", MobileChatController, :create_message

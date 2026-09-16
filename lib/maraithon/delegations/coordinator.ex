@@ -181,7 +181,35 @@ defmodule Maraithon.Delegations.Coordinator do
           Map.take(next, Delegation.payload_binding_spec().bound_fields ++ [:data])
           |> Map.put(:revision, d.revision + 1)
 
-        d |> Delegation.changeset(changes) |> Repo.update!()
+        saved = d |> Delegation.changeset(changes) |> Repo.update!()
+        record_transition(d, saved, grant, event, now)
+        saved
+    end
+  end
+
+  # Record applied outcomes in the same fenced transaction. A model's decision
+  # alone is not evidence that workflow changes succeeded. These rows never wake work.
+  defp record_transition(before, saved, grant, event, now) do
+    if before.state != saved.state do
+      Outbox.append!(
+        saved,
+        "state_changed",
+        "state:#{saved.revision}",
+        %{
+          "state" => saved.state,
+          "previous_state" => before.state,
+          "revision" => saved.revision,
+          "grant_version" => grant.version,
+          "turn_id" => event.data["turn_id"],
+          "action_id" => event.data["action_id"],
+          "question" => saved.data["question"],
+          "outcome" =>
+            if(saved.state == "completed", do: get_in(saved.data, ["ledger", "latest_outcome"]))
+        },
+        %{occurred_at: now}
+      )
+      |> Event.changeset(%{wake_state: "consumed"})
+      |> Repo.update!()
     end
   end
 

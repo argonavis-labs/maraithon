@@ -191,6 +191,8 @@ defmodule MaraithonWeb.DelegationPanel do
           <.field label={@delegation["question"]} for="delegation-answer"><.c_textarea id="delegation-answer" name="answer" value="" required maxlength="2000" /></.field>
           <.button type="submit" disabled={@busy?}>Answer</.button>
         </.form>
+        <.live_component module={MaraithonWeb.DelegationHistory} id={"delegation-history-#{@delegation["id"]}"}
+          user_id={@todo.user_id} delegation_id={@delegation["id"]} />
       </div>
       <.button :if={@available? && !@open? && (is_nil(@delegation) || @delegation["state"] in ~w(completed stopped expired))}
         variant={if(@proposal, do: "solid", else: "outline")} phx-click="open" phx-target={@myself}><%= if @proposal, do: @proposal["label"], else: "Delegate" %></.button>
