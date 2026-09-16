@@ -77,12 +77,23 @@ defmodule Maraithon.Delegations.EvaluationProposal do
       step = Maraithon.Agents.AgentRunStep.hydrate_payloads!(step)
       params = step.request_payload
 
-      request = %{
-        valid: match?({:ok, _}, Maraithon.LLM.RequestBudget.validate(params)),
-        bytes: byte_size(Jason.encode!(params)),
-        messages: length(params["messages"] || []),
-        tools: length(params["tools"] || [])
-      }
+      request =
+        cond do
+          is_map(params["request_rejection"]) ->
+            %{available: false, rejection: params["request_rejection"]}
+
+          params == %{} ->
+            %{available: false}
+
+          true ->
+            %{
+              available: true,
+              valid: match?({:ok, _}, Maraithon.LLM.RequestBudget.validate(params)),
+              bytes: byte_size(Jason.encode!(params)),
+              messages: length(params["messages"] || []),
+              tools: length(params["tools"] || [])
+            }
+        end
 
       Map.put(summary, :request, request)
     else

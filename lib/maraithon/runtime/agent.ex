@@ -1977,6 +1977,10 @@ defmodule Maraithon.Runtime.Agent do
            {:ok, persistable} <- Effects.prepare_params(tool_name, bounded) do
         {persistable, nil}
       else
+        {:error, {:invalid_request, %{} = details} = reason} ->
+          {%{"request_rejection" => Map.take(details, [:reason, :field, :message_content_bytes])},
+           reason}
+
         {:error, reason} -> {%{}, reason}
       end
 

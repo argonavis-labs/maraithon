@@ -46,28 +46,50 @@ defmodule Maraithon.LLM.RequestBudget do
       |> normalize_reasoning()
       |> normalize_stream()
 
-    with :ok <- validate_messages(bounded["messages"]),
-         :ok <- validate_tools(bounded["tools"]),
-         :ok <- validate_model(bounded["model"]),
-         :ok <- validate_session_id(bounded["session_id"]),
-         :ok <- validate_token_count(bounded["max_tokens"]),
-         :ok <- validate_token_count(bounded["max_output_tokens"]),
-         :ok <- validate_temperature(bounded["temperature"]),
-         :ok <- validate_timeout(bounded["timeout_ms"]),
-         :ok <- validate_reasoning_effort(bounded["reasoning_effort"]),
-         :ok <- validate_reasoning(bounded["reasoning"]),
-         :ok <- validate_stream(bounded["stream"]),
-         true <-
-           BoundedJSON.valid?(bounded, @max_request_bytes, max_binary_bytes: @max_request_bytes),
+    with {:messages, :ok} <- {:messages, validate_messages(bounded["messages"])},
+         {:tools, :ok} <- {:tools, validate_tools(bounded["tools"])},
+         {:model, :ok} <- {:model, validate_model(bounded["model"])},
+         {:session_id, :ok} <- {:session_id, validate_session_id(bounded["session_id"])},
+         {:max_tokens, :ok} <- {:max_tokens, validate_token_count(bounded["max_tokens"])},
+         {:max_output_tokens, :ok} <-
+           {:max_output_tokens, validate_token_count(bounded["max_output_tokens"])},
+         {:temperature, :ok} <- {:temperature, validate_temperature(bounded["temperature"])},
+         {:timeout_ms, :ok} <- {:timeout_ms, validate_timeout(bounded["timeout_ms"])},
+         {:reasoning_effort, :ok} <-
+           {:reasoning_effort, validate_reasoning_effort(bounded["reasoning_effort"])},
+         {:reasoning, :ok} <- {:reasoning, validate_reasoning(bounded["reasoning"])},
+         {:stream, :ok} <- {:stream, validate_stream(bounded["stream"])},
+         {:json_budget, true} <-
+           {:json_budget,
+            BoundedJSON.valid?(bounded, @max_request_bytes, max_binary_bytes: @max_request_bytes)},
          {:ok, encoded} <- Jason.encode(bounded),
-         true <- byte_size(encoded) <= @max_request_bytes do
+         {:encoded_bytes, true} <- {:encoded_bytes, byte_size(encoded) <= @max_request_bytes} do
       {:ok, maybe_put_reasoning_callback(bounded, params)}
     else
-      _invalid -> {:error, {:invalid_request, %{reason: "request_exceeds_budget"}}}
+      {field, _invalid} ->
+        {:error,
+         {:invalid_request,
+          %{
+            reason: "request_exceeds_budget",
+            field: Atom.to_string(field),
+            message_content_bytes: message_content_bytes(bounded["messages"])
+          }}}
     end
   end
 
   def validate(_params), do: {:error, {:invalid_request, %{reason: "invalid_request_shape"}}}
+
+  defp message_content_bytes(messages) when is_list(messages) do
+    messages
+    |> Enum.take(@max_messages + 1)
+    |> Enum.reduce(0, fn
+      %{"content" => content}, bytes when is_binary(content) -> bytes + byte_size(content)
+      %{content: content}, bytes when is_binary(content) -> bytes + byte_size(content)
+      _, bytes -> bytes
+    end)
+  end
+
+  defp message_content_bytes(_), do: 0
 
   @doc """
   Apply optional request context only when both the base and expanded requests
