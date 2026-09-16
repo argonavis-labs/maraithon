@@ -12,6 +12,8 @@ An unfinished scan may continue from a checkpoint made within 30 minutes. A fini
 
 `make build` passed with warnings treated as errors. Tests were not run under the manual-first policy. Live Slack evaluation remains deferred and autonomous Slack sends remain disabled. This change has not had a live cross-turn or worker-loss check. General incremental reuse after new webhook arrivals remains unfinished; this addresses work discarded when a scan supersedes its own turn. Slack's [thread reader](https://docs.slack.dev/reference/methods/conversations.replies/) supports the existing cursor and timestamp continuation used here.
 
+Commit `5a928945` deployed through successful workflow `35088309189`. Revision `maraithon-00410-n6j` serves all traffic. No native changes, migration, new model calls or new coordinator process were needed.
+
 ## Redacted delegation trace
 
 The existing encrypted event ledger now records model entry, billed cost, turn admission, coordinator acceptance or rejection, and executor entry. Grant controls, decisions, policy holds, delivery receipts, uncertain delivery, reconciliation and applied state changes use their existing events. Observation records are consumed on insertion, so they do not wake another job or appear in the user's conversation history. No new worker, table, provider request or model call is needed.
@@ -305,6 +307,8 @@ The corrected read-only production preflight, `maraithon-todo-validation-4wvrt`,
 Commit `358d5360` deployed successfully through workflow `35036148839`. Revision `maraithon-00378-lqv` is ready and serves all traffic. The controlled Gmail gate, disabled Slack sends, Muse model, and development spending remain configured.
 
 Launcher `maraithon-todo-validation-dk94d` completed and committed one October information eval: job `04a64f25-c24a-42ee-a819-a94cbe07e917`, scheduled for September 16 at 08:00 America/Toronto (`12:00 UTC`). Observe this job when checking the live learned facts and recalled source; do not launch a duplicate. The conversation result and subsequent read-only recall probe are pending.
+
+Read-only status workflow `35088725203` succeeded on September 16 before the scheduled start. It confirmed that same job is still `pending` at `12:00 UTC`, with no result yet. It did not start another conversation.
 
 ## Previously verified
 
