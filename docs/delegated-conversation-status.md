@@ -1,5 +1,7 @@
 # Delegated conversation implementation status
 
+For the current short checklist, see [what is done and what remains](delegated-conversation-todo.md).
+
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Assistant selection belongs to each user
