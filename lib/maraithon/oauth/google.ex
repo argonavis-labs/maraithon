@@ -175,6 +175,22 @@ defmodule Maraithon.OAuth.Google do
         extra_headers \\ [],
         request_opts \\ []
       ) do
+    if gmail_url?(url) and
+         not match?({"gmail", key} when is_binary(key) and key != "", request_opts[:admission]) do
+      {:error, :gmail_account_required}
+    else
+      authenticated_request(method, url, access_token, body, extra_headers, request_opts)
+    end
+  end
+
+  defp gmail_url?(url) do
+    uri = URI.parse(url)
+
+    uri.host == "gmail.googleapis.com" or
+      (uri.host == "www.googleapis.com" and String.starts_with?(uri.path || "", "/gmail/"))
+  end
+
+  defp authenticated_request(method, url, access_token, body, extra_headers, request_opts) do
     headers = [{"Authorization", "Bearer #{access_token}"} | extra_headers]
     request_opts = Keyword.put(request_opts, :google_errors?, true)
 

@@ -10,6 +10,15 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
   alias Maraithon.Tools.GmailApiHelpers
   alias Maraithon.Tools.GoogleCalendarHelpers
 
+  def observe_admission(_event, _measurements, metadata, {parent, user, provider}) do
+    if metadata.query == "SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0))" do
+      send(
+        parent,
+        {:isolated_before_http, provider in AssistantIdentities.assistant_providers(user)}
+      )
+    end
+  end
+
   setup do
     user = "isolation-#{Ecto.UUID.generate()}@example.invalid"
     {:ok, _} = Accounts.get_or_create_user_by_email(user)
@@ -24,9 +33,21 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
     on_exit(fn -> Application.put_env(:maraithon, :gmail, original) end)
     provider = "google:assistant@example.invalid"
 
-    Bypass.expect_once(bypass, "GET", "/users/me/settings/sendAs", fn conn ->
-      assert provider in AssistantIdentities.assistant_providers(user)
+    # The HTTP worker owns the sandbox connection during admission. Inspect
+    # isolation in that worker before HTTP, not in the separate mock server.
+    handler = "isolation-before-http:#{user}"
 
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:maraithon, :repo, :query],
+        &__MODULE__.observe_admission/4,
+        {self(), user, provider}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    Bypass.expect_once(bypass, "GET", "/users/me/settings/sendAs", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
@@ -58,6 +79,7 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
                "assistant"
              )
 
+    assert_receive {:isolated_before_http, true}
     identity = AssistantIdentities.get(user)
     assert identity.data["display_name"] == "October"
     assert identity.gmail_connected_account_id == ConnectedAccounts.get(user, provider).id
@@ -311,8 +333,8 @@ defmodule Maraithon.Delegations.AssistantAccountIsolationTest do
       |> Plug.Conn.resp(200, ~s({"messages":[]}))
     end)
 
-    {:ok, token} = Maraithon.Connectors.GoogleAccount.access_token(user, assistant.id)
-    assert {:ok, []} = Gmail.fetch_messages(token, access_token: true)
+    {:ok, access} = Maraithon.Connectors.GmailAccess.for_account(user, assistant.id)
+    assert {:ok, []} = Gmail.fetch_messages(access)
 
     assert {:error, :assistant_account_excluded} =
              Gmail.fetch_messages(user, provider: assistant.provider)

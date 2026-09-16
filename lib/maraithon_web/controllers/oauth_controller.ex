@@ -821,7 +821,7 @@ defmodule MaraithonWeb.OAuthController do
             end
 
           "gmail" ->
-            case Gmail.setup_watch(user_id, access_token) do
+            case Gmail.setup_watch(user_id, Maraithon.Connectors.GmailAccess.bind(account, access_token)) do
               {:ok, watch} ->
                 persist_gmail_watch_cursor(account, watch)
                 %{status: "active", history_id: watch.history_id}

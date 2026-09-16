@@ -38,8 +38,7 @@ defmodule Maraithon.Connectors.Gmail do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Crm.Ingest
   alias Maraithon.Crm.Observation
-  alias Maraithon.OAuth
-  alias Maraithon.OAuth.Google
+  alias Maraithon.Connectors.GmailAccess
   alias Maraithon.Connectors.Connector
   alias Maraithon.Runtime.BackgroundJobs
 
@@ -47,8 +46,6 @@ defmodule Maraithon.Connectors.Gmail do
 
   @default_api_base "https://gmail.googleapis.com/gmail/v1"
   @history_cursor_kind "gmail_history_id"
-  @default_message_fetch_concurrency 12
-  @max_message_fetch_concurrency 24
   @default_message_fetch_timeout_ms 15_000
   @default_failed_precondition_retry_delay_ms 1_000
   @max_failed_precondition_retry_delay_ms 5_000
@@ -63,7 +60,6 @@ defmodule Maraithon.Connectors.Gmail do
   # processed (in chunks of this size) — the old behavior of truncating to
   # the first 20 while the caller still advanced the history cursor
   # permanently dropped everything past the truncation point.
-  @history_message_fetch_chunk 100
   @messages_page_size 500
   @max_message_list_pages 200
 
@@ -110,11 +106,11 @@ defmodule Maraithon.Connectors.Gmail do
   Should be called when a user disconnects their email.
   """
   def stop_watch(user_id) do
-    case OAuth.get_valid_access_token(user_id, "google") do
+    case GmailAccess.for_user(user_id) do
       {:ok, token} ->
         url = "#{api_base_url()}/users/me/stop"
 
-        case Google.api_request(:post, url, token, %{}) do
+        case GmailAccess.request(:post, url, token, %{}) do
           {:ok, _} -> :ok
           # Gmail returns 404 if not watching - that's fine
           {:error, {:http_status, 404, _}} -> :ok
@@ -235,7 +231,7 @@ defmodule Maraithon.Connectors.Gmail do
   Returns `{:ok, messages}` or `{:error, reason}`.
   """
   def sync_mail_changes(user_id, history_id) do
-    case Maraithon.Connectors.GoogleAccount.user_access_token(user_id) do
+    case GmailAccess.for_user(user_id) do
       {:ok, token} ->
         case fetch_history(token, history_id) do
           {:ok, messages, _latest_history_id} -> {:ok, messages}
@@ -264,7 +260,10 @@ defmodule Maraithon.Connectors.Gmail do
   def sync_history(user_id, account, opts \\ []) do
     provider = Keyword.get(opts, :provider, account.provider)
 
-    case OAuth.get_valid_access_token(user_id, provider) do
+    case if(provider == account.provider,
+           do: GmailAccess.for_account(user_id, account.id),
+           else: {:error, :invalid_google_account}
+         ) do
       {:ok, token} ->
         cursor = SourceCursors.get(account.id, @history_cursor_kind)
 
@@ -339,7 +338,7 @@ defmodule Maraithon.Connectors.Gmail do
   def current_history_id(access_token) do
     url = "#{api_base_url()}/users/me/profile"
 
-    case Google.api_request(:get, url, access_token) do
+    case GmailAccess.request(:get, url, access_token) do
       {:ok, %{"historyId" => history_id}} when not is_nil(history_id) ->
         {:ok, history_id}
 
@@ -365,12 +364,12 @@ defmodule Maraithon.Connectors.Gmail do
   Lists Gmail messages and hydrates each listed id.
 
   The default body mode remains `:full`. Callers with a bounded acquisition
-  phase may request `message_format: :metadata`, tune concurrency/timeouts, and
+  phase may request `message_format: :metadata`, tune timeouts, and
   set `include_fetch_metadata: true` to receive completeness metadata as a
-  third tuple element.
+  third tuple element. Hydration is sequential within each mailbox.
   """
   def fetch_messages(user_id_or_token, opts \\ [])
-      when is_binary(user_id_or_token) and is_list(opts) do
+      when is_list(opts) do
     max_results = Keyword.get(opts, :max_results, 10)
     label_ids = Keyword.get(opts, :label_ids, [])
     query = Keyword.get(opts, :query)
@@ -388,31 +387,33 @@ defmodule Maraithon.Connectors.Gmail do
                max_total_results
              ) do
           {:ok, selected, list_metadata} ->
-            {detailed, detail_failure_count} = fetch_message_details(selected, token, opts)
-            body_fallback_count = Enum.count(detailed, &metadata_body_fallback?/1)
+            with {:ok, detailed, detail_failure_count} <-
+                   fetch_message_details(selected, token, opts) do
+              body_fallback_count = Enum.count(detailed, &metadata_body_fallback?/1)
 
-            fetch_metadata = %{
-              listed_count: length(selected),
-              requested_count: length(selected),
-              detail_success_count: length(detailed),
-              detail_failure_count: detail_failure_count,
-              body_fallback_count: body_fallback_count,
-              page_count: list_metadata.page_count,
-              truncated?: list_metadata.truncated?
-            }
+              fetch_metadata = %{
+                listed_count: length(selected),
+                requested_count: length(selected),
+                detail_success_count: length(detailed),
+                detail_failure_count: detail_failure_count,
+                body_fallback_count: body_fallback_count,
+                page_count: list_metadata.page_count,
+                truncated?: list_metadata.truncated?
+              }
 
-            fetch_metadata =
-              Map.put(
-                fetch_metadata,
-                :complete?,
-                detail_failure_count == 0 and body_fallback_count == 0 and
-                  not fetch_metadata.truncated?
-              )
+              fetch_metadata =
+                Map.put(
+                  fetch_metadata,
+                  :complete?,
+                  detail_failure_count == 0 and body_fallback_count == 0 and
+                    not fetch_metadata.truncated?
+                )
 
-            if Keyword.get(opts, :include_fetch_metadata, false) do
-              {:ok, detailed, fetch_metadata}
-            else
-              {:ok, detailed}
+              if Keyword.get(opts, :include_fetch_metadata, false) do
+                {:ok, detailed, fetch_metadata}
+              else
+                {:ok, detailed}
+              end
             end
 
           {:error, reason} ->
@@ -523,7 +524,7 @@ defmodule Maraithon.Connectors.Gmail do
       |> Enum.map(&URI.encode_query([&1]))
       |> Enum.join("&")
 
-    Google.api_request(:get, "#{api_base_url()}/users/me/messages?#{params}", token)
+    GmailAccess.request(:get, "#{api_base_url()}/users/me/messages?#{params}", token)
   end
 
   defp normalize_message_refs(messages) when is_list(messages),
@@ -534,30 +535,34 @@ defmodule Maraithon.Connectors.Gmail do
   defp fetch_message_details(messages, token, opts) do
     format = Keyword.get(opts, :message_format, :full)
 
-    max_concurrency =
-      opts
-      |> Keyword.get(:message_fetch_concurrency, @default_message_fetch_concurrency)
-      |> normalize_message_fetch_concurrency()
-
     messages
     |> Task.async_stream(
       fn message -> safe_fetch_message_detail(token, message, format, opts) end,
-      max_concurrency: max_concurrency,
+      max_concurrency: 1,
       ordered: true,
       timeout: message_fetch_timeout_ms(opts),
       on_timeout: :kill_task
     )
-    |> Enum.reduce({[], 0}, fn
-      {:ok, {:ok, message}}, {detailed, failures} ->
-        {[message | detailed], failures}
+    |> Enum.reduce_while({:ok, [], 0}, fn
+      {:ok, {:ok, message}}, {:ok, detailed, failures} ->
+        {:cont, {:ok, [message | detailed], failures}}
 
-      {:ok, {:error, :not_found}}, {detailed, failures} ->
-        {detailed, failures}
+      {:ok, {:error, :not_found}}, acc ->
+        {:cont, acc}
 
-      _error, {detailed, failures} ->
-        {detailed, failures + 1}
+      {:ok, {:error, {:rate_limited, _} = reason}}, _acc ->
+        {:halt, {:error, reason}}
+
+      {:ok, {:error, {:rate_limited, _, _} = reason}}, _acc ->
+        {:halt, {:error, reason}}
+
+      _error, {:ok, detailed, failures} ->
+        {:cont, {:ok, detailed, failures + 1}}
     end)
-    |> then(fn {detailed, failures} -> {Enum.reverse(detailed), failures} end)
+    |> case do
+      {:ok, detailed, failures} -> {:ok, Enum.reverse(detailed), failures}
+      error -> error
+    end
   end
 
   defp safe_fetch_message_detail(token, %{"id" => id}, format, opts) when is_binary(id) do
@@ -594,14 +599,6 @@ defmodule Maraithon.Connectors.Gmail do
       _value -> @default_message_fetch_timeout_ms
     end
   end
-
-  defp normalize_message_fetch_concurrency(value) when is_integer(value) do
-    value
-    |> max(1)
-    |> min(@max_message_fetch_concurrency)
-  end
-
-  defp normalize_message_fetch_concurrency(_value), do: @default_message_fetch_concurrency
 
   @doc """
   Normalizes a raw Gmail message or thread id, returning `nil` for composite,
@@ -736,7 +733,7 @@ defmodule Maraithon.Connectors.Gmail do
 
       url = "#{api_base_url()}/users/me/messages/send"
 
-      case Google.api_request(:post, url, access_token, request_body) do
+      case GmailAccess.request(:post, url, access_token, request_body) do
         {:ok, response} ->
           {:ok,
            %{
@@ -806,7 +803,7 @@ defmodule Maraithon.Connectors.Gmail do
       [expected_statuses: [404]]
       |> maybe_expect_listed_message_error(opts)
 
-    request = fn -> Google.api_request(:get, url, access_token, nil, [], request_opts) end
+    request = fn -> GmailAccess.request(:get, url, access_token, nil, [], request_opts) end
 
     request.()
     |> maybe_retry_listed_message(request, opts)
@@ -864,55 +861,42 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp get_access_token(_user_id, token) when is_binary(token) and token != "", do: {:ok, token}
+  defp get_access_token(_user_id, %GmailAccess{} = access), do: {:ok, access}
+  defp get_access_token(user_id, nil), do: GmailAccess.for_user(user_id)
+  defp get_access_token(_, _), do: {:error, :gmail_account_required}
 
-  defp get_access_token(user_id, _) do
-    OAuth.get_valid_access_token(user_id, "google")
+  defp request_access_token(%GmailAccess{} = access, _opts), do: {:ok, access}
+  defp request_access_token("ya29." <> _, _opts), do: {:error, :gmail_account_required}
+
+  defp request_access_token(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    if Keyword.get(opts, :access_token, false),
+      do: {:error, :gmail_account_required},
+      else: GmailAccess.for_user(user_id, Keyword.get(opts, :provider) || "google")
   end
 
-  defp request_access_token("ya29." <> _ = token, _opts), do: {:ok, token}
-
-  defp request_access_token(token, opts) when is_binary(token) and is_list(opts) do
-    if Keyword.get(opts, :access_token, false) do
-      {:ok, token}
-    else
-      case Keyword.get(opts, :provider) do
-        provider when is_binary(provider) and provider != "" ->
-          Maraithon.Connectors.GoogleAccount.user_access_token(token, provider)
-
-        _ ->
-          Maraithon.Connectors.GoogleAccount.user_access_token(token)
-      end
-    end
-  end
-
-  defp access_token_for_send("ya29." <> _ = access_token, _attrs) do
-    {:ok, access_token, "google"}
-  end
+  defp access_token_for_send(%GmailAccess{} = access, _attrs),
+    do: {:ok, access, access.provider}
 
   defp access_token_for_send(user_id, attrs) when is_binary(user_id) do
-    case Map.get(attrs, :account_id, Map.get(attrs, "account_id")) do
-      nil ->
-        account = optional_attr(attrs, "account")
+    result =
+      case Map.get(attrs, :account_id, Map.get(attrs, "account_id")) do
+        nil ->
+          account = optional_attr(attrs, "account")
 
-        provider =
-          if is_binary(account) and account != "", do: "google:#{account}", else: "google"
+          provider =
+            if is_binary(account) and account != "", do: "google:#{account}", else: "google"
 
-        user_id
-        |> OAuth.get_valid_access_token(provider, exact?: not is_nil(account))
-        |> wrap_provider(provider)
+          GmailAccess.for_user(user_id, provider)
 
-      id ->
-        with {:ok, account} <- Maraithon.Connectors.GoogleAccount.resolve(user_id, id) do
-          user_id
-          |> OAuth.get_valid_access_token(account.provider, exact?: true)
-          |> wrap_provider(account.provider)
-        end
+        id ->
+          GmailAccess.for_account(user_id, id)
+      end
+
+    case result do
+      {:ok, access} -> {:ok, access, access.provider}
+      error -> error
     end
   end
-
-  defp wrap_provider({:ok, access_token}, provider), do: {:ok, access_token, provider}
-  defp wrap_provider(other, _provider), do: other
 
   defp create_watch(_user_id, access_token) do
     pubsub_topic = get_pubsub_topic()
@@ -927,7 +911,7 @@ defmodule Maraithon.Connectors.Gmail do
         labelIds: ["INBOX"]
       }
 
-      case Google.api_request(:post, url, access_token, body) do
+      case GmailAccess.request(:post, url, access_token, body) do
         {:ok, response} ->
           {:ok,
            %{
@@ -960,7 +944,7 @@ defmodule Maraithon.Connectors.Gmail do
 
     url = "#{api_base_url()}/users/me/history?#{params}"
 
-    case Google.api_request(:get, url, access_token) do
+    case GmailAccess.request(:get, url, access_token) do
       {:ok, response} ->
         # Gmail omits the "history" key entirely when a page's filtered
         # result set is empty (e.g. a page with only non-messageAdded
@@ -1010,58 +994,24 @@ defmodule Maraithon.Connectors.Gmail do
       |> Enum.map(fn ma -> ma["message"]["id"] end)
       |> Enum.uniq()
 
-    if length(message_ids) > @history_message_fetch_chunk do
-      Logger.warning("Gmail history sync processing large delta in chunks",
-        message_count: length(message_ids),
-        chunk_size: @history_message_fetch_chunk
-      )
-    end
+    # Never advance a history cursor past unread messages. Share the sequential
+    # hydration path so rate limits preserve their retry deadline in both modes.
+    refs = Enum.map(message_ids, &%{"id" => &1})
 
-    # Fetch full message details so downstream model triage can use body text.
-    # Process EVERY id from the delta — the caller advances the history
-    # cursor to latest_history_id afterwards, so any id skipped here would be
-    # silently lost forever. Chunking bounds each fetch burst; the total is
-    # already bounded by the history pagination safety cap.
-    {messages, failure_count} =
-      message_ids
-      |> Enum.chunk_every(@history_message_fetch_chunk)
-      |> Enum.reduce({[], 0}, fn chunk, {message_acc, failure_acc} ->
-        {chunk_messages, chunk_failures} =
-          chunk
-          |> Task.async_stream(
-            fn id ->
-              fetch_message_content(access_token, id,
-                access_token: true,
-                listed_message: true
-              )
-            end,
-            max_concurrency: 8,
-            ordered: true,
-            timeout: :infinity
-          )
-          |> Enum.reduce({[], 0}, fn
-            {:ok, {:ok, message}}, {messages, failures} ->
-              {[message | messages], failures}
+    case fetch_message_details(refs, access_token, message_format: :full) do
+      {:ok, messages, 0} ->
+        {:ok, messages, latest_history_id}
 
-            {:ok, {:error, :not_found}}, {messages, failures} ->
-              {messages, failures}
+      {:ok, _messages, failure_count} ->
+        Logger.warning("Gmail history sync left messages unread; preserving the prior cursor",
+          listed_message_count: length(message_ids),
+          failed_message_count: failure_count
+        )
 
-            _failure, {messages, failures} ->
-              {messages, failures + 1}
-          end)
+        {:error, {:gmail_history_message_fetch_incomplete, failure_count}}
 
-        {message_acc ++ Enum.reverse(chunk_messages), failure_acc + chunk_failures}
-      end)
-
-    if failure_count == 0 do
-      {:ok, messages, latest_history_id}
-    else
-      Logger.warning("Gmail history sync left messages unread; preserving the prior cursor",
-        listed_message_count: length(message_ids),
-        failed_message_count: failure_count
-      )
-
-      {:error, {:gmail_history_message_fetch_incomplete, failure_count}}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -1168,7 +1118,7 @@ defmodule Maraithon.Connectors.Gmail do
 
       url = "#{api_base_url()}/users/me/messages/#{id}?#{params}"
 
-      case Google.api_request(:get, url, access_token, nil, [], expected_statuses: [404]) do
+      case GmailAccess.request(:get, url, access_token, nil, [], expected_statuses: [404]) do
         {:ok, response} ->
           parsed = parse_message(response)
 
@@ -1215,7 +1165,7 @@ defmodule Maraithon.Connectors.Gmail do
 
   defp verified_sender(token, from) do
     with {:ok, %{"sendAs" => aliases}} <-
-           Google.api_request(:get, "#{api_base_url()}/users/me/settings/sendAs", token),
+           GmailAccess.request(:get, "#{api_base_url()}/users/me/settings/sendAs", token),
          true <-
            Enum.any?(
              aliases,

@@ -253,8 +253,8 @@ defmodule Maraithon.Delegations.GmailSourceTest do
 
     Agent.update(provider, &%{&1 | messages: messages ++ [reply]})
 
-    {:ok, parsed} =
-      Maraithon.Connectors.Gmail.fetch_message_content("google:source", "7", access_token: true)
+    {:ok, access} = Maraithon.Connectors.GmailAccess.for_account(c.user, c.source.id)
+    {:ok, parsed} = Maraithon.Connectors.Gmail.fetch_message_content(access, "7")
 
     assert {:ok, :ok} =
              Repo.transaction(fn ->

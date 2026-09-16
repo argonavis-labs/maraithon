@@ -137,23 +137,25 @@ defmodule Maraithon.HTTP do
 
     result =
       if Process.whereis(Maraithon.Runtime.ToolCallSupervisor) do
-        BoundedResponse.run(fn -> Req.request(req, req_opts) end, request_timeout)
+        BoundedResponse.run(
+          fn ->
+            {:http_result,
+             Maraithon.HTTP.Admission.run(opts[:admission], request_timeout, fn ->
+               case Req.request(req, req_opts) do
+                 {:ok, %Response{} = response} -> handle_collected_response(response, url, opts)
+                 {:error, reason} -> request_error(reason, opts)
+               end
+             end)}
+          end,
+          request_timeout
+        )
       else
         {:error, %{reason: :request_supervisor_unavailable}}
       end
 
     case result do
-      {:ok, %Response{} = response} ->
-        handle_collected_response(response, url, opts)
-
-      {:error, reason} ->
-        failure_code = Maraithon.Redaction.error_class(reason)
-
-        if log_failures?(opts) do
-          Logger.warning("HTTP request failed", failure_code: failure_code)
-        end
-
-        {:error, {:http_error, failure_code}}
+      {:http_result, result} -> result
+      {:error, reason} -> request_error(reason, opts)
     end
   rescue
     error ->
@@ -164,6 +166,12 @@ defmodule Maraithon.HTTP do
       end
 
       {:error, {:http_error, failure_code}}
+  end
+
+  defp request_error(reason, opts) do
+    failure_code = Maraithon.Redaction.error_class(reason)
+    if log_failures?(opts), do: Logger.warning("HTTP request failed", failure_code: failure_code)
+    {:error, {:http_error, failure_code}}
   end
 
   defp handle_collected_response(%Response{} = response, url, opts) do

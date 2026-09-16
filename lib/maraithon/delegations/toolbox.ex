@@ -1,7 +1,7 @@
 defmodule Maraithon.Delegations.Toolbox do
   @moduledoc "Read only the older evidence cited by a decision, within its bound conversation."
   alias Maraithon.PromptBudget
-  alias Maraithon.Connectors.{Gmail, GoogleAccount, Slack}
+  alias Maraithon.Connectors.{Gmail, Slack}
   alias Maraithon.Delegations.{GmailSource, Ledger, SlackIdentity, SlackSource}
 
   def read(context, decision) do
@@ -81,7 +81,10 @@ defmodule Maraithon.Delegations.Toolbox do
 
   defp fetch(context, %{"provider" => "gmail"} = ref) do
     with {:ok, token} <-
-           GoogleAccount.access_token(context.delegation.user_id, ref["account_id"]),
+           Maraithon.Connectors.GmailAccess.for_account(
+             context.delegation.user_id,
+             ref["account_id"]
+           ),
          {:ok, message} <-
            Gmail.fetch_message_content(token, ref["message_id"], access_token: true),
          {:ok, snapshot} <- GmailSource.snapshot([message], ref["account_id"], ref["thread_id"]),

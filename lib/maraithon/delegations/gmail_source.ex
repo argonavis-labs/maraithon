@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.GmailSource do
   @moduledoc "Incremental Gmail evidence: a complete header index, durable ingress progress, and six recent bodies."
   import Ecto.Query
   alias Maraithon.{DurablePayload, Repo}
-  alias Maraithon.Connectors.{Gmail, GoogleAccount}
+  alias Maraithon.Connectors.Gmail
   alias Maraithon.Delegations.{Event, Scope, Turn}
   alias Maraithon.TelegramAssistant.Run
 
@@ -17,7 +17,7 @@ defmodule Maraithon.Delegations.GmailSource do
     thread = d.provider_thread_id || scope["source_thread_id"]
 
     with true <- is_integer(account),
-         {:ok, token} <- GoogleAccount.access_token(d.user_id, account),
+         {:ok, token} <- Maraithon.Connectors.GmailAccess.for_account(d.user_id, account),
          {:ok, messages} <- Gmail.fetch_thread(token, thread, access_token: true),
          {:ok, index} <- metadata(messages, thread) do
       {:ok, %{account: account, thread: thread, token: token, messages: index}}

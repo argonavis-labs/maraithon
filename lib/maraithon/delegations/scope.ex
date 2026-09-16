@@ -1,6 +1,6 @@
 defmodule Maraithon.Delegations.Scope do
   @moduledoc "Derives a reviewable grant from a todo, a verified identity, and source evidence."
-  alias Maraithon.{Repo, OAuth, Crm, AssistantIdentities}
+  alias Maraithon.{Repo, Crm, AssistantIdentities}
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Delegations.Preferences
@@ -57,7 +57,7 @@ defmodule Maraithon.Delegations.Scope do
   defp source(%{source: "gmail"} = todo, account, actor) do
     with {:ok, identity} <- AssistantIdentities.gmail_snapshot(todo.user_id, actor, account.id),
          {:ok, token} <-
-           OAuth.get_valid_access_token(todo.user_id, account.provider, exact?: true),
+           Maraithon.Connectors.GmailAccess.for_account(todo.user_id, account.id),
          {:ok, message} <- Gmail.fetch_message(token, todo.source_item_id, access_token: true),
          false <- "DRAFT" in message.labels do
       source_email =

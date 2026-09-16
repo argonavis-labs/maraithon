@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   import Ecto.Query
   alias Maraithon.{Delegations, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
-  alias Maraithon.Connectors.{Gmail, GoogleAccount, GoogleCalendar}
+  alias Maraithon.Connectors.{Gmail, GoogleCalendar}
   alias Maraithon.Delegations.{Evaluation, Gates, Ingress, Policy, Turn}
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.TelegramAssistant.{ActionReconciliation, PreparedAction, Run}
@@ -399,7 +399,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     # A positive send receipt identifies the sender's exact message even when
     # Gmail replaces our RFC Message-ID. Never guess from subject or timestamp.
     with {:ok, sender_token} <-
-           GoogleAccount.access_token(@user, sent.payload["account_id"]),
+           Maraithon.Connectors.GmailAccess.for_account(@user, sent.payload["account_id"]),
          {:ok, delivered} <-
            Gmail.fetch_message_content(
              sender_token,
@@ -416,7 +416,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
            GmailApiHelpers.get_for_account(@user, account.id, "/users/me/messages?#{query}"),
          ids = Enum.map(listing["messages"] || [], & &1["id"]),
          [id] <- ids,
-         {:ok, token} <- GoogleAccount.access_token(@user, account.id),
+         {:ok, token} <- Maraithon.Connectors.GmailAccess.for_account(@user, account.id),
          {:ok, message} <- Gmail.fetch_message_content(token, id, access_token: true) do
       {:ok, message}
     else

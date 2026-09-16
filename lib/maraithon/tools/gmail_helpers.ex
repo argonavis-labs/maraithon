@@ -4,10 +4,7 @@ defmodule Maraithon.Tools.GmailHelpers do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.OAuth
-  alias Maraithon.OAuth.Google
   alias Maraithon.Tools.ToolErrorCopy
-
-  @default_api_base "https://gmail.googleapis.com/gmail/v1"
 
   def list_messages(user_id, opts \\ []) when is_binary(user_id) do
     max_results = Keyword.get(opts, :max_results, 10)
@@ -97,34 +94,24 @@ defmodule Maraithon.Tools.GmailHelpers do
 
   defp fetch_messages_from_provider(user_id, provider, max_results, query, label_ids)
        when is_binary(user_id) and is_binary(provider) do
-    with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, provider),
-         {:ok, message_ids} <- fetch_message_ids(access_token, max_results, query, label_ids) do
-      messages =
-        message_ids
-        |> Task.async_stream(
-          fn message_id ->
-            Gmail.fetch_message_content(access_token, message_id,
-              access_token: true,
-              listed_message: true
-            )
-          end,
-          max_concurrency: message_concurrency(message_ids),
-          ordered: true,
-          timeout: :infinity
-        )
-        |> Enum.filter(&match?({:ok, {:ok, _}}, &1))
-        |> Enum.map(fn {:ok, {:ok, message}} ->
-          message
-          |> Map.put(:google_provider, provider)
-          |> Map.put(:google_account_email, provider_account_email(provider))
-        end)
-
-      {:ok, messages}
+    with {:ok, messages} <-
+           Gmail.fetch_messages(user_id,
+             provider: provider,
+             max_results: max_results,
+             query: query,
+             label_ids: label_ids,
+             message_format: :full
+           ) do
+      {:ok,
+       Enum.map(messages, fn message ->
+         message
+         |> Map.put(:google_provider, provider)
+         |> Map.put(:google_account_email, provider_account_email(provider))
+       end)}
     end
   end
 
   defp provider_concurrency(providers), do: providers |> length() |> max(1) |> min(4)
-  defp message_concurrency(message_ids), do: message_ids |> length() |> max(1) |> min(8)
 
   defp providers_for_search(user_id, provider) when provider in [nil, "", "google"] do
     connected_google_providers(user_id)
@@ -175,45 +162,4 @@ defmodule Maraithon.Tools.GmailHelpers do
     do: DateTime.to_unix(internal_date, :microsecond)
 
   defp message_sort_value(_message), do: 0
-
-  defp fetch_message_ids(access_token, max_results, query, label_ids) do
-    params =
-      %{}
-      |> Map.put(:maxResults, max_results)
-      |> maybe_put(:q, query)
-      |> maybe_put(:labelIds, encode_label_ids(label_ids))
-      |> URI.encode_query()
-
-    url = "#{api_base_url()}/users/me/messages?#{params}"
-
-    case Google.api_request(:get, url, access_token) do
-      {:ok, %{"messages" => messages}} when is_list(messages) ->
-        message_ids =
-          messages
-          |> Enum.take(max_results)
-          |> Enum.map(fn message -> message["id"] end)
-          |> Enum.filter(&is_binary/1)
-
-        {:ok, message_ids}
-
-      {:ok, _} ->
-        {:ok, []}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp maybe_put(params, _key, nil), do: params
-  defp maybe_put(params, _key, ""), do: params
-  defp maybe_put(params, key, value), do: Map.put(params, key, value)
-
-  defp encode_label_ids([]), do: nil
-  defp encode_label_ids(nil), do: nil
-  defp encode_label_ids(ids) when is_list(ids), do: Enum.join(ids, ",")
-
-  defp api_base_url do
-    Application.get_env(:maraithon, :gmail, [])
-    |> Keyword.get(:api_base_url, @default_api_base)
-  end
 end

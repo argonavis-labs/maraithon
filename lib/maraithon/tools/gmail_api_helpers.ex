@@ -3,6 +3,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
 
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.Connectors.GmailAccess
   alias Maraithon.Tools.ActionHelpers
   alias Maraithon.Tools.ToolErrorCopy
 
@@ -11,17 +12,14 @@ defmodule Maraithon.Tools.GmailApiHelpers do
 
   @doc "Read a verified account for identity setup or frozen-action reconciliation. No fallback."
   def get_for_account(user_id, account_id, path) do
-    with {:ok, account} <- Maraithon.Connectors.GoogleAccount.resolve(user_id, account_id),
-         {:ok, access_token} <-
-           OAuth.get_valid_access_token(user_id, account.provider, exact?: true) do
-      Google.api_request(:get, "#{gmail_api_base_url()}#{path}", access_token)
-    end
+    with {:ok, access} <- GmailAccess.for_account(user_id, account_id),
+         do: GmailAccess.request(:get, "#{gmail_api_base_url()}#{path}", access)
   end
 
   def request(args, method, path, body \\ nil, extra_headers \\ [])
       when is_map(args) and method in [:get, :post, :put, :patch, :delete] and is_binary(path) do
-    with {:ok, _user_id, _provider, access_token} <- resolve_access(args) do
-      Google.api_request(
+    with {:ok, _user_id, _provider, access_token} <- resolve_access(args, true) do
+      GmailAccess.request(
         method,
         "#{gmail_api_base_url()}#{path}",
         access_token,
@@ -44,7 +42,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
     end
   end
 
-  def resolve_access(args) when is_map(args) do
+  def resolve_access(args, bound? \\ false) when is_map(args) do
     with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id"),
          requested = provider_from_args(args),
          candidates =
@@ -58,8 +56,15 @@ defmodule Maraithon.Tools.GmailApiHelpers do
              else: candidates
            ),
          {:ok, access_token} <-
-           OAuth.get_valid_access_token(user_id, provider,
-             exact?: args["exact_account"] == true or provider != "google"
+           if(bound?,
+             do:
+               GmailAccess.for_user(user_id, provider,
+                 exact?: args["exact_account"] == true or provider != "google"
+               ),
+             else:
+               OAuth.get_valid_access_token(user_id, provider,
+                 exact?: args["exact_account"] == true or provider != "google"
+               )
            ) do
       {:ok, user_id, provider, access_token}
     else
@@ -69,14 +74,14 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   end
 
   def list_message_ids(args, query, max_results) do
-    with {:ok, _user_id, _provider, access_token} <- resolve_access(args) do
+    with {:ok, _user_id, _provider, access_token} <- resolve_access(args, true) do
       params =
         %{}
         |> Map.put(:maxResults, max_results)
         |> maybe_put(:q, query)
         |> URI.encode_query()
 
-      case Google.api_request(
+      case GmailAccess.request(
              :get,
              "#{gmail_api_base_url()}/users/me/messages?#{params}",
              access_token

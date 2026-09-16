@@ -111,15 +111,13 @@ defmodule Maraithon.Runtime.WatchRenewer do
     kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
   end
 
-  defp do_renew(
-         %SourceCursor{connected_account_id: id, user_id: user_id, provider: provider} = cursor
-       ) do
+  defp do_renew(%SourceCursor{connected_account_id: id, user_id: user_id} = cursor) do
     case Repo.get(ConnectedAccount, id) do
       nil ->
         {:error, :connected_account_not_found}
 
       %ConnectedAccount{} = account ->
-        case OAuth.get_valid_access_token(user_id, provider) do
+        case OAuth.get_valid_access_token(user_id, account.provider, exact?: true) do
           {:ok, token} -> renew_watch(cursor.kind, cursor, account, user_id, token)
           {:error, reason} -> {:error, reason}
         end
@@ -127,7 +125,7 @@ defmodule Maraithon.Runtime.WatchRenewer do
   end
 
   defp renew_watch(@gmail_kind, _cursor, account, user_id, token) do
-    case Gmail.setup_watch(user_id, token) do
+    case Gmail.setup_watch(user_id, Maraithon.Connectors.GmailAccess.bind(account, token)) do
       {:ok, watch} ->
         _ = SourceCursors.put(account, @gmail_kind, %{"watch_expires_at" => watch.expiration})
 

@@ -119,7 +119,7 @@ defmodule Maraithon.Todos.ProductionValidator do
   end
 
   defp repair_google_account(user_id, account) do
-    with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, account.provider) do
+    with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, account.provider, exact?: true) do
       watch = repair_gmail_watch(user_id, account, access_token)
 
       case Gmail.sync_history(user_id, account, provider: account.provider) do
@@ -149,7 +149,7 @@ defmodule Maraithon.Todos.ProductionValidator do
   end
 
   defp repair_gmail_watch(user_id, account, access_token) do
-    case Gmail.setup_watch(user_id, access_token) do
+    case Gmail.setup_watch(user_id, Maraithon.Connectors.GmailAccess.bind(account, access_token)) do
       {:ok, watch} ->
         attrs = %{"watch_expires_at" => watch.expiration}
 

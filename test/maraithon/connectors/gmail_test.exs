@@ -124,7 +124,8 @@ defmodule Maraithon.Connectors.GmailTest do
     test "returns error when pubsub topic not configured" do
       Application.put_env(:maraithon, :google, pubsub_topic: "")
 
-      assert {:error, :pubsub_topic_not_configured} = Gmail.setup_watch("user_123", "fake_token")
+      assert {:error, :pubsub_topic_not_configured} =
+               Gmail.setup_watch("user_123", bound_access("fake_token"))
     end
 
     test "returns error when no valid token and user not found" do
@@ -190,7 +191,7 @@ defmodule Maraithon.Connectors.GmailTest do
       log =
         capture_log(fn ->
           assert {:error, {:http_status, 400, body}} =
-                   Gmail.fetch_message_content("ya29.test-token", "abc123")
+                   Gmail.fetch_message_content(bound_access("ya29.test-token"), "abc123")
 
           assert body =~ "FAILED_PRECONDITION"
         end)
@@ -198,10 +199,11 @@ defmodule Maraithon.Connectors.GmailTest do
       assert log =~ "HTTP request failed"
     end
 
-    test "handles token directly starting with ya29." do
-      # Will fail to connect but tests the branch
-      result = Gmail.fetch_message("ya29.fake_token", "abc123")
-      assert match?({:error, _}, result)
+    test "requires a mailbox identity instead of accepting a bare bearer token" do
+      assert {:error, :gmail_account_required} = Gmail.fetch_message("ya29.fake_token", "abc123")
+
+      assert {:error, :gmail_account_required} =
+               Gmail.fetch_message("fake_token", "abc123", access_token: true)
     end
 
     test "maps point-lookup 404s to quiet semantic misses" do
@@ -220,7 +222,8 @@ defmodule Maraithon.Connectors.GmailTest do
 
       log =
         capture_log(fn ->
-          assert {:error, :not_found} = Gmail.fetch_message("ya29.test-token", "abc123")
+          assert {:error, :not_found} =
+                   Gmail.fetch_message(bound_access("ya29.test-token"), "abc123")
         end)
 
       refute log =~ "HTTP request failed"
@@ -231,14 +234,14 @@ defmodule Maraithon.Connectors.GmailTest do
     test "returns error when pubsub topic not configured" do
       Application.put_env(:maraithon, :google, pubsub_topic: nil)
 
-      result = Gmail.setup_watch("test_user", "valid_token")
+      result = Gmail.setup_watch("test_user", bound_access("valid_token"))
       assert {:error, :pubsub_topic_not_configured} = result
     end
 
     test "returns error when pubsub topic is empty" do
       Application.put_env(:maraithon, :google, pubsub_topic: "")
 
-      result = Gmail.setup_watch("test_user", "valid_token")
+      result = Gmail.setup_watch("test_user", bound_access("valid_token"))
       assert {:error, :pubsub_topic_not_configured} = result
     end
 
@@ -246,7 +249,7 @@ defmodule Maraithon.Connectors.GmailTest do
       Application.put_env(:maraithon, :google, pubsub_topic: "projects/test/topics/gmail")
 
       # Will fail on actual API call but tests the token path
-      result = Gmail.setup_watch("test_user", "valid_token")
+      result = Gmail.setup_watch("test_user", bound_access("valid_token"))
       # Will fail because API call to google fails
       assert match?({:error, _}, result)
     end
@@ -396,7 +399,7 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
-      {:ok, watch} = Gmail.setup_watch("user_123", "test_access_token")
+      {:ok, watch} = Gmail.setup_watch("user_123", bound_access("test_access_token"))
 
       assert watch.history_id == "12345"
       assert %DateTime{} = watch.expiration
@@ -1683,6 +1686,17 @@ defmodule Maraithon.Connectors.GmailTest do
 
       assert :ok = Gmail.stop_watch("stop-404-user@example.com")
     end
+  end
+
+  defp bound_access(token) do
+    Maraithon.Connectors.GmailAccess.bind(
+      %Maraithon.Accounts.ConnectedAccount{
+        id: System.unique_integer([:positive]),
+        provider: "google",
+        metadata: %{}
+      },
+      token
+    )
   end
 
   defp store_tokens(user_id, provider, attrs) do
