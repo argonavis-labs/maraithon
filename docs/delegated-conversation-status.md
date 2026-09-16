@@ -870,6 +870,17 @@ and message content. The checkpoint diagnostic also separates missing or
 undecodable snapshots from readable state and includes recent closed effect
 failure codes. Deployment of this additional diagnosis is pending.
 
+Inspection also found that candidates were fetched only when the cycle already
+needed a memo. A new eligible todo on an otherwise quiet day could wait until
+the daily memo refresh. Scheduled wakes now check candidates and allow their
+existing memo call to rank a changed set. A saved digest excludes bookkeeping
+fingerprints, so completion polling alone cannot create more model work. A
+valid result records that set only after all selected proposals persist; an
+empty selection is also a completed review. Failed or malformed attempts wait
+at least the configured wake interval before triggering another quiet-cycle
+call. The review digest and attempt time survive checkpoints. `make build`
+passed; live proposal verification remains open.
+
 ## Read earlier conversation windows
 
 The date-window history reader is now implemented. A model may use its existing

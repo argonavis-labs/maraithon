@@ -56,6 +56,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
       cycle_memo_generated: false,
       delegation_candidates: [],
+      delegation_candidate_digest: nil,
+      delegation_review_digest: nil,
+      delegation_review_attempted_at: nil,
       # R5 (SPEC 07): structured cross-cycle decision ledger, keyed by stable
       # item_id (todo id, insight id — never an ephemeral cycle id). Sibling
       # of the prose `cycle_memory`, never a replacement.
@@ -88,6 +91,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
     cycle_memo_generated: false,
     delegation_candidates: [],
+    delegation_candidate_digest: nil,
+    delegation_review_digest: nil,
+    delegation_review_attempted_at: nil,
     # R5 (SPEC 07): redundant with SPEC 08's generic init/1-merge on restore,
     # but harmless — kept so ensure_state_keys/1 also back-fills mid-wakeup.
     decision_ledger: %{},
@@ -576,16 +582,26 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     finalize_cycle(state)
   end
 
-  defp request_cycle_memo(state, _context) do
-    state =
-      Map.put(
-        state,
-        :delegation_candidates,
-        if(cycle_worth_memo?(state), do: DelegationProposals.candidates(state.user_id), else: [])
-      )
+  defp request_cycle_memo(state, context) do
+    candidates =
+      if cycle_worth_memo?(state) or scheduled_trigger?(context),
+        do: DelegationProposals.candidates(state.user_id),
+        else: []
+
+    # Polling a completion check changes the persistence fingerprint, but is
+    # not new evidence for the ranker. Only the model-facing candidate matters.
+    digest =
+      Maraithon.Delegations.Scope.hash(Enum.map(candidates, &Map.delete(&1, "fingerprint")))
+
+    state = %{state | delegation_candidates: candidates, delegation_candidate_digest: digest}
 
     case memo_llm_params(state) do
       {:ok, params} ->
+        state =
+          if candidates == [],
+            do: state,
+            else: %{state | delegation_review_attempted_at: DateTime.utc_now()}
+
         {:effect, {:llm_call, params}, %{state | pending_effect_skill_id: :cycle_memo}}
 
       :skip ->
@@ -602,6 +618,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         decoded["delegation_proposals"],
         Map.put(context, :assistant_cycle_id, state.assistant_cycle_id)
       )
+
+    state =
+      if is_list(decoded["delegation_proposals"]) and
+           length(decoded["delegation_proposals"]) <= 3 and
+           length(proposals) == length(decoded["delegation_proposals"]),
+         do: %{state | delegation_review_digest: state.delegation_candidate_digest},
+         else: state
 
     state =
       if proposals == [],
@@ -781,12 +804,22 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   # A memo records what this cycle decided. Inbound source items alone are not
   # a decision: skills that saw nothing worth acting on leave the previous memo
-  # standing. A daily refresh keeps the memo from going stale on a quiet week.
+  # standing. New delegation candidates get a review on a scheduled wake, with
+  # unchanged successful reviews skipped and failed attempts bounded by that
+  # cadence. A daily refresh keeps the memo from going stale on a quiet week.
   @memo_max_age_seconds 24 * 60 * 60
 
   defp cycle_worth_memo?(state) do
     blank?(Map.get(state.cycle_memory || %{}, "memo")) or cycle_has_activity?(state) or
-      memo_stale?(state)
+      memo_stale?(state) or delegation_review_due?(state)
+  end
+
+  defp delegation_review_due?(state) do
+    state.delegation_candidates != [] and
+      state.delegation_candidate_digest != state.delegation_review_digest and
+      (is_nil(state.delegation_review_attempted_at) or
+         DateTime.diff(DateTime.utc_now(), state.delegation_review_attempted_at, :millisecond) >=
+           state.wakeup_interval_ms)
   end
 
   defp cycle_has_activity?(state) do
