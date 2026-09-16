@@ -542,11 +542,19 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         "turns" => length(turns),
         "cost_micro_usd" => d.lifetime_micro_usd,
         "agent_messages" => d.lifetime_sends,
+        "configured_model_used" =>
+          Maraithon.Delegations.Reports.model_receipts_verified?(
+            turns,
+            Evaluation.scenarios()["model"]
+          ),
         "todo_state" => Workflow.current(todo)["state"],
         "completion_cites_reply" => state["reply_message_id"] in evidence_ids
       })
 
     cond do
+      not common["configured_model_used"] ->
+        {:error, :configured_model_not_proven}
+
       d.kind == "scheduling" ->
         verify_calendar(job, Map.merge(state, common), d, todo)
 

@@ -73,7 +73,8 @@ defmodule Maraithon.Delegations.EvaluationMemory do
       "completion_independently_reviewed" =>
         context.turn.data["decision"]["kind"] == "complete" and
           Policy.approved?(context.turn.data["decision"], context.turn.data["policy_review"]),
-      "configured_model_used" => context.turn.model == spec["model"],
+      "configured_model_used" =>
+        Maraithon.Delegations.Reports.model_receipts_verified?([context.turn], spec["model"]),
       "cited_sources_recalled" =>
         match?({:ok, items} when length(items) == length(refs), recalled),
       "ledger_within_limit" => Ledger.valid_storage?(Ledger.snapshot(context))

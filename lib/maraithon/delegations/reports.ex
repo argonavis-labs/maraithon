@@ -7,6 +7,20 @@ defmodule Maraithon.Delegations.Reports do
 
   @limit 8
 
+  @doc "Require settled provider receipts for every counted model call."
+  def model_receipts_verified?(turns, model) do
+    Enum.all?(turns, fn row ->
+      turn = Turn.hydrate(row)
+      entries = turn.data["model_entries"] || %{}
+
+      map_size(entries) == turn.model_calls and
+        (turn.model_calls == 0 or turn.model == model) and
+        Enum.all?(entries, fn {_, entry} ->
+          entry["state"] == "settled" and entry["actual_model"] == model
+        end)
+    end)
+  end
+
   @doc "Model receipts by turn and stage, with zero-call work separated from model turns."
   def model_usage(turns) do
     metrics =

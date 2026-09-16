@@ -1,0 +1,72 @@
+{
+  "workflow_id": 35110150724,
+  "operation": "delegation-eval-memory",
+  "report": {
+    "actor": "as_assistant",
+    "checks": {
+      "cited_sources_recalled": true,
+      "completion_independently_reviewed": true,
+      "configured_model_used": true,
+      "expected_fact_saved": true,
+      "ledger_within_limit": true
+    },
+    "conversation_writes": 0,
+    "delegation_id": "9db0675e-a904-470a-8642-d42d792c7431",
+    "events_created": 0,
+    "fact_count": 1,
+    "job_id": "04a64f25-c24a-42ee-a819-a94cbe07e917",
+    "messages_sent": 0,
+    "model_calls": 0,
+    "phase": "passed",
+    "prompt_cache_cleared_in_memory": true,
+    "recall_error": null,
+    "reference_count": 1,
+    "saved_model_usage": {
+      "call_summary": {
+        "ordinary": {
+          "calls_per_turn": 2.0,
+          "cost_micro_usd": 613,
+          "model_calls": 2,
+          "turns": 1,
+          "unresolved_micro_usd": 0
+        }
+      },
+      "turn_metrics": [
+        {
+          "cost_micro_usd": 613,
+          "kind": "ordinary",
+          "model_calls": 2,
+          "requested_model": "meta/muse-spark-1.3-contributor",
+          "seq": 2,
+          "stages": {
+            "compose": {
+              "actual_model": "meta/muse-spark-1.3-contributor",
+              "cost_micro_usd": 281,
+              "input_tokens": 2252,
+              "output_tokens": 279,
+              "prompt_version": 1,
+              "state": "settled"
+            },
+            "policy": {
+              "actual_model": "meta/muse-spark-1.3-contributor",
+              "cost_micro_usd": 332,
+              "input_tokens": 1948,
+              "output_tokens": 684,
+              "prompt_version": 1,
+              "state": "settled"
+            }
+          },
+          "status": "settled",
+          "turn_id": "7df22605-32ca-4ebb-955a-98e6005427db",
+          "unresolved_micro_usd": 0
+        }
+      ]
+    },
+    "turn_id": "7df22605-32ca-4ebb-955a-98e6005427db"
+  },
+  "limits": [
+    "This report inspects the existing completion turn only.",
+    "No new conversation or model turn was started.",
+    "Research and repair turns are not covered by this observation."
+  ]
+}

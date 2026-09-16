@@ -30,10 +30,59 @@
       "calendar_cleanup": "completed",
       "scheduled_at": "2026-09-16T14:06:46.936214Z",
       "initial_email_delivery": "not_yet_inspected"
+    },
+    {
+      "workflow_id": 35108765820,
+      "execution_id": "maraithon-todo-validation-wnfrp",
+      "phase": "waiting_for_provider",
+      "scheduled_at": "2026-09-16T14:32:14.235445Z",
+      "same_job_resumed": true
+    },
+    {
+      "workflow_id": 35109485511,
+      "job_status": "pending",
+      "phase": "waiting_across_releases",
+      "delegation_id": "713c2fa0-0724-4ae9-8ac3-c8ec2ba1525c",
+      "reply_count": 3,
+      "sending_identity_verified": true,
+      "canary_wait": {
+        "before": {
+          "agent_messages": 4,
+          "cost_micro_usd": 3337,
+          "elapsed_seconds": 259,
+          "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+          "ledger_hash": "85b075eed17d1c820ceb00c7151de3d2b78e9a4ad7633d32edf880ed8b559fd9",
+          "model_calls": 8,
+          "observed_at": "2026-09-16T14:36:36.003277Z",
+          "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+          "reserved_micro_usd": 0,
+          "runtime_revision": "maraithon-00419-l2c",
+          "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+          "source_revision": 3,
+          "state": "waiting_reply"
+        },
+        "reply_not_before": "2026-09-16T20:36:36.003360Z"
+      },
+      "observation": {
+        "agent_messages": 4,
+        "cost_micro_usd": 3337,
+        "elapsed_seconds": 293,
+        "grant_id": "cf51e62c-0b9d-48be-9862-5f07a529a5f3",
+        "ledger_hash": "85b075eed17d1c820ceb00c7151de3d2b78e9a4ad7633d32edf880ed8b559fd9",
+        "model_calls": 8,
+        "observed_at": "2026-09-16T14:37:10.835308Z",
+        "owner_hash": "455e83ef76d7cb0a3713f4a52d967723d82073dec7d833a9eb873ff150a96478",
+        "reserved_micro_usd": 0,
+        "runtime_revision": null,
+        "scope_hash": "b051d4297869c91948759ce17493a9ddc36b7d9135412b21d7cf1f0f3968e3ec",
+        "source_revision": 3,
+        "state": "waiting_reply"
+      },
+      "scheduled_at": "2026-09-16T20:36:36.003360Z"
     }
   ],
   "limits": [
-    "No quiet interval or later memory turn has been verified.",
+    "The six-hour quiet interval and later memory turn are still pending.",
     "A failed eval before a delegation exists does not prove that its initial email was unsent.",
     "Recovery must preserve this job and its deterministic prepared-action IDs."
   ]

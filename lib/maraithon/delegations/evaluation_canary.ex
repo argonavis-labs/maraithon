@@ -148,14 +148,7 @@ defmodule Maraithon.Delegations.EvaluationCanary do
       "completion_independently_reviewed" =>
         Policy.approved?(turn.data["decision"], turn.data["policy_review"]),
       "configured_model_used" =>
-        Enum.all?(turns, fn t ->
-          entries = t.data["model_entries"] || %{}
-
-          t.model == model and map_size(entries) == t.model_calls and
-            Enum.all?(entries, fn {_, entry} ->
-              entry["state"] == "settled" and entry["actual_model"] == model
-            end)
-        end),
+        Maraithon.Delegations.Reports.model_receipts_verified?(turns, model),
       "within_limits" =>
         d.lifetime_sends in 4..6 and d.lifetime_micro_usd <= 100_000 and
           Enum.all?(turns, &(&1.model_calls <= 3))
