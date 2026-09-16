@@ -14,6 +14,8 @@ An acknowledgement arriving before a send also needs special handling. Gmail can
 
 Commit `32f256fb` deployed through successful workflow `35091064234`. Revision `maraithon-00411-5mm` served all traffic. The older-snapshot compatibility fix in `978d3c38` then deployed through successful workflow `35091691984`; revision `maraithon-00412-v6f` served all traffic. No native release or migration was needed.
 
+Commit `8a87ff70` also keeps invalid UTF-8 on the normal reply path before the phrase check. Its build passed, and successful workflow `35092861779` deployed revision `maraithon-00413-q2h` to all traffic. The revised independent-review target is recorded in `a22a82b1`.
+
 ## Slack source progress across replacement turns
 
 A Slack history page can discover a missed reply and advance the conversation's source revision. That makes its current turn obsolete. Previously, the replacement turn started the thread scan again, including when the preceding scan had just finished.
