@@ -113,7 +113,7 @@ public struct AssistantSettingsView: View {
                     Text("Choose for this task").tag("")
                     ForEach(links) { Text($0.label).tag($0.id) }
                 }
-                if let webURL, let url = URL(string: "/settings#calendar-links", relativeTo: webURL) {
+                if let webURL, let url = URL(string: "/settings/booking-links", relativeTo: webURL) {
                     Link("Manage booking links", destination: url)
                 }
             }
