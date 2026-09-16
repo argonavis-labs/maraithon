@@ -246,6 +246,7 @@ defmodule Maraithon.Todos.Brief do
     force? = Keyword.get(opts, :force, false)
 
     with %Todo{} = todo <- Todos.get_for_user(user_id, todo_id),
+         {:ok, todo} <- Todos.resolve_slack_names(todo),
          :ok <- ensure_generation_needed(todo, force?),
          {:ok, todo} <- claim_lease(user_id, todo, force?) do
       generate_claimed_and_store(user_id, todo, opts)
@@ -473,6 +474,7 @@ defmodule Maraithon.Todos.Brief do
     - Anchor timing to NOW. Use explicit calendar dates for deadlines and proposed commitments, not relative countdowns such as "in 3 hours", "today", or "tomorrow". A past deadline is overdue; do not recommend meeting it or carry an old proposed date into a new reply.
     - No preamble, no hedging, no filler, no praise. Every sentence must earn its place.
     - First decide whether this work involves the user directly, implicitly, or not at all. Match Slack participant IDs to OPERATOR IDENTITY. Channel membership and a previous generated todo are not evidence of ownership. Implicit responsibility requires a concrete source or explicit user instruction linking the user to the outcome; it does not require an @mention.
+    - Use verified Slack display names in prose. Keep raw Slack IDs only in routing fields. When no name is available, say "the sender" or "your teammate" without inventing a name.
     - Treat the saved title, summary, People relationship labels, previous draft and previous brief as claims to check against the actual source. They can be wrong. Never use their repetition as corroboration.
     - Being affected by work is separate from owning it. A verified person owner in WORK ITEM.workflow means that person owns the next action. Use involvement associated, name that owner first, explain the impact on the user, and return no reply, call, suggested actions, or personal steps. Respect an explicit user ownership correction. A request to keep track does not mean the user accepted the work.
     - Read Gmail To and CC separately. Being copied is not a direct assignment or proof of payment authority. If someone else is asked to act or named as a contact, keep that ownership unless a later delivered message explicitly assigns the user a separate action.

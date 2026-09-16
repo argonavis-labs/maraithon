@@ -4,10 +4,44 @@ defmodule Maraithon.Slack.UserDirectory do
   """
 
   alias Maraithon.Connectors.Slack
+  alias Maraithon.Tools.SlackHelpers
 
   require Logger
 
   @mention_regex ~r/<@([A-Z0-9]+)(?:\|[^>]+)?>/
+  @user_id_regex ~r/\b[UW][A-Z0-9]{8,}\b/
+
+  @doc "IDs in generated prose, including bare IDs copied out of source messages."
+  def ids_in_copy(text) when is_binary(text),
+    do: @user_id_regex |> Regex.scan(text) |> List.flatten() |> Enum.uniq()
+
+  def ids_in_copy(_), do: []
+
+  @doc "Replace verified user IDs in display copy, preserving links and unknown IDs."
+  def replace_user_ids(text, directory) when is_binary(text) do
+    ~r/https?:\/\/[^\s<>]+/
+    |> Regex.split(text, include_captures: true)
+    |> Enum.map_join(fn part ->
+      if String.starts_with?(part, ["http://", "https://"]) do
+        part
+      else
+        part = replace_mentions(part, directory)
+        Regex.replace(@user_id_regex, part, fn id -> display_name(directory, id) || id end)
+      end
+    end)
+  end
+
+  def replace_user_ids(text, _directory), do: text
+
+  def for_workspace(user_id, team_id, user_ids, opts \\ []) do
+    with true <- is_binary(team_id) and user_ids != [],
+         {:ok, access} <-
+           SlackHelpers.resolve_access_token(user_id, team_id, required_scopes: ["users:read"]) do
+      resolve(access, user_ids, opts)
+    else
+      _ -> %{}
+    end
+  end
 
   def resolve(access_token, user_ids, opts \\ [])
 

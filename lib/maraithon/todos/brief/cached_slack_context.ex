@@ -24,13 +24,14 @@ defmodule Maraithon.Todos.Brief.CachedSlackContext do
             limit: 1
         )
 
-      if original, do: context(user_id, team, channel, timestamp, original)
+      if original, do: context(user_id, team, channel, timestamp, original, todo)
     end
   rescue
     _ -> nil
   end
 
-  defp context(user_id, team, channel, timestamp, original) do
+  defp context(user_id, team, channel, timestamp, original, todo) do
+    names = Maraithon.Todos.SlackNames.directory(todo)
     root = original.metadata["thread_ts"] || original.metadata["ts"] || timestamp
     lower = DateTime.add(original.occurred_at, -86_400, :second)
 
@@ -57,8 +58,13 @@ defmodule Maraithon.Todos.Brief.CachedSlackContext do
 
         %{
           "user_id" => user,
-          "from" => author["display_name"] || user,
-          "text" => String.slice(row.metadata["text"] || row.excerpt || "", 0, 3_000),
+          "from" =>
+            Maraithon.Slack.UserDirectory.display_name(names, user) || author["display_name"] ||
+              user,
+          "text" =>
+            (row.metadata["text"] || row.excerpt || "")
+            |> Maraithon.Slack.UserDirectory.replace_mentions(names)
+            |> String.slice(0, 3_000),
           "at" => DateTime.to_iso8601(row.occurred_at),
           "from_user" => row.direction == "outbound",
           "is_source_message" => row.id == original.id

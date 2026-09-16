@@ -1377,6 +1377,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
     [mention] = SourceBundle.slack_mentions(bundle)
     assert mention["channel_id"] == "C-SOC2"
+    assert mention["user_display_name"] == "Kevin"
     assert mention["text"] =~ "<!here> Please dm me"
     assert mention["search_mode"] == "broadcast_mention"
 

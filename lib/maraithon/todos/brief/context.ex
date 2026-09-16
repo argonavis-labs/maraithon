@@ -16,6 +16,7 @@ defmodule Maraithon.Todos.Brief.Context do
   alias Maraithon.Crm
   alias Maraithon.Memory.UserVoice
   alias Maraithon.OAuth
+  alias Maraithon.Slack.UserDirectory
   alias Maraithon.Tools
   alias Maraithon.Tools.SlackHelpers
   alias Maraithon.Todos
@@ -469,7 +470,11 @@ defmodule Maraithon.Todos.Brief.Context do
               "user_id" => user,
               "from" => Map.get(names, user) || user || read_string(message, :bot_id),
               "at" => slack_ts_to_iso(read_string(message, :ts)),
-              "text" => truncate(read_string(message, :text), 1_500),
+              "text" =>
+                message
+                |> read_string(:text)
+                |> UserDirectory.replace_mentions(names)
+                |> truncate(1_500),
               "is_source_message" =>
                 is_binary(thread_ts) and read_string(message, :ts) == thread_ts
             }
@@ -541,34 +546,15 @@ defmodule Maraithon.Todos.Brief.Context do
 
   defp slack_display_names(user_id, team_id, messages) do
     ids =
-      messages
-      |> Enum.map(&read_string(&1, :user))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-      |> Enum.take(@max_slack_name_lookups)
-
-    with [_ | _] <- ids,
-         {:ok, token} <- SlackHelpers.resolve_access_token(user_id, team_id, []) do
-      ids
-      |> Enum.reduce(%{}, fn id, acc ->
-        case Slack.get_user_info(token, id) do
-          {:ok, %{"user" => user}} when is_map(user) ->
-            name =
-              first_present([
-                read_string(user, "real_name"),
-                user |> read_map("profile") |> read_string("display_name"),
-                read_string(user, "name")
-              ])
-
-            if is_binary(name), do: Map.put(acc, id, name), else: acc
-
-          _other ->
-            acc
-        end
+      Enum.flat_map(messages, fn message ->
+        [read_string(message, :user)] ++
+          UserDirectory.user_ids_from_text(read_string(message, :text))
       end)
-    else
-      _ -> %{}
-    end
+
+    UserDirectory.for_workspace(user_id, team_id, ids,
+      max_users: @max_slack_name_lookups,
+      timeout: 1_500
+    )
   rescue
     _ -> %{}
   catch

@@ -1062,7 +1062,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     with {:ok, token} <-
            SlackHelpers.resolve_access_token(user_id, team_id, token_preference: token_preference),
          {:ok, conversations} <-
-           list_all_slack_conversations(token.access_token,
+           list_all_slack_conversations(token,
              types: ["public_channel", "private_channel", "mpim", "im"]
            ) do
       workspace = SourceScope.slack_workspace_for_team(source_scope, team_id) || %{}
@@ -1143,7 +1143,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               case call_with_timeout(
                      fn ->
                        fetch_slack_conversation_history(
-                         token.access_token,
+                         token,
                          channel_id,
                          oldest,
                          plan
@@ -1158,10 +1158,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     |> normalize_list()
 
                   {raw_messages, thread_fetches, thread_errors} =
-                    expand_slack_threads(token.access_token, channel_id, raw_messages, plan)
+                    expand_slack_threads(token, channel_id, raw_messages, plan)
 
                   user_directory =
-                    slack_user_directory(token.access_token, raw_messages, channel, directory_acc)
+                    slack_user_directory(token, raw_messages, channel, directory_acc)
 
                   messages =
                     raw_messages
@@ -1227,7 +1227,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         if slack_durable_event_delta?(plan) or slack_source_replay?(plan) do
           fetch_slack_search_delta(
             user_id,
-            token.access_token,
+            token,
             team_id,
             workspace,
             readable_conversations,
@@ -1250,7 +1250,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           {delta_messages, [], []}
         else
           hydrate_slack_event_threads(
-            token.access_token,
+            token,
             team_id,
             workspace,
             readable_conversations,
@@ -1893,7 +1893,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
            {:ok, response} <-
              call_with_timeout(
                fn ->
-                 slack_module().search_messages(token.access_token, query,
+                 slack_module().search_messages(token, query,
                    count: plan.slack_message_limit,
                    sort: "timestamp",
                    sort_dir: "desc"
@@ -1906,7 +1906,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           |> get_in(["messages", "matches"])
           |> normalize_list()
 
-        user_directory = slack_user_directory(token.access_token, raw_matches, nil)
+        user_directory = slack_user_directory(token, raw_matches, nil)
 
         matches =
           Enum.map(raw_matches, &serialize_slack_match(&1, team_id, workspace, user_directory))
@@ -1958,7 +1958,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
           case call_with_timeout(
                  fn ->
-                   slack_module().search_messages(token.access_token, query,
+                   slack_module().search_messages(token, query,
                      count: search_limit,
                      sort: "timestamp",
                      sort_dir: "desc"
@@ -1974,7 +1974,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 |> Enum.filter(&slack_broadcast_match?(&1, raw_token))
                 |> Enum.filter(&slack_search_match_recent?(&1, oldest))
 
-              user_directory = slack_user_directory(token.access_token, raw_matches, nil)
+              user_directory = slack_user_directory(token, raw_matches, nil)
 
               matches =
                 Enum.map(raw_matches, fn match ->
@@ -2042,7 +2042,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         {:ok, token} ->
           {matches, query_fetches} =
             fetch_slack_self_authored_queries(
-              token.access_token,
+              token,
               team_id,
               workspace,
               slack_user_id,
@@ -2215,7 +2215,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp slack_search_match_recent?(_match, _oldest), do: true
 
   defp expand_slack_threads(access_token, channel_id, raw_messages, plan)
-       when is_binary(access_token) and is_binary(channel_id) and is_list(raw_messages) do
+       when is_map(access_token) and is_binary(channel_id) and is_list(raw_messages) do
     thread_ids =
       raw_messages
       |> slack_thread_ids_from_messages()
@@ -5203,7 +5203,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       if lookup_user_ids != [] do
         UserDirectory.resolve(access_token, lookup_user_ids,
           max_users: length(lookup_user_ids),
-          max_concurrency: 8,
           timeout: @slack_user_directory_timeout_ms
         )
       else
@@ -5482,7 +5481,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     |> Enum.uniq_by(&normalize_string(&1["ts"]))
   end
 
-  defp list_all_slack_conversations(access_token, opts) when is_binary(access_token) do
+  defp list_all_slack_conversations(access_token, opts) when is_map(access_token) do
     list_all_slack_conversations(access_token, opts, nil, [])
   end
 

@@ -783,6 +783,27 @@ defmodule Maraithon.Todos do
 
   def update_for_user(_user_id, _todo_id, _attrs, _opts), do: {:error, :not_found}
 
+  @doc "Resolve Slack display names outside locks, then save only against the same task version."
+  def resolve_slack_names(%Todo{} = todo) do
+    case Maraithon.Todos.SlackNames.changes(todo) do
+      changes when map_size(changes) == 0 ->
+        {:ok, todo}
+
+      changes ->
+        Repo.transaction(fn ->
+          with %Todo{} = current <- get_todo_for_update(todo.user_id, todo.id),
+               :ok <- validate_todo_snapshot(current, todo),
+               {:ok, updated} <- current |> Todo.changeset(changes) |> Repo.update(),
+               {:ok, _} <- sync_linked_insight(updated) do
+            updated
+          else
+            nil -> Repo.rollback(:not_found)
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+    end
+  end
+
   @doc """
   Merges top-level keys into the todo's metadata with a direct write. This
   skips the full update pipeline (insight sync, embedding refresh, outcome

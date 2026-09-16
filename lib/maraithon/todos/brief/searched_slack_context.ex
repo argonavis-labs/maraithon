@@ -5,6 +5,7 @@ defmodule Maraithon.Todos.Brief.SearchedSlackContext do
   is partial source coverage; it never claims to have checked later replies.
   """
   alias Maraithon.Connectors.Slack
+  alias Maraithon.Slack.UserDirectory
   alias Maraithon.Tools
   alias Maraithon.Tools.SlackHelpers
   alias Maraithon.Todos.SourceActions
@@ -25,6 +26,8 @@ defmodule Maraithon.Todos.Brief.SearchedSlackContext do
              %{surface: "internal", user_id: user_id}
            ),
          %{} = message <- Enum.find(matches, &(&1.channel_id == channel and &1.ts == timestamp)) do
+      names = Maraithon.Todos.SlackNames.directory(todo)
+
       %{
         "status" => "excerpt_only",
         "provider" => "slack",
@@ -35,8 +38,11 @@ defmodule Maraithon.Todos.Brief.SearchedSlackContext do
         "conversation" => [
           %{
             "user_id" => message.user,
-            "from" => message.user,
-            "text" => String.slice(message.text || "", 0, 6_000),
+            "from" => UserDirectory.display_name(names, message.user) || message.user,
+            "text" =>
+              (message.text || "")
+              |> UserDirectory.replace_mentions(names)
+              |> String.slice(0, 6_000),
             "at" => DateTime.to_iso8601(at),
             "is_source_message" => true
           }
