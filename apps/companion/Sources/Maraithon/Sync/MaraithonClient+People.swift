@@ -15,11 +15,10 @@ extension MaraithonClient {
     }
 
     func networkPerson(days: Int, id: String) async throws -> PeopleNetworkData.Person {
-        guard let escaped = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else {
-            throw MaraithonClientError.invalidResponse
-        }
-        let request = try await makeRequest(method: "GET", path: "/api/v1/companion/people/network/\(escaped)", body: nil,
+        var request = try await makeRequest(method: "GET", path: "/api/v1/companion/people/network", body: nil,
                                             queryItems: [URLQueryItem(name: "days", value: String(days))])
+        // Encode the opaque ID once as a component, after building the base URL.
+        request.url = request.url?.appending(component: id)
         let (data, response) = try await transport(request)
         try Self.validate(response: response, data: data)
         return try JSONDecoder().decode(PeopleNetworkData.PersonResponse.self, from: data).person
