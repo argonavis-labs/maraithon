@@ -829,6 +829,12 @@ placeholder drafts from all provider fallback cards and labels a genuine Gmail
 fallback as a suggested reply for review. It adds no model or provider call.
 The server build passed; deployed UI verification is pending.
 
+Commit `9c17e172` deployed through successful workflow `35139481014` to
+revision `maraithon-00437-rdw`, serving all traffic. The installed Mac app then
+showed the controlled todo with its chat composer and no placeholder draft card
+or false reconnect warning. Native binaries did not change. Recovery workflow
+`35139998036` was dispatched for the original eval job; its result is pending.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
