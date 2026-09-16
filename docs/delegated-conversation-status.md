@@ -2,6 +2,14 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Calendar emphasis through the day
+
+Finished calendar rows now use muted text and regular time labels in the iPhone Today view, briefing history, and web briefing. Current and upcoming events retain their emphasis. A shared server projection resolves explicit time ranges using the brief's date and timezone; unclear rows remain unchanged. Each visible surface advances its clock every minute without fetching calendar data or making a model call. New briefs retain their timezone in the existing metadata. No database or SwiftData migration is required.
+
+Commit `0b823a05` passed the Phoenix compile and iPhone simulator build, including project generation. Tests were not run under the current manual-first policy. The Mac has no Today briefing view, so no companion binary changed.
+
+Server workflow `35062001913` succeeded; revision `maraithon-00395-s2f` serves all traffic. The authenticated web briefing was inspected visually: all seven September 15 calendar rows were muted after their end times, while surrounding notes retained their styling. Mobile workflow `35062001946` succeeded; TestFlight 1.0.1 (`20260916060331`) is available to Founders, including Kent. No physical iPhone interaction was performed.
+
 ## Standalone Chat sessions
 
 Opening a task creates a durable conversation for its history. That conversation previously appeared in the general Chat list, even when the user had not started a chat session. Task conversations now stay with Todos. Web and iPhone list standalone sessions in Chat, and task reply notifications open the associated todo. Old web and iPhone chat links resolve the stored task identity and open its workspace.
