@@ -57,6 +57,15 @@ defmodule Maraithon.Release do
     delegation_eval(fn -> Maraithon.Delegations.EvaluationRunner.status() end, "DELEGATION_EVAL=")
   end
 
+  def delegation_eval_memory do
+    delegation_eval(
+      fn ->
+        Maraithon.Delegations.EvaluationMemory.run(System.get_env("DELEGATION_EVAL_JOB_ID"))
+      end,
+      "DELEGATION_EVAL="
+    )
+  end
+
   defp delegation_eval(fun, prefix) do
     load_app()
     {:ok, _} = Application.ensure_all_started(:req)

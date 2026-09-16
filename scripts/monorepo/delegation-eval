@@ -4,7 +4,13 @@ set -euo pipefail
 case "${1:-}" in
   delegation-eval-start) task=delegation_eval_start ;;
   delegation-eval-status) task=delegation_eval_status ;;
-  *) echo "Expected delegation-eval-start or delegation-eval-status" >&2; exit 1 ;;
+  delegation-eval-memory)
+    task=delegation_eval_memory
+    [[ "${DELEGATION_EVAL_JOB_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+      echo "A completed controlled eval job UUID is required" >&2; exit 1;
+    }
+    ;;
+  *) echo "Expected delegation-eval-start, delegation-eval-status or delegation-eval-memory" >&2; exit 1 ;;
 esac
 
 source "$(dirname "$0")/delegation-eval-config"
@@ -14,6 +20,7 @@ case "${scenario}" in
   *) echo "Unknown controlled eval scenario" >&2; exit 1 ;;
 esac
 eval_env+="|DELEGATION_EVAL_SCENARIO=${scenario}"
+eval_env+="|DELEGATION_EVAL_JOB_ID=${DELEGATION_EVAL_JOB_ID:-}"
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 gcloud run jobs execute maraithon-todo-validation --project maraithon --region us-central1 \

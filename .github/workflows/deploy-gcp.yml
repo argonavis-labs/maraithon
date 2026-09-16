@@ -23,9 +23,14 @@ on:
           - delegation-eval-preflight
           - delegation-eval-start
           - delegation-eval-status
+          - delegation-eval-memory
           - reset-rebuild-kent
           - replay-gmail
           - replay-slack
+      delegation_eval_job_id:
+        description: Completed information eval job UUID for read-only memory verification
+        required: false
+        type: string
       gmail_replay_lower:
         description: Gmail replay lower Unix second (inclusive)
         required: false
@@ -111,10 +116,11 @@ jobs:
         run: scripts/monorepo/delegation-eval-preflight
 
       - name: Run or inspect the controlled delegation eval
-        if: github.event_name == 'workflow_dispatch' && (inputs.operation == 'delegation-eval-start' || inputs.operation == 'delegation-eval-status')
+        if: github.event_name == 'workflow_dispatch' && (inputs.operation == 'delegation-eval-start' || inputs.operation == 'delegation-eval-status' || inputs.operation == 'delegation-eval-memory')
         run: scripts/monorepo/delegation-eval "${OPERATION}"
         env:
           OPERATION: ${{ inputs.operation }}
+          DELEGATION_EVAL_JOB_ID: ${{ inputs.delegation_eval_job_id }}
 
       - name: Replay Kent's Gmail source window
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'
