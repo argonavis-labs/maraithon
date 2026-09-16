@@ -1,0 +1,67 @@
+{
+  "date": "2026-09-16",
+  "checked_at": "2026-09-16T04:12:25.104525+00:00",
+  "change": "Full BEAM loss during a model decision, followed by recovery through the global recurring sweep",
+  "commit": "3bd01e0f2873fd2f47e561e5ac05d9443071eb90",
+  "validation": {
+    "command": "MIX_ENV=test mix run --no-start test/evals/delegation_beam_recovery.exs",
+    "isolated_evals": 2,
+    "failures": 0,
+    "seconds": 35.3,
+    "remaining_disposable_databases": 0,
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0,
+    "log": "/tmp/maraithon-beam-decision-recovery.log"
+  },
+  "observed": {
+    "BEAM_RECOVERY_EVIDENCE": {
+      "provider": "local HTTP fixture",
+      "model_calls": 0,
+      "old_incarnation": "fe737f74-ceff-4b25-8209-77931d8dd0f3",
+      "new_incarnation": "66faeb78-75c3-435e-9ac4-dbe30f6b0f64",
+      "os_exit_status": 137,
+      "provider_send_count": 1,
+      "proven_send_count": 1,
+      "stale_writes_rejected": 2,
+      "stale_agent_fences_rejected": 2,
+      "older_coordinator_checkpoint_restored": true,
+      "checkpoint_bytes": 49,
+      "coordinator_owner_changed": true,
+      "periodic_producers": false
+    },
+    "BEAM_DECISION_RECOVERY_EVIDENCE": {
+      "provider": "local HTTP fixture",
+      "old_incarnation": "902ca2de-99e3-4c32-af7c-cb86cb010364",
+      "new_incarnation": "283c68b0-cb35-46b7-878a-2e372aabf7ee",
+      "os_exit_status": 137,
+      "provider_send_count": 0,
+      "periodic_producers": false,
+      "same_turn_resumed": true,
+      "fixture_model_calls": 3,
+      "settled_micro_usd": 200,
+      "retained_unknown_micro_usd": 105268,
+      "stale_model_responses_rejected": 2,
+      "decision_events": 1,
+      "real_wake_sweep": true,
+      "global_recurring_job": true,
+      "sweep_rescheduled": true,
+      "coordinator_created": true,
+      "final_state": "waiting_reply",
+      "development_spending": false
+    }
+  },
+  "deployment_required": false,
+  "deployment_reason": "Only test/eval files changed. The repair implementation was already deployed in commit 05e76232a92a639c7cecba02b61b126845c066cb.",
+  "files_sha256": {
+    "test/evals/delegation_beam_recovery.exs": "d2f9f8f58becbb828c2b05bd56e43f584ab17df910f2ef0dbcd31ae0c19a05fd",
+    "test/evals/support/delegation_beam_node.exs": "2507f50262fdf4eeb1d5ae0f0f49a6bd03678fc90892fe1b399ccda741c35592",
+    "lib/maraithon/delegations/recovery.ex": "ecf469d993ee841c9c697e3607e2c56d096307948db0114384bfedba0377a5dc"
+  },
+  "limits": [
+    "Loopback model and mail fixtures; the monetary values are recorded mock billing evidence, not actual provider charges.",
+    "Each case uses a fresh disposable local database and real external BEAM processes; SIGKILL and the observed OS exit precede identity-bound incident-role attestation.",
+    "Periodic product producers and automatic watcher recovery are disabled. The driver invokes the real leased global recurring job and advances required destruction attestations explicitly.",
+    "This does not establish fully automatic boot with every producer, database disaster restore, two schema upgrades across 180 days, or a real longevity canary.",
+    "Live Slack evaluation remains deferred."
+  ]
+}
