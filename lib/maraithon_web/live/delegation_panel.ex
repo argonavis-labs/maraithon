@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.DelegationPanel do
   use MaraithonWeb, :live_component
   alias Maraithon.{AssistantIdentities, Delegations}
+  alias Maraithon.Delegations.Preflight
   alias MaraithonWeb.DelegationCopy
 
   @impl true
@@ -12,11 +13,19 @@ defmodule MaraithonWeb.DelegationPanel do
        scope: nil,
        error: nil,
        actor: "as_user",
+       preflight_id: nil,
+       preview_ref: nil,
        request_id: Ecto.UUID.generate()
      )}
   end
 
   @impl true
+  def update(%{preview_poll: ref}, socket) do
+    if socket.assigns.open? and socket.assigns.preview_ref == ref and is_nil(socket.assigns.scope),
+      do: {:ok, poll_preview(socket)},
+      else: {:ok, socket}
+  end
+
   def update(attrs, socket) do
     socket = assign(socket, attrs)
     todo = socket.assigns.todo
@@ -39,7 +48,11 @@ defmodule MaraithonWeb.DelegationPanel do
        socket |> assign(open?: true, request_id: Ecto.UUID.generate())
        |> preview((socket.assigns.proposal || %{})["actor"] || "as_user")}
 
-  def handle_event("close", _, socket), do: {:noreply, assign(socket, open?: false)}
+  def handle_event("close", _, socket),
+    do: {:noreply, socket |> cancel_async({:preview, socket.assigns.preview_ref})
+      |> assign(open?: false, busy?: false, scope: nil, preflight_id: nil, preview_ref: nil)}
+
+  def handle_event("retry_preview", _, socket), do: {:noreply, preview(socket, socket.assigns.actor)}
 
   def handle_event("actor", %{"actor" => actor}, socket) when actor in ~w(as_user as_assistant),
     do: {:noreply, preview(socket, actor)}
@@ -59,6 +72,7 @@ defmodule MaraithonWeb.DelegationPanel do
       "to" => recipients(input["to"], scope["to"]),
       "cc" => recipients(input["cc"], scope["cc"]),
       "scope_hash" => scope["scope_hash"],
+      "preflight_id" => socket.assigns.preflight_id,
       "request_id" => socket.assigns.request_id,
       "expected_revision" => scope["workflow_revision"]
     }
@@ -95,8 +109,21 @@ defmodule MaraithonWeb.DelegationPanel do
   def handle_event("control", _, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_async(:preview, {:ok, {:ok, scope}}, socket),
-    do: {:noreply, assign(socket, scope: scope, busy?: false)}
+  def handle_async({:preview, ref}, result, %{assigns: %{preview_ref: ref, open?: true}} = socket) do
+    case result do
+      {:ok, {:ok, %{scope: scope, preflight: %{id: id}}}} ->
+        {:noreply, assign(socket, scope: scope, preflight_id: id, busy?: false)}
+
+      {:ok, {:ok, %{preflight: %{id: id, retry_after_ms: delay}}}} ->
+        send_update_after(__MODULE__, [id: socket.assigns.id, preview_poll: ref], delay)
+        {:noreply, assign(socket, preflight_id: id)}
+
+      {:ok, {:error, reason}} -> failed(socket, reason)
+      {:exit, _} -> failed(socket, :unavailable)
+    end
+  end
+
+  def handle_async({:preview, _}, _, socket), do: {:noreply, socket}
 
   def handle_async(operation, {:ok, {:ok, d}}, socket) when operation in [:delegate, :control],
     do:
@@ -118,14 +145,22 @@ defmodule MaraithonWeb.DelegationPanel do
   end
 
   defp preview(socket, actor) do
-    todo = socket.assigns.todo
     kind = (socket.assigns.proposal || %{})["kind"] || "information"
 
     socket
-    |> assign(actor: actor, busy?: true, scope: nil, error: nil)
-    |> start_async(:preview, fn ->
-      Delegations.preview(todo.user_id, todo.id, %{"actor" => actor,
-        "kind" => kind})
+    |> cancel_async({:preview, socket.assigns.preview_ref})
+    |> assign(actor: actor, preview_kind: kind, preview_ref: make_ref(), preflight_id: nil,
+      busy?: true, scope: nil, error: nil)
+    |> poll_preview()
+  end
+
+  defp poll_preview(socket) do
+    todo = socket.assigns.todo
+    attrs = %{"actor" => socket.assigns.actor, "kind" => socket.assigns.preview_kind,
+      "preflight_id" => socket.assigns.preflight_id}
+
+    start_async(socket, {:preview, socket.assigns.preview_ref}, fn ->
+      Preflight.preview(todo.user_id, todo.id, attrs)
     end)
   end
 
@@ -163,16 +198,17 @@ defmodule MaraithonWeb.DelegationPanel do
       <div :if={@open?} class="space-y-4 rounded-lg border border-zinc-950/10 p-4" aria-label="Delegate this task">
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-sm/6 font-semibold text-zinc-950">Delegate this task</h2>
-          <.button variant="plain" phx-click="close" phx-target={@myself} disabled={@busy?}>Cancel</.button>
+          <.button variant="plain" phx-click="close" phx-target={@myself} disabled={@busy? && not is_nil(@scope)}>Cancel</.button>
         </div>
         <div class="flex flex-wrap gap-2" aria-label="Sending identity">
           <.button :for={{actor, label} <- [{"as_user", "As me"}, {"as_assistant", "As my assistant"}]}
             variant={if(@actor == actor, do: "solid", else: "outline")} aria-pressed={@actor == actor}
             phx-click="actor" phx-value-actor={actor} phx-target={@myself}
-            disabled={@busy? || (actor == "as_assistant" && !@assistant?)}><%= label %></.button>
+            disabled={(@busy? && not is_nil(@scope)) || (actor == "as_assistant" && !@assistant?)}><%= label %></.button>
           <.link :if={!@assistant?} href={~p"/settings/assistant"} class="self-center text-sm/6 text-zinc-600 underline">Set up your assistant</.link>
         </div>
-        <p :if={@busy?} role="status" class="text-sm/6 text-zinc-500">Checking this conversation…</p>
+        <p :if={@busy?} role="status" class="text-sm/6 text-zinc-500"><%= if @scope, do: "Starting delegation…", else: "Checking this conversation… You can close this and return later." %></p>
+        <.button :if={@error && is_nil(@scope) && !@busy?} variant="outline" phx-click="retry_preview" phx-target={@myself}>Retry</.button>
         <.form :if={@scope} for={%{}} as={:delegation} phx-submit="delegate" phx-target={@myself} class="space-y-3">
           <.description_list>
             <.description_term>From</.description_term>

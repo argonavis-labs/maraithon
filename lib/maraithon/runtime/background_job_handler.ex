@@ -42,6 +42,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   def execute(%BackgroundJob{job_type: "delegation_sync"} = job),
     do: Maraithon.Delegations.Sources.execute(job)
 
+  def execute(%BackgroundJob{job_type: "delegation_preflight"} = job),
+    do: Maraithon.Delegations.Preflight.execute(job)
+
   def execute(%BackgroundJob{job_type: "delegation_decide"} = job),
     do: Maraithon.Delegations.Decision.execute(job)
 

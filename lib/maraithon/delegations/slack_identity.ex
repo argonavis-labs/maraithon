@@ -6,7 +6,7 @@ defmodule Maraithon.Delegations.SlackIdentity do
   alias Maraithon.Tools.SlackHelpers
   alias Maraithon.Todos.SourceActions
 
-  def preview(todo, account, actor) do
+  def preview(todo, account, actor, opts \\ []) do
     location = SourceActions.slack_location(todo)
     team = team_id(account.provider)
     installation = OAuth.get_token(todo.user_id, "slack:#{team}")
@@ -71,7 +71,8 @@ defmodule Maraithon.Delegations.SlackIdentity do
                todo.user_id,
                identity,
                location.channel,
-               root
+               root,
+               opts
              ),
            participants =
              if(channel["is_im"] == true,
@@ -108,6 +109,7 @@ defmodule Maraithon.Delegations.SlackIdentity do
         {:ok, Map.put(source, "counterparty_user_ids", participants), identity}
       else
         {:error, _} = error -> error
+        {:pending, _} = pending -> pending
         _ -> {:error, :slack_counterparty_unavailable}
       end
     else

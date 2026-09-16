@@ -9,13 +9,24 @@ defmodule Maraithon.Delegations.SlackSource do
   # Preflight has no granted turn yet. Use the same bounded reader without
   # persisting authority or claiming that a partial read is complete.
   def fetch(user_id, identity, channel, thread, opts \\ []) do
-    with {:ok, token} <- SlackIdentity.read_token(user_id, identity, channel),
-         do:
-           drain(
-             token,
-             start(identity["account_id"], channel, thread, opts),
-             System.monotonic_time(:millisecond) + 15_000
-           )
+    initial = start(identity["account_id"], channel, thread, opts)
+    state = opts[:page_progress] || initial
+
+    with true <-
+           Map.take(state, ~w(version account_id channel thread_id history)) ==
+             Map.take(initial, ~w(version account_id channel thread_id history)),
+         {:ok, token} <- SlackIdentity.read_token(user_id, identity, channel) do
+      if Keyword.has_key?(opts, :page_progress) do
+        with {:ok, _, next} <- page(token, state),
+             {:ok, snapshot} <- completed(next),
+             do: if(snapshot, do: {:ok, snapshot}, else: {:pending, next})
+      else
+        drain(token, state, System.monotonic_time(:millisecond) + 15_000)
+      end
+    else
+      false -> {:error, :source_gap}
+      error -> error
+    end
   end
 
   def read(context, key) do

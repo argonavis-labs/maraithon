@@ -8,6 +8,15 @@ defmodule MaraithonWeb.DelegationCopy do
   def error({:conflict, _}), do: "This conversation changed. Its latest status is shown."
   def error(:already_delegated), do: "Maraithon is already following up on this task."
 
+  def error(:preflight_pending),
+    do: "The conversation check is still running. Try again when it's ready."
+
+  def error(:preflight_expired),
+    do: "This conversation check expired. Review it again before delegating."
+
+  def error({:preflight_failed, reason}),
+    do: "Couldn't check this conversation: #{reason}. Check its source account, then retry."
+
   def error(reason)
       when reason in [
              :sending_identity_unavailable,

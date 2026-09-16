@@ -23,6 +23,13 @@ defmodule MaraithonWeb.DelegationController do
     end
   end
 
+  def preview(conn, %{"id" => todo_id, "async" => true} = params) do
+    case Maraithon.Delegations.Preflight.preview(conn.assigns.current_user.id, todo_id, params) do
+      {:ok, response} -> json(conn, response)
+      error -> respond(conn, error)
+    end
+  end
+
   def preview(conn, %{"id" => todo_id} = params) do
     case Delegations.preview(conn.assigns.current_user.id, todo_id, params) do
       {:ok, scope} -> json(conn, %{scope: scope})

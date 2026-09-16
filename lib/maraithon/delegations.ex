@@ -24,7 +24,11 @@ defmodule Maraithon.Delegations do
 
     with true <- valid_request?(attrs),
          :new <- replay(user_id, attrs["request_id"], request_hash),
-         {:ok, scope} <- preview(user_id, todo_id, attrs),
+         {:ok, scope} <-
+           if(attrs["preflight_id"],
+             do: Maraithon.Delegations.Preflight.scope(user_id, todo_id, attrs),
+             else: preview(user_id, todo_id, attrs)
+           ),
          true <- attrs["scope_hash"] == scope["scope_hash"] do
       transaction(user_id, fn ->
         case replay(user_id, attrs["request_id"], request_hash) do

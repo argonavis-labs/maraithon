@@ -6,7 +6,7 @@ defmodule Maraithon.Delegations.Scope do
   alias Maraithon.Delegations.Preferences
   alias Maraithon.Todos.{Todo, Workflow}
 
-  def preview(%Todo{} = todo, attrs) do
+  def preview(%Todo{} = todo, attrs, opts \\ []) do
     actor = Map.get(attrs, "actor", "as_user")
     kind = Map.get(attrs, "kind", "information")
 
@@ -14,14 +14,38 @@ defmodule Maraithon.Delegations.Scope do
            actor in ~w(as_user as_assistant) and kind in ~w(information scheduling coordination),
          true <- todo.status in ~w(open snoozed),
          %ConnectedAccount{status: "connected"} = account <- account(todo),
-         {:ok, source, identity} <- source(todo, account, actor),
+         {:ok, source, identity} <- source(todo, account, actor, opts),
          {:ok, scope} <- build(todo, source, identity, attrs, Preferences.get(todo.user_id)) do
       # Editable form values are explicit user input at submission. This hash
       # protects the derived source and identity the user actually reviewed.
       {:ok, Map.put(scope, "scope_hash", hash(Map.drop(scope, ~w(outcome instruction to cc))))}
     else
       {:error, _} = error -> error
+      {:pending, _} = pending -> pending
       _ -> {:error, :delegation_source_unavailable}
+    end
+  end
+
+  @doc "Apply explicit form edits to completed, server-owned evidence without another source scan."
+  def reviewed(%Todo{} = todo, scope, attrs) do
+    with true <- attrs["actor"] == scope["actor"] and attrs["kind"] == scope["kind"],
+         true <- todo.status in ~w(open snoozed),
+         %ConnectedAccount{status: "connected", id: id} <- account(todo),
+         true <- id == scope["source_account_id"],
+         true <- todo_fingerprint(todo) == scope["todo_fingerprint"],
+         {:ok, updated} <-
+           build(
+             todo,
+             Map.delete(scope, "scope_hash"),
+             scope["identity"],
+             attrs,
+             Preferences.get(todo.user_id)
+           ) do
+      {:ok,
+       Map.put(updated, "scope_hash", hash(Map.drop(updated, ~w(outcome instruction to cc))))}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :scope_changed}
     end
   end
 
@@ -54,7 +78,7 @@ defmodule Maraithon.Delegations.Scope do
 
   defp account(_), do: nil
 
-  defp source(%{source: "gmail"} = todo, account, actor) do
+  defp source(%{source: "gmail"} = todo, account, actor, _opts) do
     with {:ok, identity} <- AssistantIdentities.gmail_snapshot(todo.user_id, actor, account.id),
          {:ok, token} <-
            Maraithon.Connectors.GmailAccess.for_account(todo.user_id, account.id),
@@ -89,10 +113,10 @@ defmodule Maraithon.Delegations.Scope do
     end
   end
 
-  defp source(%{source: "slack"} = todo, account, actor),
-    do: Maraithon.Delegations.SlackIdentity.preview(todo, account, actor)
+  defp source(%{source: "slack"} = todo, account, actor, opts),
+    do: Maraithon.Delegations.SlackIdentity.preview(todo, account, actor, opts)
 
-  defp source(_, _, _), do: {:error, :unsupported_delegation_source}
+  defp source(_, _, _, _), do: {:error, :unsupported_delegation_source}
 
   defp build(todo, source, identity, attrs, prefs) do
     workflow = Workflow.current(todo)
