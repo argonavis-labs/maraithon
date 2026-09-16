@@ -52,6 +52,9 @@ defmodule Maraithon.AssistantChat.AcceptanceRoutingTest do
 
     assert {:ok, accepted} = AssistantChat.send_message(user_id, thread.id, attrs)
     assert accepted.run.status == "queued"
+    job = Repo.get_by!(BackgroundJob, user_id: user_id, job_type: "assistant_chat_request")
+    assert job.queue == AssistantChat.Execution.queue()
+    assert job.partition_key == "assistant-chat:#{thread.id}"
     assert accepted.run.result_summary["model_tier"] == "pending"
     assert {:ok, duplicate} = AssistantChat.send_message(user_id, thread.id, attrs)
     assert duplicate.run.id == accepted.run.id

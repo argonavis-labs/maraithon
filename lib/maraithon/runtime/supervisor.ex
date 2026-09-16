@@ -59,16 +59,28 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.Bootstrap,
             # Deliberately non-fair: this heterogeneous runner owns ordered
             # Telegram ingress. Migration 140004 will supply its global tenant
-            # policy; only the two homogeneous lanes below use local rotation.
+            # policy; the homogeneous lanes below use local rotation.
             Supervisor.child_spec(
               {Maraithon.Runtime.BackgroundJobRunner,
                exclude_queues: [
                  PeriodicJobs.provider_queue(),
                  PeriodicJobs.model_queue(),
+                 Maraithon.AssistantChat.Execution.queue(),
                  Maraithon.Todos.Brief.queue(),
                  Maraithon.PeopleNetwork.queue()
                ]},
               id: Maraithon.Runtime.BackgroundJobRunner
+            ),
+            Supervisor.child_spec(
+              {Maraithon.Runtime.BackgroundJobRunner,
+               name: Maraithon.Runtime.ChatBackgroundJobRunner,
+               queues: [Maraithon.AssistantChat.Execution.queue()],
+               fair?: true,
+               max_concurrency: Config.positive_integer(:chat_job_max_concurrency, 4),
+               max_partition_concurrency: 1,
+               max_rate_limit_concurrency: Config.positive_integer(:chat_job_max_concurrency, 4),
+               reconcile_recurring_jobs?: false},
+              id: Maraithon.Runtime.ChatBackgroundJobRunner
             ),
             Supervisor.child_spec(
               {Maraithon.Runtime.BackgroundJobRunner,

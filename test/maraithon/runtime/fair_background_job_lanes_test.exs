@@ -62,6 +62,37 @@ defmodule Maraithon.Runtime.FairBackgroundJobLanesTest do
     assert Repo.get!(BackgroundJob, google_second.id).status == "pending"
   end
 
+  test "interactive chat completes while the background model worker is occupied" do
+    model = enqueue!("occupied-model", "tenant:shared", -1, "model", "block")
+    chat_queue = Maraithon.AssistantChat.Execution.queue()
+
+    {:ok, chat} =
+      BackgroundJobs.enqueue("fair_test:chat", %{
+        queue: chat_queue,
+        partition_key: "tenant:shared",
+        rate_limit_key: "model"
+      })
+
+    model_runner = start_fair_runner(:occupied_model_runner, [])
+    chat_runner = start_fair_runner(:interactive_chat_runner, queues: [chat_queue])
+    task_supervisor = start_supervised!({Task.Supervisor, []})
+
+    drain =
+      Task.Supervisor.async(task_supervisor, fn ->
+        BackgroundJobRunner.drain_once(model_runner)
+      end)
+
+    assert_receive {:fair_lane_started, handler, %BackgroundJob{id: model_id}}, 2_000
+    assert model_id == model.id
+
+    assert {:ok, [{chat_id, {:ok, _}}]} = BackgroundJobRunner.drain_once(chat_runner)
+    assert chat_id == chat.id
+    assert Repo.get!(BackgroundJob, model.id).status == "running"
+
+    send(handler, {:release_fair_lane_job, model.id})
+    assert {:ok, [{^model_id, {:ok, _}}]} = Task.await(drain)
+  end
+
   test "provider Retry-After durably cools its rate key without blocking another provider" do
     google_first = enqueue!("google-1", "account:1", -3, "google", "retry")
     google_second = enqueue!("google-2", "account:2", -2, "google")

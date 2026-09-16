@@ -806,18 +806,25 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert second.tenant_key == "user:tenant-b"
   end
 
-  test "exact fair admission isolates generic, provider, and model lanes" do
+  test "exact fair admission isolates generic, provider, model, and interactive chat lanes" do
     %{node: node, partitions: partitions} = active_authority!(["tenant-a"])
     insert_user!("tenant-a")
 
     generic = insert_job!("tenant-a", "generic", queue: "relationships")
     provider = insert_job!("tenant-a", "provider", queue: "runtime_provider_account")
     model = insert_job!("tenant-a", "model", queue: "runtime_model_user")
+    chat_queue = Maraithon.AssistantChat.Execution.queue()
+    chat = insert_job!("tenant-a", "chat", queue: chat_queue)
 
     assert {:ok, {reserved_model, _assignment, _identity}} =
              FairScheduler.reserve_next(node, partitions, queues: ["runtime_model_user"])
 
     assert reserved_model.id == model.id
+
+    assert {:ok, {reserved_chat, _assignment, _identity}} =
+             FairScheduler.reserve_next(node, partitions, queues: [chat_queue])
+
+    assert reserved_chat.id == chat.id
 
     assert {:ok, {reserved_provider, _assignment, _identity}} =
              FairScheduler.reserve_next(node, partitions, queues: ["runtime_provider_account"])
@@ -826,7 +833,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
 
     assert {:ok, {reserved_generic, _assignment, _identity}} =
              FairScheduler.reserve_next(node, partitions,
-               exclude_queues: ["runtime_provider_account", "runtime_model_user"]
+               exclude_queues: ["runtime_provider_account", "runtime_model_user", chat_queue]
              )
 
     assert reserved_generic.id == generic.id

@@ -640,6 +640,9 @@ config :maraithon, Maraithon.Runtime,
   # Keep background job capacity below the reasoning limit so direct Agent
   # effects can make progress while source-account workers are occupied.
   model_job_max_concurrency: String.to_integer(System.get_env("MODEL_JOB_MAX_CONCURRENCY", "3")),
+  # Interactive conversations must not wait for discovery or briefing jobs.
+  # They retain the same durable per-user admission and per-thread ordering.
+  chat_job_max_concurrency: String.to_integer(System.get_env("CHAT_JOB_MAX_CONCURRENCY", "4")),
   # Independent source accounts may acquire and reason concurrently. The
   # exact fairness table keeps this bounded per user, and each account still
   # has its own ordered acquisition partition.

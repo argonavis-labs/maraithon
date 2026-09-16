@@ -46,12 +46,14 @@ defmodule Maraithon.AssistantChat.Execution do
     end
   end
 
+  def queue, do: "runtime_chat_user"
+
   def enqueue(%Run{surface: "mobile"} = run, %Turn{role: "user"} = turn) do
     if run.conversation_id == turn.conversation_id and
          Turn.effective_assistant_run_id(turn) == run.id do
       BackgroundJobs.enqueue(@job_type, %{
         user_id: run.user_id,
-        queue: "runtime_model_user",
+        queue: queue(),
         partition_key: "assistant-chat:#{run.conversation_id}",
         rate_limit_key: "model",
         dedupe_key: dedupe_key(run.id),
