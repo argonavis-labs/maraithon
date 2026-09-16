@@ -281,6 +281,16 @@ Todo workflow mapping while a delegation is live:
 2. Iterate `Calendar.FreeBlocks.openings/3` per local day, since it computes one work day at a time, then apply buffer, lead time, and the daily cap in `propose_slots/2` in the user's timezone.
 3. Rank by the user's stated preferences (earlier in the week, mornings, and so on) and return the top eight with a coverage summary and the exact read timestamps.
 
+The preferences payload carries `time_preference` (`any`, `morning`, `afternoon`)
+and `day_preference` (`earliest`, `early_week`, `late_week`). These rank available
+times without expanding working hours or other calendar constraints. Rank by
+time preference, then weekday preference, then chronological start, returning
+at most three choices per local day. The bounded `find_times` read may override
+these choices only for a preference stated in the grant or conversation. Save
+the request and applied ranking with the computed slots. The final review must
+still check hard constraints against the source; a fallback slot is not permission
+to ignore "afternoons only".
+
 The model picks up to three to offer and writes the message. Each offered slot is recorded on the turn. When a counterparty accepts a slot, the reducer emits `book`: the send job calls the existing `calendar_create_event` action with attendees and `sendUpdates: "all"`, keeping the event ID the runner already derives from the prepared action ID (Google requires its base32hex form), the fresh `ensure_calendar_slot_free` check, and ownership markers. The accepted slot is part of the frozen payload. A conflict returns to `deciding` with the slot marked taken and re-offers once. Booking is proven by the existing calendar reconciliation, which completes the delegation and moves the todo to Waiting until the meeting. If the user has a Calendly link for the context, the model may offer it as an alternative in the same message, never instead of computed slots. Google `freebusy.query` for other people's calendars is a later addition.
 
 ## Gmail and Slack adapters
