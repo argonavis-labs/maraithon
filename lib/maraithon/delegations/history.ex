@@ -130,6 +130,7 @@ defmodule Maraithon.Delegations.History do
         "own_send" -> "Sent message observed"
         "human_send" -> "Your message observed"
         "auto_reply" -> "Automatic reply received"
+        "acknowledgement" -> "Thanks received"
         "bounce" -> "Delivery problem received"
         "source_changed" -> "Source message changed"
         "stop" -> "Request to stop received"

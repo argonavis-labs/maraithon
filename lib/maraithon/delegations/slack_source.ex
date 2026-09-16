@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.SlackSource do
   import Ecto.Query
   alias Maraithon.Repo
   alias Maraithon.Connectors.Slack
-  alias Maraithon.Delegations.{Scope, SlackIdentity, SlackIngress, Turn}
+  alias Maraithon.Delegations.{ReplyIntent, Scope, SlackIdentity, SlackIngress, Turn}
   alias Maraithon.TelegramAssistant.Run
   @page_size 100
   @max_messages 10_000
@@ -44,6 +44,7 @@ defmodule Maraithon.Delegations.SlackSource do
 
     initial =
       start(scope["identity"]["account_id"], channel, thread, include_unthreaded?: history?)
+      |> verify_baseline(key, context.run.prompt_snapshot["sources"])
 
     state = context.run.prompt_snapshot[key] || resume(context, key, initial) || initial
 
@@ -59,6 +60,16 @@ defmodule Maraithon.Delegations.SlackSource do
       error -> error
     end
   end
+
+  defp verify_baseline(state, "slack_verify", %{"messages" => messages})
+       when is_list(messages) and messages != [] do
+    Map.merge(state, %{
+      "previous_latest" => messages |> Enum.map(& &1["message_id"]) |> Enum.max(),
+      "previous_digests" => state["digests"]
+    })
+  end
+
+  defp verify_baseline(state, _, _), do: state
 
   # A page can discover a reply and supersede its own turn. Preserve the
   # authenticated prefix for the replacement turn, but never carry progress
@@ -350,6 +361,22 @@ defmodule Maraithon.Delegations.SlackSource do
               Enum.sort_by([m | state["messages"]], & &1["message_id"]) |> Enum.take(-6)
         }
 
+        next =
+          if previous_digests = state["previous_digests"] do
+            ignorable? =
+              id > state["previous_latest"] and m["revision_at"] == id and
+                ReplyIntent.thanks_only?(m)
+
+            digest =
+              if ignorable?,
+                do: previous_digests[phase],
+                else: Scope.hash([previous_digests[phase], id, m["revision"]])
+
+            Map.put(next, "previous_digests", Map.put(previous_digests, phase, digest))
+          else
+            next
+          end
+
         {:ok, next, true}
     end
   end
@@ -369,7 +396,9 @@ defmodule Maraithon.Delegations.SlackSource do
         "provider" => "slack",
         "complete" => true,
         "read_at" => state["read_at"] || DateTime.to_iso8601(DateTime.utc_now()),
-        "fingerprint" => Scope.hash(state["digests"])
+        "fingerprint" => Scope.hash(state["digests"]),
+        "previous_fingerprint" =>
+          if(state["previous_digests"], do: Scope.hash(state["previous_digests"]))
       })
 
     Maraithon.DurablePayload.prepare_map(snapshot, 240_000)
@@ -402,8 +431,9 @@ defmodule Maraithon.Delegations.SlackSource do
           )
 
     match?({:ok, _}, old) and
-      Map.take(snapshot, ~w(account_id channel thread_id fingerprint)) ==
-        Map.take(elem(old, 1), ~w(account_id channel thread_id fingerprint))
+      Map.take(snapshot, ~w(account_id channel thread_id)) ==
+        Map.take(elem(old, 1), ~w(account_id channel thread_id)) and
+      elem(old, 1)["fingerprint"] in [snapshot["fingerprint"], snapshot["previous_fingerprint"]]
   end
 
   def normalize(raw, channel, root) when is_map(raw) do
@@ -429,7 +459,9 @@ defmodule Maraithon.Delegations.SlackSource do
       "deleted" => raw["event_type"] == "message_deleted" || raw["deleted"] == true
     }
 
-    Map.put(data, "revision", Maraithon.Delegations.Scope.hash(data))
+    data
+    |> Map.put("revision", Maraithon.Delegations.Scope.hash(data))
+    |> Map.put("text_only", ReplyIntent.slack_text_only?(raw))
   end
 
   def normalize(_, _, _), do: %{}
@@ -480,6 +512,9 @@ defmodule Maraithon.Delegations.SlackSource do
 
       text in ["stop", "please stop", "unsubscribe", "please stop messaging me"] ->
         "stop"
+
+      ReplyIntent.thanks_only?(message) ->
+        "acknowledgement"
 
       true ->
         "reply"

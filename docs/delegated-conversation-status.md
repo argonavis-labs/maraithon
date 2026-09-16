@@ -2,6 +2,16 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Thanks-only replies without model calls
+
+Gmail and Slack now share a whole-message classifier for short thanks-only replies. An acknowledgement stays in the event ledger and history, but does not advance the source revision, start a decision turn, complete the todo or reset its follow-up schedule. Sender, participant, takeover, stop and delivery-error checks run first. Agreement such as "yes", completion claims and requests such as "Thanks, book the first time" remain substantive.
+
+The classifier requires verified text-only content and an entire body from a short phrase list, capped at 128 bytes. Gmail also requires the original subject, allowing `Re:` prefixes. The full-message reader preserves a plain-body marker; HTML alternatives, attachments, unsupported MIME parts and older records without that marker keep the normal path. Slack accepts plain messages and matching text-only rich-text blocks. Files, attachments and unsupported blocks keep the normal path. Editing an earlier Slack message into an acknowledgement still invalidates the source.
+
+An acknowledgement arriving before a send also needs special handling. Gmail can exclude up to 64 newly arrived acknowledgements already classified in the account-bound ledger, but the entire remaining header index must match the saved fingerprint. Slack's fresh paginated verification computes a second fingerprint that excludes only new, unedited thanks-only messages. The original fingerprint remains intact. Participant and revision checks still apply, so other changes cannot pass through this exception. Gmail verification resumes its bounded source read when additional pages remain.
+
+`make build` passed with warnings treated as errors. Tests were not run under the manual-first policy. No live acknowledgement exchange has verified this path yet, and no cost reduction is claimed from the compile. Composition and independent model review remain unchanged. The plan's target below 1.3 model calls per turn conflicts with unconditional composition plus independent review; the target remains unresolved pending Kent's preference.
+
 ## Slack source progress across replacement turns
 
 A Slack history page can discover a missed reply and advance the conversation's source revision. That makes its current turn obsolete. Previously, the replacement turn started the thread scan again, including when the preceding scan had just finished.

@@ -11,9 +11,22 @@ defmodule Maraithon.Delegations.Sources do
         Toolbox.verify_before_send(context)
       else
         with {:ok, messages, sources} <- GmailSource.read(context, index),
-             {:ok, _} <-
-               Jobs.transaction(job, fn current -> route!(current, messages, sources) end),
-             do: {:error, :source_changed}
+             {:ok, result} <-
+               Jobs.transaction(job, fn current ->
+                 route!(current, messages, sources)
+
+                 cond do
+                   is_nil(sources) -> :reading
+                   GmailSource.unchanged_except_thanks?(current, index) -> :unchanged
+                   true -> :changed
+                 end
+               end) do
+          case result do
+            :unchanged -> Toolbox.verify_before_send(context)
+            :reading -> {:retry, 1_000}
+            _ -> {:error, :source_changed}
+          end
+        end
       end
     end
   end

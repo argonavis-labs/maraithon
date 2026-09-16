@@ -197,6 +197,11 @@ defmodule Maraithon.Delegations.GmailThreads do
 
   defp ids(_), do: []
 
+  def same_subject?(left, right) do
+    normalized = subject(left)
+    is_binary(normalized) and normalized == subject(right)
+  end
+
   defp subject(value) when is_binary(value),
     do: value |> String.trim() |> String.replace(~r/^(?:re:\s*)+/i, "") |> String.downcase()
 

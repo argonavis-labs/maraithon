@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.Ingress do
   import Ecto.Query
   alias Maraithon.{Delegations, Repo}
   alias Maraithon.Connectors.Gmail
-  alias Maraithon.Delegations.{Delegation, Event, GmailThreads, Outbox, Scope}
+  alias Maraithon.Delegations.{Delegation, Event, GmailThreads, Outbox, ReplyIntent, Scope}
   alias Maraithon.TelegramAssistant.PreparedAction
 
   def active?(user_id), do: Repo.exists?(from d in Delegation, where: d.user_id == ^user_id)
@@ -80,7 +80,7 @@ defmodule Maraithon.Delegations.Ingress do
         d,
         account_id,
         message,
-        classification in ~w(historical reply own_send human_send stop)
+        classification in ~w(historical reply acknowledgement own_send human_send stop)
       )
 
       # Arrival invalidates unsent decisions before a cursor can advance. The
@@ -176,6 +176,10 @@ defmodule Maraithon.Delegations.Ingress do
 
       text in ["stop", "please stop", "unsubscribe", "please stop emailing me"] ->
         "stop"
+
+      ReplyIntent.thanks_only?(message) and
+          GmailThreads.same_subject?(field(message, :subject), scope["subject"]) ->
+        "acknowledgement"
 
       true ->
         "reply"

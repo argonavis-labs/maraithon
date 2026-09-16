@@ -1057,9 +1057,23 @@ defmodule Maraithon.Connectors.Gmail do
     parse_message(message)
     |> Map.merge(%{
       text_body: text_body,
-      html_body: html_body
+      html_body: html_body,
+      text_only: html_body in [nil, ""] and not attachment?(message["payload"] || %{})
     })
   end
+
+  defp attachment?(payload) when is_map(payload) do
+    payload["mimeType"] not in ~w(text/plain text/html multipart/alternative multipart/mixed multipart/related) or
+      payload["filename"] not in [nil, ""] or
+      String.starts_with?(
+        String.downcase(get_header(payload["headers"] || [], "Content-Disposition") || ""),
+        "attachment"
+      ) or
+      not is_nil(get_in(payload, ["body", "attachmentId"])) or
+      Enum.any?(List.wrap(payload["parts"]), &attachment?/1)
+  end
+
+  defp attachment?(_), do: true
 
   defp extract_message_bodies(payload) when is_map(payload) do
     plain = collect_body(payload, "text/plain")

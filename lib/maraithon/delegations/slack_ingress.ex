@@ -104,7 +104,7 @@ defmodule Maraithon.Delegations.SlackIngress do
 
       classification =
         if message["revision_at"] != message["message_id"] and
-             classification in ~w(own_send auto_reply),
+             classification in ~w(own_send auto_reply acknowledgement),
            do: "source_changed",
            else: classification
 

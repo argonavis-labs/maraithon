@@ -63,6 +63,41 @@ defmodule Maraithon.Delegations.GmailSource do
 
   def unchanged?(_, _), do: false
 
+  # Only remove newly arrived, already authenticated acknowledgements. The
+  # entire remaining header index must still match the original fingerprint.
+  def unchanged_except_thanks?(context, index) do
+    previous = context.run.prompt_snapshot["sources"]
+    latest = previous["messages"] |> Enum.map(&date/1) |> Enum.max(DateTime)
+    newer = Enum.filter(index.messages, &(DateTime.compare(date(&1), latest) == :gt))
+
+    if length(newer) in 1..64 do
+      keys = Enum.map(newer, &"gmail:#{index.account}:#{&1["message_id"]}")
+      d = context.delegation
+
+      ignored =
+        Repo.all(
+          from e in Event,
+            where:
+              e.user_id == ^d.user_id and e.delegation_id == ^d.id and
+                e.kind == "inbound_message" and e.event_key in ^keys,
+            limit: 64
+        )
+        |> Enum.map(&Event.hydrate/1)
+        |> Enum.filter(&(&1.data["classification"] == "acknowledgement"))
+        |> MapSet.new(& &1.source_ref)
+
+      unchanged?(
+        %{
+          index
+          | messages: Enum.reject(index.messages, &MapSet.member?(ignored, &1["message_id"]))
+        },
+        previous
+      )
+    else
+      false
+    end
+  end
+
   def snapshot(messages, account, thread) do
     with {:ok, index} <- metadata(messages, thread) do
       bodies =
@@ -204,7 +239,7 @@ defmodule Maraithon.Delegations.GmailSource do
   defp normalize(message) when is_map(message) do
     message = Map.new(message, fn {key, value} -> {to_string(key), value} end)
 
-    Map.take(message, ["text_body" | @fields])
+    Map.take(message, ["text_body", "text_only" | @fields])
     |> Map.update("internal_date", nil, fn
       %DateTime{} = value -> DateTime.to_iso8601(value)
       value -> value
