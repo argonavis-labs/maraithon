@@ -1,6 +1,6 @@
 # Delegated conversations: as me, or as my assistant
 
-Implementation plan. Revised September 15, 2026. Supersedes the September 14 spike (`8bbb0c48`).
+Implementation plan. Revised September 16, 2026. Supersedes the September 14 spike (`8bbb0c48`).
 
 Source baseline: `8bbb0c48` on `main`. Original plan status: proposed at the baseline. Implementation is now in progress. The baseline review did not send messages, change production, or measure cost; subsequent implementation and live evidence are tracked in [the implementation status](delegated-conversation-status.md).
 
@@ -41,7 +41,7 @@ October, Kent's assistant, emails Christina and Michael from `october@ewakened.c
 10. The model returns a structured decision from a read-only toolbox. Server code validates every send against the frozen grant, identity, thread, recipients, revision, counters, and budget before the provider is touched. Counterparty text is evidence, never instruction.
 11. The first outbound message goes out without approval. For as-me it waits in a two-minute undo window visible on the todo. For as-assistant it sends immediately. Both are per-user settings.
 12. Ship thin slices behind config gates with sends off, then on, per provider. Manual verification per slice under the current development mode. The automated failure matrix in the appendix runs only when Kent authorises hardening.
-13. Cheap by construction. Waiting costs nothing. Inbound mail is classified deterministically before any model call. A turn makes one composition call on the user's configured model; triage and the policy check run on the cheapest configured tier, and escalate only on uncertainty. Context is a compact fact ledger plus the recent thread, never the whole history. The coordinator Agent exists only for users with a live delegation.
+13. Cheap by construction, with independent review preserved. Waiting and ignored acknowledgements use zero model calls. Inbound mail is classified deterministically before any model call. An ordinary substantive turn targets two calls: composition and an independent semantic policy review. Both use the user's configured model. Research or repair must fit within the existing three-call ceiling, including review of the final decision. Context is a compact fact ledger plus the recent thread, never the whole history. The coordinator Agent exists only for users with a live delegation.
 
 ## What exists today
 
@@ -342,7 +342,7 @@ Quality comes from evidence and checks, not from spending. Model calls, provider
 | --- | --- |
 | Waiting | Zero model calls. One indexed query per user every six hours. A dormant delegation is a row and an index entry. |
 | Inbound event | Deterministic classification first: our own echo, auto-reply, bounce, reaction, unsubscribe, unrelated sender, or a reply that only says thanks. Those never reach a model. |
-| Turn | One composition call on the user's configured model through `LLM.UserModel.bind/1`. Triage (is this substantive, which decision kind) and the semantic policy check run on the cheapest tier already configured for closure classification, after a deterministic pass over headers, participants, and known phrases. Escalate triage to the configured model only when its confidence is low or the decision would end or interrupt the conversation (`complete`, `needs_user`). Target under 1.3 model calls per turn on average, measured. |
+| Turn | Target two model calls for an ordinary substantive turn: one composition call and one independent semantic policy review, both on the user's configured model through `LLM.UserModel.bind/1`. Research or repair must fit within the existing three-call ceiling, including independent review of the final decision. If more calls are needed, hold the turn with an explanation rather than bypassing review. Deterministic classification runs first; no separate model triage call is required. |
 | Scheduling | Pure interval math over calendar reads. No model call to find times. |
 | Sync | Only the missing messages of the bound thread through the existing per-account sync. No per-delegation mailbox scans. |
 | Reconciliation | Bounded provider reads, at most 12 per action, no model. |
@@ -355,7 +355,7 @@ Provider calls are shared and bounded: one in-flight Gmail request per mailbox a
 
 Budgets per delegation default to 6 sends per rolling 7 days, 2 reminders per waiting cycle, 3 model calls per turn, and US$0.25 per rolling 30 days, with a per-user cap of US$1 per day across all delegations. Reserve a conservative bound before each model call and refuse the call if no bound can be established; lost billable responses keep their reservation until reconciled; parallel jobs and restarts cannot reset windowed counters; lifetime totals persist. A reached limit enters `waiting_capacity` until the window frees or the user adjusts, and the backlog is re-evaluated with current facts, never released as stale reminders. The account-wide `CostMonitor` warning stays at US$6 against the US$3/day projection. Kent's September 15 clarification sets the normal autonomous spending pause at US$7. During active development, `LLM_DEVELOPMENT_SPENDING=true` permits the dollar spend needed to build and test, while preserving cost recording, reservations, call bounds, and send authority. Restore normal mode when active development ends.
 
-Record requested and actual model, tier, prompt version, tokens, and billed cost per turn. Report dollars per finished delegation, per turn, and per 30-day window. Slice 1's exit evidence includes the measured cost of the controlled conversation. Pilot targets, revised from measurement rather than promised: under US$0.10 per finished information delegation and under US$0.25 per scheduling delegation.
+Record requested and actual model, tier, prompt version, tokens, and billed cost per turn. Report model calls and cost by turn and stage, including retries and unresolved billable attempts. Report ordinary turns separately from turns needing research or repair; do not lower their averages by counting idle wakes or ignored acknowledgements as model turns. Report dollars per finished delegation, per turn, and per 30-day window. Slice 1's exit evidence includes the measured cost of the controlled conversation. Pilot targets, revised from measurement rather than promised: under US$0.10 per finished information delegation and under US$0.25 per scheduling delegation.
 
 Emit redacted ledger events for grant changes, event acceptance, decision, policy hold, send entry, receipt, uncertainty, reconciliation, follow-up, takeover, and completion, with delegation, turn, action, job, and assignment IDs, revisions, versions, timings, and cost. Bodies, prompts, tokens, and recipients never appear in logs.
 
@@ -388,6 +388,8 @@ Each slice compiles with `make build`, ships behind its gate, and is verified by
 
 Decided by Kent on September 15: the assistant is a dedicated Google account, `october@ewakened.com`, connected through the normal flow and bound as the assistant; the Chief of Staff may propose delegations on its own; on Slack the assistant is the bot, not Kent's account; the design must stay economical in compute and cost without losing quality.
 
+Decided by Kent on September 16: keep independent AI review and revise the call-count target. Ordinary substantive turns target two calls, with a three-call ceiling for research or repair. Waiting and ignored acknowledgements use zero calls. This replaces the earlier target below 1.3 calls per turn. Muse Spark Contributor remains the configured model; this decision does not authorise switching to a cheaper model.
+
 Still open, with the plan's defaults:
 
 - Disclosure default for the assistant: on.
@@ -396,7 +398,7 @@ Still open, with the plan's defaults:
 
 ## Remaining uncertainties
 
-Slack send identity round-trip under our installation; whether `chat:write.customize` needs a reinstall; the display name Gmail applies to the assistant account's `From`; deployed Pub/Sub push authentication; how far the current voice profile carries as-me without the learning work; measured cost per turn on the configured model and the cheap tier; and how retention behaves across months. Each is resolved by a slice's exit evidence rather than assumed.
+Slack send identity round-trip under our installation; whether `chat:write.customize` needs a reinstall; the display name Gmail applies to the assistant account's `From`; deployed Pub/Sub push authentication; how far the current voice profile carries as-me without the learning work; measured cost across ordinary turns and turns needing research or repair on the configured model; and how retention behaves across months. Each is resolved by a slice's exit evidence rather than assumed.
 
 ## Appendix: automated checks when hardening is authorised
 
