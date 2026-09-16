@@ -27,9 +27,9 @@ defmodule Maraithon.Delegations.EvidenceLinks do
         if is_binary(email) and String.contains?(email, "@") and is_binary(id) and id != "" do
           [
             %{
-              label: "Open email",
+              label: "Open email in #{email}",
               url:
-                "https://mail.google.com/mail/u/?" <>
+                "https://mail.google.com/mail/?" <>
                   URI.encode_query(%{"authuser" => email}) <> "#all/" <> URI.encode_www_form(id)
             }
           ]
