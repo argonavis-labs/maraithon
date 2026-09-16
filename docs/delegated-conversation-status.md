@@ -2,6 +2,18 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Standalone Chat sessions
+
+Opening a task creates a durable conversation for its history. That conversation previously appeared in the general Chat list, even when the user had not started a chat session. Task conversations now stay with Todos. Web and iPhone list standalone sessions in Chat, and task reply notifications open the associated todo. Old web and iPhone chat links resolve the stored task identity and open its workspace.
+
+The server filters before pagination and uses the same scope for collection versions. The updated iPhone requests `scope=chat`. Older clients retain their previous collection response so their sync code cannot interpret excluded task conversations as deleted history. Nullable SwiftData fields classify cached threads without resetting the store. Unclassified legacy threads stay hidden until refreshed, and task history and unsent messages are preserved.
+
+Commit `3154a184` passed the Phoenix compile and iPhone simulator build. Tests were not run under the current manual-first policy. No Mac binary changed, and no physical iPhone interaction was performed.
+
+Server workflow `35061212075` succeeded. Revision `maraithon-00394-grd` serves all traffic. The authenticated web Chat page shows the three standalone conversations and no task conversations. Mobile workflow `35061212069` also succeeded; TestFlight 1.0.1 (`20260916055153`) is available to Founders, including Kent. Updating the iPhone is required for the cached-list and notification changes.
+
+Read-only production execution `maraithon-todo-validation-v28n9` confirmed three standalone sessions out of 28 stored conversations, with zero task conversations in the Chat collection. The hockey task's history remained accessible through its direct thread lookup, with the correct task identity in the API response. This check made no writes, provider calls, or model calls.
+
 ## Direct task chat
 
 Task chat is now the direct way to give Maraithon an instruction. Web, Mac, and iPhone no longer show the generic “Prepare this for me” action. The iPhone keeps the summary compact and puts secondary information under Task details. Web puts suggested actions and source details after the conversation. The Mac's specific action shortcuts say “Ask Maraithon” and send their instruction into the same chat.
