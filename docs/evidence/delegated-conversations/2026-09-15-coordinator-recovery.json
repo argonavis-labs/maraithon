@@ -1,0 +1,94 @@
+{
+  "date": "2026-09-15",
+  "checked_at": "2026-09-16T03:49:05.898848+00:00",
+  "change": "Coordinator snapshot migration and recovery from an older checkpoint after BEAM loss",
+  "commit": "35963cfc16bebb00031dedf278dff14abb25a0e6",
+  "validation": {
+    "build": "make build passed",
+    "focused_tests": 1,
+    "isolated_beam_evals": 1,
+    "failures": 0,
+    "beam_eval_seconds": 19.2,
+    "new_paid_model_calls": 0,
+    "new_live_messages": 0,
+    "logs": [
+      "/tmp/maraithon-coordinator-migration-test.log",
+      "/tmp/maraithon-coordinator-recovery.log",
+      "/tmp/maraithon-coordinator-recovery-build.log"
+    ]
+  },
+  "observed": {
+    "provider": "local HTTP fixture",
+    "model_calls": 0,
+    "old_incarnation": "3fb39555-e3ba-4483-9b3e-ea0ebd177721",
+    "new_incarnation": "bd2978be-91f9-4406-b8ab-d2e3904fd719",
+    "os_exit_status": 137,
+    "provider_send_count": 1,
+    "proven_send_count": 1,
+    "stale_writes_rejected": 2,
+    "stale_agent_fences_rejected": 2,
+    "older_coordinator_checkpoint_restored": true,
+    "checkpoint_bytes": 49,
+    "coordinator_owner_changed": true,
+    "periodic_producers": false
+  },
+  "migration": {
+    "stored_schema_version": 0,
+    "restored_schema_version": 1,
+    "cursor_preserved": true,
+    "wake_preserved": true,
+    "budget_preserved": true,
+    "transient_state_removed": true,
+    "wake_reaches_reducer": true
+  },
+  "coordinator": {
+    "behavior": "delegation_coordinator",
+    "real_agent_gen_statem": true,
+    "initial_checkpoint_before_send": true,
+    "checkpoint_unchanged_until_restore": true,
+    "external_agent_proof": "Ed25519 attestation bound to the observed local OS exit and stored ownership identity",
+    "prior_job_and_agent_owners_rejected": true,
+    "receipt_events_consumed_after_restore": true,
+    "final_conversation_state": "waiting_reply",
+    "final_lifetime_sends": 1
+  },
+  "files_sha256": {
+    "lib/maraithon/behaviors/delegation_coordinator.ex": "df65bbe7cb44e102d8d75f2adc95e087c818b803a11edb07c27378f75a55face",
+    "test/maraithon/behaviors/delegation_coordinator_test.exs": "1eacc31fea6a1ffc06f44efd5f6a299d8e4f8459768e4c9b179692b7eecf43b4",
+    "test/evals/delegation_beam_recovery.exs": "ab4e84dfdb975e447e73935de89373c83708ec56287c2cc28a407ce057bcbdec",
+    "test/evals/support/delegation_beam_node.exs": "752458f5b46f237bb47a47b00c45f0ef632042cb8467a94b006be33785db705b"
+  },
+  "limits": [
+    "Loopback provider and disposable local database, no real messages or paid model calls.",
+    "Periodic product producers and automatic watcher recovery disabled; proof reconciliation and Agent restart advanced explicitly through the production APIs.",
+    "The legacy schema-version case uses Runtime.Agent.restore_from_snapshot directly; the BEAM crash case uses a current-version checkpoint older than the receipt.",
+    "This does not cover a model decision killed before commit, two schema upgrades across 180 days, disaster restore or a real longevity canary.",
+    "Live Slack evaluation remains deferred."
+  ],
+  "deployment": {
+    "workflow_run": 35052541910,
+    "conclusion": "success",
+    "revision": "maraithon-00384-688",
+    "ready": true,
+    "traffic_percent": 100,
+    "image": "us-central1-docker.pkg.dev/maraithon/maraithon/maraithon@sha256:618b3e75b14286379d940cd7c10de0a6167f17f10e31fe15df10d56d23920472",
+    "model": "meta/muse-spark-1.3-contributor",
+    "development_spending": true,
+    "delegation_eval_only": true,
+    "gmail_sends_enabled": true,
+    "slack_sends_enabled": false
+  },
+  "deployed_probe": {
+    "execution": "maraithon-todo-validation-wvc2t",
+    "execution_succeeded": true,
+    "result": "passed",
+    "restored_version": 1,
+    "reducer_reached": true,
+    "cursor_and_wake_preserved": true,
+    "budget_preserved": true,
+    "transient_removed": true,
+    "database_queries": 0,
+    "model_calls": 0,
+    "provider_calls": 0
+  }
+}
