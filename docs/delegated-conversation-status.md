@@ -2,6 +2,16 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## People loading on mobile
+
+The September 15 mobile request failed with HTTP 500 because the default People query compared its float ranking field to integer `0`. Ecto rejected that query before it reached PostgreSQL. Commit `b857905c` uses `0.0`, preserving the ranking and visibility rules. The iPhone People list and person detail now use the existing public error-copy helper instead of displaying raw error codes.
+
+The Phoenix compile and iPhone simulator build passed, including project generation. Tests were not run under the current manual-first policy. No schema, permissions, or stored People data changed.
+
+Server workflow `35062580948` succeeded; revision `maraithon-00396-n6q` serves all traffic. Web and the existing native Mac client both loaded 60 ranked people out of 2,276 known people. Web also opened Charlie's detail. The native client uses the same People response decoder as iPhone. Mobile workflow `35062580967` succeeded; TestFlight 1.0.1 (`20260916061123`) is available to Founders, including Kent. No physical iPhone interaction was performed.
+
+The native detail check found a separate Mac URL bug: pre-encoded UUID hyphens were encoded again by the request builder, producing `%252D` and a missing-person response. Commit `10edf3f1` appends the opaque ID as a single URL component. The signed companion build passed and was installed in place. Charlie's meetings, relationship, and recent history then loaded successfully in the native app. This Mac-only follow-up required no server redeployment.
+
 ## Calendar emphasis through the day
 
 Finished calendar rows now use muted text and regular time labels in the iPhone Today view, briefing history, and web briefing. Current and upcoming events retain their emphasis. A shared server projection resolves explicit time ranges using the brief's date and timezone; unclear rows remain unchanged. Each visible surface advances its clock every minute without fetching calendar data or making a model call. New briefs retain their timezone in the existing metadata. No database or SwiftData migration is required.
