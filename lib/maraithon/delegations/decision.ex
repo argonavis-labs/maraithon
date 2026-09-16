@@ -215,7 +215,7 @@ defmodule Maraithon.Delegations.Decision do
   end
 
   defp requested_scheduling(context, %{"kind" => "find_times"} = decision) do
-    request = Map.take(decision, ~w(duration_min start_at end_at))
+    request = Map.take(decision, Scheduling.request_fields())
     saved = context.run.prompt_snapshot["scheduling"] || %{}
 
     cond do

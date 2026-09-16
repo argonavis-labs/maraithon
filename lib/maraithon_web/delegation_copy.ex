@@ -30,6 +30,8 @@ defmodule MaraithonWeb.DelegationCopy do
       when reason in [:invalid_work_days, :invalid_work_hours, :invalid_timezone, :invalid_limits],
       do: "Check your working days, hours, timezone, and limits, then save again."
 
+  def error(:invalid_slot_preferences), do: "Choose a valid time-of-day and weekday preference."
+
   def error(:invalid_calendar_accounts),
     do: "Choose a connected calendar or scheduling link that belongs to you."
 

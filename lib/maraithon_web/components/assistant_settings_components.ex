@@ -85,6 +85,11 @@ defmodule MaraithonWeb.AssistantSettingsComponents do
           </div>
         </fieldset>
         <div class="grid gap-3 sm:grid-cols-2">
+          <.field :for={field <- Maraithon.Delegations.SlotRanking.fields()} label={field.label} for={"delegation-#{field.key}"}>
+            <.c_select id={"delegation-#{field.key}"} name={"delegation_preferences[#{field.key}]"}>
+              <option :for={option <- field.options} value={option.value} selected={option.value == @preferences[field.key]}><%= option.label %></option>
+            </.c_select>
+          </.field>
           <.field :for={{key, label} <- [{"work_start", "Start of day"}, {"work_end", "End of day"}]} label={label} for={"delegation-#{key}"}>
             <.c_input id={"delegation-#{key}"} name={"delegation_preferences[#{key}]"} type="time" value={@preferences[key]} required />
           </.field>

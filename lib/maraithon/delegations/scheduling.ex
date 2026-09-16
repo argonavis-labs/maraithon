@@ -2,7 +2,7 @@ defmodule Maraithon.Delegations.Scheduling do
   @moduledoc "Bounded calendar reads and deterministic slots shared by proposals and booking."
   alias Maraithon.Calendar.FreeBlocks
   alias Maraithon.Connectors.GoogleCalendar
-  alias Maraithon.Delegations.Preferences
+  alias Maraithon.Delegations.{Preferences, SlotRanking}
 
   @max_days 31
 
@@ -13,6 +13,7 @@ defmodule Maraithon.Delegations.Scheduling do
 
     with :ok <- valid_window(first, last),
          true <- is_integer(duration) and duration in 5..240,
+         :ok <- valid_preferences(prefs, request),
          {:ok, ids} <- account_ids(user_id, prefs, request[:default_account_id]),
          {read_first, read_last} = calendar_window(first, last, prefs),
          {:ok, events} <- read_accounts(user_id, ids, read_first, read_last),
@@ -25,6 +26,7 @@ defmodule Maraithon.Delegations.Scheduling do
            "read_at" => DateTime.to_iso8601(now),
            "timezone" => prefs["timezone"],
            "duration_min" => duration,
+           "slot_preferences" => SlotRanking.preferences(prefs, request),
            "from" => DateTime.to_iso8601(first),
            "until" => DateTime.to_iso8601(last),
            "read_from" => DateTime.to_iso8601(read_first),
@@ -39,19 +41,25 @@ defmodule Maraithon.Delegations.Scheduling do
   end
 
   @doc "Validate a model's bounded calendar read before calling any provider."
-  def request_options(%{"duration_min" => duration, "start_at" => first, "end_at" => last})
+  def request_options(
+        %{"duration_min" => duration, "start_at" => first, "end_at" => last} = request
+      )
       when is_integer(duration) and duration in 5..240 and is_binary(first) and
              is_binary(last) and byte_size(first) <= 40 and byte_size(last) <= 40 do
     with {:ok, first, _} <- DateTime.from_iso8601(first),
          {:ok, last, _} <- DateTime.from_iso8601(last),
-         :ok <- valid_window(first, last) do
-      {:ok, %{duration_min: duration, window: {first, last}}}
+         :ok <- valid_window(first, last),
+         preferences = Map.take(request, SlotRanking.keys()),
+         true <- SlotRanking.valid?(preferences) do
+      {:ok, %{duration_min: duration, window: {first, last}, slot_preferences: preferences}}
     else
       _ -> {:error, :invalid_scheduling_request}
     end
   end
 
   def request_options(_), do: {:error, :invalid_scheduling_request}
+
+  def request_fields, do: ~w(duration_min start_at end_at) ++ SlotRanking.keys()
 
   # Even a narrow afternoon request needs the whole day's meeting count and
   # meetings just outside its boundaries whose buffers could block a slot.
@@ -70,6 +78,7 @@ defmodule Maraithon.Delegations.Scheduling do
 
     with :ok <- valid_window(first, last),
          true <- is_integer(duration) and duration in 5..240,
+         :ok <- valid_preferences(prefs, request),
          {:ok, busy} <- busy_events(events, prefs) do
       start_date = Preferences.local_time(first, prefs) |> DateTime.to_date()
       end_date = Preferences.local_time(last, prefs) |> DateTime.to_date()
@@ -104,11 +113,10 @@ defmodule Maraithon.Delegations.Scheduling do
               timezone: prefs["timezone"]
             )
             |> Enum.flat_map(&split_opening(&1, duration, prefs["timezone"]))
-            |> Enum.take(3)
           end
         end)
 
-      {:ok, slots}
+      {:ok, SlotRanking.select(slots, prefs, request)}
     else
       false -> {:error, :invalid_meeting_duration}
       error -> error
@@ -235,9 +243,8 @@ defmodule Maraithon.Delegations.Scheduling do
     # Round to a quarter hour so a seconds-level lead time doesn't become an offer.
     first = DateTime.from_unix!(div(DateTime.to_unix(first) + 899, 900) * 900)
 
-    Stream.iterate(first, &DateTime.add(&1, max(duration, 15), :minute))
+    Stream.iterate(first, &DateTime.add(&1, 15, :minute))
     |> Enum.take_while(&(DateTime.compare(DateTime.add(&1, duration, :minute), last) != :gt))
-    |> Enum.take(8)
     |> Enum.map(fn start_at ->
       %{
         "start_at" => DateTime.to_iso8601(start_at),
@@ -254,6 +261,12 @@ defmodule Maraithon.Delegations.Scheduling do
   end
 
   defp valid_window(_, _), do: {:error, :invalid_scheduling_window}
+
+  defp valid_preferences(prefs, request) do
+    if SlotRanking.valid?(prefs) and SlotRanking.valid?(Map.get(request, :slot_preferences, %{})),
+      do: :ok,
+      else: {:error, :invalid_slot_preferences}
+  end
 
   defp local_at(date, time, prefs),
     do: Preferences.from_local(date, Time.from_iso8601!(time <> ":00"), prefs)

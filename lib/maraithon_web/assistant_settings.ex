@@ -85,6 +85,7 @@ defmodule MaraithonWeb.AssistantSettings do
         identity: Map.put(data, "gmail_mode", (identity && identity.gmail_mode) || "account"),
         preferences: preferences,
         timezones: Maraithon.Timezones.options(),
+        choice_preferences: Maraithon.Delegations.SlotRanking.fields(),
         numeric_preferences:
           Enum.map(numeric_preferences(), fn {key, label, min, max} ->
             %{key: key, label: label, min: min, max: max}

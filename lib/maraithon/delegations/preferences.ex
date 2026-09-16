@@ -3,7 +3,7 @@ defmodule Maraithon.Delegations.Preferences do
   import Ecto.Query
   alias Maraithon.{AssistantIdentities, BriefingSchedules, Repo, Timezones}
   alias Maraithon.Accounts.ConnectedAccount
-  alias Maraithon.Delegations.Preference
+  alias Maraithon.Delegations.{Preference, SlotRanking}
   alias Maraithon.PrivacyErasure.WriteFence
 
   @defaults %{
@@ -11,6 +11,8 @@ defmodule Maraithon.Delegations.Preferences do
     "work_days" => [1, 2, 3, 4, 5],
     "work_start" => "08:00",
     "work_end" => "18:00",
+    "time_preference" => "any",
+    "day_preference" => "earliest",
     "default_duration_min" => 30,
     "buffer_min" => 15,
     "lead_time_hours" => 24,
@@ -136,6 +138,9 @@ defmodule Maraithon.Delegations.Preferences do
 
       not valid_hours?(data["work_start"], data["work_end"]) ->
         :invalid_work_hours
+
+      not SlotRanking.valid?(data) ->
+        :invalid_slot_preferences
 
       not is_boolean(data["proposals_enabled"]) ->
         :invalid_proposals_setting
