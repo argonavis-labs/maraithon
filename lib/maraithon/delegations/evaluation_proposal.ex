@@ -54,14 +54,9 @@ defmodule Maraithon.Delegations.EvaluationProposal do
             from s in Maraithon.Agents.AgentRunStep,
               where: s.agent_id == ^agent.id and s.status == "failed",
               order_by: [desc: s.started_at],
-              limit: 3,
-              select: %{effect_type: s.effect_type, error: s.error, at: s.started_at}
+              limit: 3
           )
-          |> Enum.map(
-            &Map.update!(&1, :error, fn error ->
-              Maraithon.Redaction.log_metadata_value(:failure_code, error)
-            end)
-          ),
+          |> Enum.map(&failed_step_summary/1),
         memo_updated_at: get_in(state, [:cycle_memory, "updated_at"]),
         pending_skill: state[:pending_effect_skill_id],
         cycle_memo_generated: state[:cycle_memo_generated]
@@ -70,6 +65,30 @@ defmodule Maraithon.Delegations.EvaluationProposal do
   end
 
   def diagnostics(_job), do: nil
+
+  defp failed_step_summary(step) do
+    summary = %{
+      effect_type: step.effect_type,
+      error: Maraithon.Redaction.log_metadata_value(:failure_code, step.error),
+      at: step.started_at
+    }
+
+    if step.effect_type == "llm_call" and is_nil(step.payload_purged_at) do
+      step = Maraithon.Agents.AgentRunStep.hydrate_payloads!(step)
+      params = step.request_payload
+
+      request = %{
+        valid: match?({:ok, _}, Maraithon.LLM.RequestBudget.validate(params)),
+        bytes: byte_size(Jason.encode!(params)),
+        messages: length(params["messages"] || []),
+        tools: length(params["tools"] || [])
+      }
+
+      Map.put(summary, :request, request)
+    else
+      summary
+    end
+  end
 
   def source_failures(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
     since = DateTime.add(DateTime.utc_now(), -1, :hour)
