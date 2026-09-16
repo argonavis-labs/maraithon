@@ -5,6 +5,7 @@ defmodule Maraithon.Delegations.ReplyIntent do
     text = field(message, :text_body)
 
     field(message, :text_only) == true and is_binary(text) and byte_size(text) <= 128 and
+      String.valid?(text) and
       Regex.match?(
         ~r/\A\s*(?:thanks(?: so much| a lot)?|thank you(?: very much| so much)?|many thanks|thx|ty)[.!]*\s*\z/iu,
         text
