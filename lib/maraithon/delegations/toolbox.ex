@@ -75,6 +75,7 @@ defmodule Maraithon.Delegations.Toolbox do
            %{
              "provider" => "gmail",
              "account_id" => scope["source_account_id"],
+             "channel" => nil,
              "thread_id" => scope["source_thread_id"],
              "message_id" => id
            }, true}
