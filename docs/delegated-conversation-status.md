@@ -1,6 +1,6 @@
 # Delegated conversation implementation status
 
-Updated September 15, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Delegation suggestions
 
@@ -365,9 +365,19 @@ Both isolated cases passed in 35.3 seconds. The existing send case still records
 
 These are loopback model and mail fixtures with no paid calls or real messages. Periodic producers and automatic watcher recovery remain disabled. The driver supplies destruction evidence and invokes the leased recurring job explicitly. Fully automatic boot, disaster restore, two schema upgrades across 180 days, and a real longevity canary still need coverage.
 
+## Saved assistant mailbox history
+
+Personal context now excludes saved observations belonging to a dedicated assistant mailbox, including observations ingested before the account was designated. One query filter covers People source pages and detail, legacy communication and affinity scores, CRM suggestions, queued relationship learning, task-completion evidence, and delegation proposals. It matches account IDs, providers, and normalized mailbox addresses within the same user. Alias mode keeps the user's mailbox available. Source records remain available to account-bound delegation evidence reads.
+
+Designating an assistant account invalidates published and unfinished People generations in the same transaction and clears their legacy CRM scores. Reconnection and signature edits preserve a clean generation. People detail also removes the whole excluded history entry, including its cached title. Upcoming People calendar reads no longer enumerate the assistant account. Old records with no attributable mailbox identity cannot be classified by this filter.
+
+The server build passed. The focused local checks covered 19 assistant-isolation cases and 24 CRM ingestion, insight, and task-completion regressions. An older ingestion fixture expected a queued job while coordination was disabled; it now explicitly enables coordination before exercising that path. Its two checks passed on rerun. The default test database had a pre-existing migration catalog mismatch, so these checks ran against fresh disposable local databases. No live message or paid model call was made by these checks. Native code was unchanged.
+
+Commit `c5fa81d3` deployed through workflow `35055281619`. Revision `maraithon-00386-znv` is ready and serves all traffic. The production query found one dedicated assistant account and 18,776 observations, with none attributable to that mailbox, so it made no cache change and enqueued no rebuild. Muse Spark Contributor, the Gmail eval restriction, disabled Slack sends, and active development spending remain configured. The existing live memory eval is still pending for September 16 at 8:00 a.m. Toronto. [Isolation evidence](evidence/delegated-conversations/2026-09-16-assistant-history-isolation.json).
+
 ## Remaining work
 
-1. Extend live coverage beyond the controlled Gmail pair and finish the remaining assistant-account read audit. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
+1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage; the production gate currently admits no eligible proposal.
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and a real longevity canary. Send recovery, older coordinator checkpoints, and interrupted model decisions now pass local whole-BEAM kills. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
