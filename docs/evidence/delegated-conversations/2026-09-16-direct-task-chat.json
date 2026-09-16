@@ -1,0 +1,535 @@
+{
+  "date": "2026-09-16",
+  "server_commit": "4d83aac4",
+  "mac_followup_commit": "b9c522ac",
+  "revision": "maraithon-00392-mns",
+  "server_workflow": "35059490171",
+  "mobile_workflow": "35059489962",
+  "testflight": {
+    "version": "1.0.1",
+    "build": "20260916052626",
+    "group": "Founders",
+    "status": "available"
+  },
+  "checks": {
+    "server_build": "passed",
+    "mac_signed_build": "passed",
+    "mac_swift_build": "passed",
+    "iphone_simulator_build": "passed",
+    "focused_calendar_tests": {
+      "passed": 8,
+      "failed": 0
+    },
+    "web_ui": "inspected",
+    "installed_mac_ui": "inspected",
+    "physical_iphone_ui": "not_run",
+    "calendar_reference_build": "passed",
+    "calendar_reference_test": {
+      "passed": 1,
+      "failed": 0
+    },
+    "refreshed_hockey_summary": "verified in installed Mac app after Refresh"
+  },
+  "live_execution": "maraithon-todo-validation-z8s6w",
+  "booked": {
+    "error": null,
+    "status": "completed",
+    "request": "Add this to my calendar tomorrow.",
+    "replies": [
+      "Done \u2014 that's on your calendar for tomorrow, Thursday Sep 17, 9:00-9:30 AM ET.\n\nI kept the task itself open. Just say the word if you want me to move it or take it off."
+    ],
+    "run_id": "b30c0eae-0579-4952-9b37-c30c934f86a2",
+    "acceptance_ms": 483,
+    "steps": [
+      {
+        "error": null,
+        "status": "completed",
+        "type": "context_fetch",
+        "elapsed_ms": 0,
+        "tool": null
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "llm_request",
+        "elapsed_ms": 4415,
+        "tool": null
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "llm_response",
+        "elapsed_ms": 0,
+        "tool": null
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "tool_call",
+        "elapsed_ms": 98,
+        "tool": "calendar_events_around"
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "llm_request",
+        "elapsed_ms": 5242,
+        "tool": null
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "llm_response",
+        "elapsed_ms": 0,
+        "tool": null
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "tool_call",
+        "elapsed_ms": 1172,
+        "tool": "prepare_external_action"
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "llm_request",
+        "elapsed_ms": 2333,
+        "tool": null
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "type": "llm_response",
+        "elapsed_ms": 0,
+        "tool": null
+      }
+    ],
+    "duplicate_reused_run": true,
+    "elapsed_ms": 19299,
+    "execution_ms": 16668,
+    "summary": {
+      "llm_turns": 3,
+      "tool_steps": 2
+    },
+    "calendar_block": {
+      "calendar_id": "primary",
+      "created_at": "2026-09-16T05:31:56.689260Z",
+      "end_at": "2026-09-17T09:30:00-04:00",
+      "event_id": "8uh8cj56i1jeinopf7m3dr2hupsh26579s7otjmulherh4ro4dd0",
+      "start_at": "2026-09-17T09:00:00-04:00"
+    },
+    "task_status": "open"
+  },
+  "sends_to_other_people": 0,
+  "harness_note": "The calendar turns ran once. The first report script failed on not(nil) during fixture cleanup; follow-up inspects the saved runs and performs cleanup without resending.",
+  "initial_followup": {
+    "runs": [
+      {
+        "error": null,
+        "status": "completed",
+        "replies": [
+          "Done \u2014 that's on your calendar for tomorrow, Thursday Sep 17, 9:00-9:30 AM ET.\n\nI kept the task itself open. Just say the word if you want me to move it or take it off."
+        ],
+        "steps": [
+          {
+            "error": null,
+            "status": "completed",
+            "type": "context_fetch",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 4415,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 98,
+            "tool": "calendar_events_around"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 5242,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 1172,
+            "tool": "prepare_external_action"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 2333,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          }
+        ],
+        "run_id": "b30c0eae-0579-4952-9b37-c30c934f86a2",
+        "elapsed_ms": 19299,
+        "execution_ms": 16668,
+        "summary": {
+          "llm_turns": 3,
+          "tool_steps": 2
+        }
+      },
+      {
+        "error": null,
+        "status": "completed",
+        "replies": [
+          "Done \u2014 removed the block for tomorrow, Sept 17th 9:00-9:30 AM ET. I've kept this task open."
+        ],
+        "steps": [
+          {
+            "error": null,
+            "status": "completed",
+            "type": "context_fetch",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 5455,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 90,
+            "tool": "calendar_events_around"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 3533,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 269,
+            "tool": "calendar_list_events"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 146,
+            "tool": "calendar_search"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 4887,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 257,
+            "tool": "calendar_list_events"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 3126,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "tool_call",
+            "elapsed_ms": 1392,
+            "tool": "prepare_external_action"
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_request",
+            "elapsed_ms": 2921,
+            "tool": null
+          },
+          {
+            "error": null,
+            "status": "completed",
+            "type": "llm_response",
+            "elapsed_ms": 0,
+            "tool": null
+          }
+        ],
+        "run_id": "1a0138e7-c65e-49f3-b98f-0bdc386f8c19",
+        "elapsed_ms": 28208,
+        "execution_ms": 27040,
+        "summary": {
+          "llm_turns": 5,
+          "tool_steps": 5
+        }
+      }
+    ],
+    "actions": [
+      {
+        "id": "05604d69-b511-42a0-93fd-4b323d6e9703",
+        "status": "executed",
+        "type": "calendar_create_event"
+      },
+      {
+        "id": "cfc5e14c-6643-41ab-8357-ec63e54c4951",
+        "status": "executed",
+        "type": "calendar_cancel_event"
+      }
+    ],
+    "task_cleanup": true,
+    "calendar_provider": {
+      "status": "cancelled",
+      "removed": true
+    },
+    "fixture_status_before_cleanup": "open",
+    "fixture_calendar_block": null,
+    "hockey_brief": {
+      "summary": "Complete the hockey registration you logged on September 15, 2026. No league, season, fee, deadline, or link was included in the entry, so confirm which program you meant and submit the form to close this out. If you have the league email or registration page, use that to finish on September 16, 2026.",
+      "todo_id": "25cd7733-fd3d-4487-aa51-dd7be64c1974",
+      "job_id": "dc981976-c7f3-44c7-bfb8-8400252d2f52",
+      "changed": true,
+      "open_questions": [
+        "Which hockey league and season is this registration for?"
+      ],
+      "done_when": "Hockey registration is submitted"
+    }
+  },
+  "initial_followup_execution": "maraithon-todo-validation-2s4l7",
+  "calendar_reference_commit": "4cb2eac3",
+  "calendar_reference_revision": "maraithon-00393-l8q",
+  "calendar_reference_workflow": "35060348062",
+  "final_execution": "maraithon-todo-validation-v4t42",
+  "final_eval": {
+    "removed": {
+      "error": null,
+      "status": "completed",
+      "request": "Remove the calendar block you just created. Keep this task open.",
+      "replies": [
+        "Done \u2014 took that 9:00-9:30 AM block off for tomorrow, Thursday Sep 17."
+      ],
+      "run_id": "217ff385-0ad2-4058-afc9-59b497a6a432",
+      "acceptance_ms": 329,
+      "steps": [
+        {
+          "error": null,
+          "status": "completed",
+          "type": "context_fetch",
+          "elapsed_ms": 0,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_request",
+          "elapsed_ms": 3119,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_response",
+          "elapsed_ms": 0,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "tool_call",
+          "elapsed_ms": 1233,
+          "tool": "prepare_external_action"
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_request",
+          "elapsed_ms": 2399,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_response",
+          "elapsed_ms": 0,
+          "tool": null
+        }
+      ],
+      "duplicate_reused_run": true,
+      "elapsed_ms": 10381,
+      "execution_ms": 8849,
+      "summary": {
+        "llm_turns": 2,
+        "tool_steps": 1
+      },
+      "calendar_block": null,
+      "task_status": "open"
+    },
+    "thread_id": "765e3b5d-3c8a-4063-855e-f388289bbe93",
+    "todo_id": "fe36387e-5109-46c7-97b4-412e43305990",
+    "booked": {
+      "error": null,
+      "status": "completed",
+      "request": "Add this to my calendar tomorrow.",
+      "replies": [
+        "Done \u2014 it's on your calendar tomorrow, Thursday Sep 17, 9:00-9:30 AM ET for 30 minutes of focus time."
+      ],
+      "run_id": "4626471d-411d-4673-8812-8d113212073a",
+      "acceptance_ms": 397,
+      "steps": [
+        {
+          "error": null,
+          "status": "completed",
+          "type": "context_fetch",
+          "elapsed_ms": 0,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_request",
+          "elapsed_ms": 3776,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_response",
+          "elapsed_ms": 0,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "tool_call",
+          "elapsed_ms": 96,
+          "tool": "calendar_events_around"
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_request",
+          "elapsed_ms": 5456,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_response",
+          "elapsed_ms": 0,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "tool_call",
+          "elapsed_ms": 1383,
+          "tool": "prepare_external_action"
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_request",
+          "elapsed_ms": 3442,
+          "tool": null
+        },
+        {
+          "error": null,
+          "status": "completed",
+          "type": "llm_response",
+          "elapsed_ms": 0,
+          "tool": null
+        }
+      ],
+      "duplicate_reused_run": true,
+      "elapsed_ms": 20992,
+      "execution_ms": 17336,
+      "summary": {
+        "llm_turns": 3,
+        "tool_steps": 2
+      },
+      "calendar_block": {
+        "calendar_id": "primary",
+        "created_at": "2026-09-16T05:44:30.673510Z",
+        "end_at": "2026-09-17T09:30:00-04:00",
+        "event_id": "jail934a3410tiht82jtp91fo1fvcoir0fum1n0enrl3fbpbh8sg",
+        "start_at": "2026-09-17T09:00:00-04:00"
+      },
+      "task_status": "open"
+    },
+    "calendar_provider": {
+      "status": "cancelled",
+      "removed": true
+    },
+    "task_cleanup": true,
+    "sends_to_other_people": 0
+  },
+  "final_reply_projection": "First paragraph only; unrelated schedule details omitted."
+}
