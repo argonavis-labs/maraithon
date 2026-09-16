@@ -520,20 +520,15 @@ defmodule Maraithon.Crm.PersonMergeSuggestions do
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
     Enum.each([{survivor, duplicate}, {duplicate, survivor}], fn {person, other} ->
-      metadata =
-        (person.metadata || %{})
-        |> Map.put("merge_suggestion", %{
-          "other_person_id" => other.id,
-          "other_display_name" => other.display_name,
-          "evidence" => judgment.evidence,
-          "status" => "pending",
-          "suggested_at" => now
-        })
+      suggestion = %{
+        "other_person_id" => other.id,
+        "other_display_name" => other.display_name,
+        "evidence" => judgment.evidence,
+        "status" => "pending",
+        "suggested_at" => now
+      }
 
-      _ =
-        person
-        |> Ecto.Changeset.change(%{metadata: metadata})
-        |> Repo.update()
+      _ = Maraithon.Crm.PersonMetadata.patch(person, "merge_suggestion", suggestion)
     end)
 
     :ok

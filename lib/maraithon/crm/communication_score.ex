@@ -17,7 +17,6 @@ defmodule Maraithon.Crm.CommunicationScore do
   """
 
   alias Maraithon.Crm.InteractionEvents
-  alias Maraithon.Repo
 
   require Logger
 
@@ -166,23 +165,18 @@ defmodule Maraithon.Crm.CommunicationScore do
     if person.communication_score == score and signals == nil and existing_signals == nil do
       :skip
     else
-      metadata =
-        case signals do
-          nil -> Map.delete(person.metadata || %{}, "communication_signals")
-          signals -> Map.put(person.metadata || %{}, "communication_signals", signals)
-        end
-
       person
-      |> Ecto.Changeset.change(communication_score: score, metadata: metadata)
-      |> Repo.update()
+      |> Maraithon.Crm.PersonMetadata.patch("communication_signals", signals,
+        communication_score: score
+      )
       |> case do
         {:ok, _person} ->
           :ok
 
-        {:error, changeset} ->
+        {:error, reason} ->
           Logger.warning("Communication score update failed",
             person_id: person.id,
-            reason: inspect(changeset.errors)
+            reason: reason
           )
 
           :skip

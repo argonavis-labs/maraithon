@@ -379,23 +379,16 @@ defmodule Maraithon.Crm.RelationshipGraph do
     if unchanged do
       :skip
     else
-      metadata =
-        case signals do
-          nil -> Map.delete(person.metadata || %{}, "graph_signals")
-          signals -> Map.put(person.metadata || %{}, "graph_signals", signals)
-        end
-
       person
-      |> Ecto.Changeset.change(network_rank: rank, metadata: metadata)
-      |> Repo.update()
+      |> Maraithon.Crm.PersonMetadata.patch("graph_signals", signals, network_rank: rank)
       |> case do
         {:ok, _person} ->
           :ok
 
-        {:error, changeset} ->
+        {:error, reason} ->
           Logger.warning("Relationship graph update failed",
             person_id: person.id,
-            reason: inspect(changeset.errors)
+            reason: reason
           )
 
           :skip

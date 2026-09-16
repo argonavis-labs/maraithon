@@ -68,7 +68,9 @@ Verified at the baseline. Historical reports establish what shipped, not that de
 
 ### Delegating
 
-On the todo, beside "Prepare this for me", a **Delegate** button opens a compact sheet:
+On the todo, a **Delegate** button opens a compact sheet. The todo's chat is the
+main place to ask Maraithon to act; there is no separate "Prepare this for me"
+step.
 
 | Row | Content |
 | --- | --- |

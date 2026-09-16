@@ -16,7 +16,6 @@ defmodule Maraithon.Crm.PersonEnrichment do
 
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.UpcomingMeetings
-  alias Maraithon.Repo
   alias Maraithon.WebSearch
 
   require Logger
@@ -156,19 +155,16 @@ defmodule Maraithon.Crm.PersonEnrichment do
   defp first_page_excerpt(_sources), do: nil
 
   defp store(person, enrichment) do
-    metadata = Map.put(person.metadata || %{}, "enrichment", enrichment)
-
     person
-    |> Ecto.Changeset.change(metadata: metadata)
-    |> Repo.update()
+    |> Maraithon.Crm.PersonMetadata.patch("enrichment", enrichment)
     |> case do
       {:ok, _person} ->
         {:ok, :enriched}
 
-      {:error, changeset} ->
+      {:error, reason} ->
         Logger.warning("Person enrichment store failed",
           person_id: person.id,
-          reason: inspect(changeset.errors)
+          reason: reason
         )
 
         {:error, :store_failed}

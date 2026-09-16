@@ -772,6 +772,14 @@ stays unknown; no historical person or memory was removed or rewritten.
 `make build` passed with warnings treated as errors. Automated tests were not
 run under the current development policy. Deployment is pending.
 
+The same review found four background writers that replaced the entire People
+metadata map after enrichment or scoring. They now use one small atomic helper
+to patch only their own key and metric. New learning and its source history
+therefore survive a slow enrichment, graph update, communication-score update
+or merge suggestion. The helper is scoped to the person's user and preserves
+the existing database write fences. It adds no model call or process. Its
+`make build` check passed; no automated tests ran.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
