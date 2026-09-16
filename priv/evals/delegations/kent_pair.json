@@ -10,6 +10,20 @@
   "limits": {"total_messages": 12, "calendar_events": 3, "micro_usd": 1000000},
   "scenarios": [
     {
+      "id": "durable_memory",
+      "mode": "live",
+      "kind": "information",
+      "outcome": "Collect the test project colour, packaging, delivery site and final approval code. Ask for one detail at a time in that order. Keep each answer with its source, and finish only after all four are known. Record all four together in the final outcome.",
+      "initial_email": "I have four details for our Maraithon test project: colour, packaging, delivery site and a final approval code. Please ask me for one detail at a time in that order, starting with the colour. I'll send the final code later.",
+      "counterparty_replies": [
+        "The test project colour is indigo.",
+        "The packaging is a wooden crate.",
+        "The delivery site is Harbour. The final approval code will come later.",
+        "The final approval code is CEDAR-42. Please record it together with the colour, packaging and site I gave you earlier."
+      ],
+      "expect": {"state": "completed", "answers": ["indigo", "wooden crate", "harbour", "cedar-42"], "completion_cites_inbound": true, "max_agent_messages": 6, "quiet_hours": 6, "crosses_release": true}
+    },
+    {
       "id": "information_reply",
       "mode": "live",
       "kind": "information",

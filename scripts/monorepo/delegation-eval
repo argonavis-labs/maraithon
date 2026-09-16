@@ -16,7 +16,7 @@ esac
 source "$(dirname "$0")/delegation-eval-config"
 scenario="${DELEGATION_EVAL_SCENARIO:-information_reply}"
 case "${scenario}" in
-  information_reply|schedule_and_book|accepted_slot_becomes_busy) ;;
+  information_reply|schedule_and_book|accepted_slot_becomes_busy|durable_memory) ;;
   *) echo "Unknown controlled eval scenario" >&2; exit 1 ;;
 esac
 eval_env+="|DELEGATION_EVAL_SCENARIO=${scenario}"

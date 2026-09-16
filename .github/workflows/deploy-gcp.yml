@@ -31,6 +31,24 @@ on:
         description: Completed information eval job UUID for read-only memory verification
         required: false
         type: string
+      delegation_eval_scenario:
+        description: Controlled Gmail scenario to start
+        required: false
+        default: information_reply
+        type: choice
+        options:
+          - information_reply
+          - schedule_and_book
+          - accepted_slot_becomes_busy
+          - durable_memory
+      delegation_eval_actor:
+        description: Controlled sender
+        required: false
+        default: as_user
+        type: choice
+        options:
+          - as_user
+          - as_assistant
       gmail_replay_lower:
         description: Gmail replay lower Unix second (inclusive)
         required: false
@@ -121,6 +139,8 @@ jobs:
         env:
           OPERATION: ${{ inputs.operation }}
           DELEGATION_EVAL_JOB_ID: ${{ inputs.delegation_eval_job_id }}
+          DELEGATION_EVAL_SCENARIO: ${{ inputs.delegation_eval_scenario }}
+          DELEGATION_EVAL_ACTOR: ${{ inputs.delegation_eval_actor }}
 
       - name: Replay Kent's Gmail source window
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'

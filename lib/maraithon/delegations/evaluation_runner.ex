@@ -4,7 +4,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   alias Maraithon.{Delegations, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
   alias Maraithon.Connectors.{Gmail, GoogleCalendar}
-  alias Maraithon.Delegations.{Evaluation, Gates, Ingress, Policy, Turn}
+  alias Maraithon.Delegations.{Evaluation, EvaluationCanary, Gates, Ingress, Policy, Turn}
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.TelegramAssistant.{ActionReconciliation, PreparedAction, Run}
   alias Maraithon.Todos.{Todo, Workflow}
@@ -17,7 +17,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   def start(scenario_id, actor \\ "as_user")
 
   def start(scenario_id, actor)
-      when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy) and
+      when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy durable_memory) and
              actor in ~w(as_user as_assistant) do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
          :ok <- budget_preflight(),
@@ -33,6 +33,11 @@ defmodule Maraithon.Delegations.EvaluationRunner do
            Evaluation.window(DateTime.utc_now(), Maraithon.Delegations.Preferences.get(@user)) do
       accounts = Map.new(report["accounts"], &{&1["email"], &1["account_id"]})
       id = Ecto.UUID.generate()
+
+      deadline =
+        if scenario_id == "durable_memory",
+          do: DateTime.add(scheduled_at, 3, :day),
+          else: deadline
 
       payload = %{
         "actor" => actor,
@@ -55,11 +60,20 @@ defmodule Maraithon.Delegations.EvaluationRunner do
             rate_limit_key: "google",
             max_attempts: 3,
             scheduled_at: scheduled_at,
-            dedupe_key: "delegation-eval:#{id}",
+            dedupe_key:
+              if(scenario_id == "durable_memory",
+                do: "delegation-canary:#{@user}:#{actor}",
+                else: "delegation-eval:#{id}"
+              ),
             payload: payload
           })
 
-        %{job_id: job.id, scenario: scenario_id, phase: "queued", scheduled_at: scheduled_at}
+        %{
+          job_id: job.id,
+          scenario: scenario_id,
+          phase: job.result["phase"] || "queued",
+          scheduled_at: job.scheduled_at
+        }
       end)
     else
       {:error, :account_cost_hold} = error -> error
@@ -87,9 +101,17 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         state = job.result || %{}
 
         case step(job, state) do
-          {:wait, next} -> {:ok, next, {:reschedule_in, 30_000}}
-          {:done, next} -> {:ok, next}
-          {:error, reason} -> fail(job, state, reason)
+          {:wait, next} ->
+            {:ok, next, {:reschedule_in, 30_000}}
+
+          {:wait_until, next, at} ->
+            {:ok, next, {:reschedule_at, at}}
+
+          {:done, next} ->
+            {:ok, next}
+
+          {:error, reason} ->
+            fail(job, state, reason)
         end
       else
         _ -> fail(job, job.result || %{}, :eval_stopped)
@@ -112,7 +134,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         status: job.status,
         scheduled_at: job.scheduled_at,
         result: job.result,
-        error: job.last_error
+        error: job.last_error,
+        observation: EvaluationCanary.observation(job)
       }
     end)
   end
@@ -149,7 +172,10 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         {:error, {:conversation_held, d.state}}
 
       d.state == "waiting_reply" and reply_due?(job, state, d) ->
-        reply(job, state, d)
+        case EvaluationCanary.before_reply(job, state, d, reply_count(state)) do
+          {:ready, next} -> reply(job, next, d)
+          other -> other
+        end
 
       true ->
         {:wait, Map.put(state, "phase", "waiting_for_agent")}
@@ -266,6 +292,12 @@ defmodule Maraithon.Delegations.EvaluationRunner do
          "reply_action_id" => action.id,
          "reply_count" => count + 1,
          "reply_message_id" => message.message_id,
+         "reply_message_ids" =>
+           Map.put(
+             state["reply_message_ids"] || %{},
+             Integer.to_string(count),
+             message.message_id
+           ),
          "sending_identity_verified" => true,
          "received_offer_verified" => d.kind == "scheduling"
        })}
@@ -502,19 +534,24 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       "completion_cites_reply" => state["reply_message_id"] in evidence_ids
     }
 
-    if d.kind == "scheduling" do
-      verify_calendar(job, Map.merge(state, common), d, todo)
-    else
-      passed =
-        todo.status == "done" and common["completion_cites_reply"] and
-          String.contains?(
-            String.downcase(get_in(d.data, ["ledger", "latest_outcome"]) || ""),
-            "indigo"
-          ) and
-          d.lifetime_sends in 1..2 and d.lifetime_micro_usd <= 100_000
+    cond do
+      d.kind == "scheduling" ->
+        verify_calendar(job, Map.merge(state, common), d, todo)
 
-      {:done,
-       Map.merge(state, Map.put(common, "phase", if(passed, do: "passed", else: "failed")))}
+      EvaluationCanary.scenario?(job) ->
+        {:done, EvaluationCanary.verify(job, Map.merge(state, common), d, todo, turns)}
+
+      true ->
+        passed =
+          todo.status == "done" and common["completion_cites_reply"] and
+            String.contains?(
+              String.downcase(get_in(d.data, ["ledger", "latest_outcome"]) || ""),
+              "indigo"
+            ) and
+            d.lifetime_sends in 1..2 and d.lifetime_micro_usd <= 100_000
+
+        {:done,
+         Map.merge(state, Map.put(common, "phase", if(passed, do: "passed", else: "failed")))}
     end
   end
 
