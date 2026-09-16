@@ -274,6 +274,8 @@ defmodule Maraithon.LocalCalendar do
   `{:ok, %{deleted: count}}`.
   """
   def purge_device(user_id, device_id) when is_binary(user_id) do
+    Maraithon.LocalCalendar.Availability.clear(user_id, device_id)
+
     {deleted, _} =
       Repo.delete_all(
         from event in LocalEvent,

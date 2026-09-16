@@ -96,15 +96,21 @@ defmodule Maraithon.LocalCalendar.LocalEvent do
   defp validate_source_state(_field, state) when state == %{}, do: []
 
   defp validate_source_state(field, state) do
-    valid? =
-      state["version"] == 1 and
-        Enum.all?(@source_states, fn {key, values} -> state[key] in values end) and
-        Enum.all?(state, fn
-          {"version", 1} -> true
-          {key, value} when key in @source_ids -> is_binary(value) and byte_size(value) <= 2048
-          {key, value} -> value in Map.get(@source_states, key, [])
-        end)
-
-    if valid?, do: [], else: [{field, "must contain a supported calendar source state"}]
+    if valid_source_state?(state),
+      do: [],
+      else: [{field, "must contain a supported calendar source state"}]
   end
+
+  @doc false
+  def valid_source_state?(state) when is_map(state) do
+    state["version"] == 1 and
+      Enum.all?(@source_states, fn {key, values} -> state[key] in values end) and
+      Enum.all?(state, fn
+        {"version", 1} -> true
+        {key, value} when key in @source_ids -> is_binary(value) and byte_size(value) <= 2048
+        {key, value} -> value in Map.get(@source_states, key, [])
+      end)
+  end
+
+  def valid_source_state?(_), do: false
 end

@@ -21,6 +21,7 @@ defmodule Maraithon.Companion.Device do
     field :token_hash, :string
     field :last_seen_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
+    field :calendar_availability, :map, default: %{}, load_in_query: false, redact: true
 
     timestamps(type: :utc_datetime_usec)
   end

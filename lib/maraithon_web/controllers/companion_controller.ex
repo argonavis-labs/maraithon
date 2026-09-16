@@ -28,6 +28,21 @@ defmodule MaraithonWeb.CompanionController do
   @recall_default_limit 20
   @recall_max_limit 50
 
+  def ingest_calendar_availability(conn, params) do
+    device = conn.assigns.current_device
+
+    with :ok <- validate_device(device, params),
+         {:ok, outcome} <- Maraithon.LocalCalendar.Availability.ingest(device, params["snapshot"]) do
+      json(conn, %{
+        accepted: if(outcome == :ok, do: 1, else: 0),
+        duplicate: if(outcome == :duplicate, do: 1, else: 0),
+        invalid: 0
+      })
+    else
+      {:error, reason} -> conn |> put_status(:unprocessable_entity) |> json(%{error: reason})
+    end
+  end
+
   @doc """
   POST /api/v1/companion/messages
 

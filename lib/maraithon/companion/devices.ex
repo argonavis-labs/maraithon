@@ -106,6 +106,7 @@ defmodule Maraithon.Companion.Devices do
         %Device{} = existing ->
           existing
           |> Device.changeset(attrs)
+          |> Ecto.Changeset.force_change(:calendar_availability, %{})
           |> Repo.update()
       end
 
@@ -138,6 +139,7 @@ defmodule Maraithon.Companion.Devices do
       %Device{} = device ->
         device
         |> Ecto.Changeset.change(revoked_at: DateTime.utc_now())
+        |> Ecto.Changeset.force_change(:calendar_availability, %{})
         |> Repo.update()
     end
   end
@@ -264,6 +266,8 @@ defmodule Maraithon.Companion.Devices do
   end
 
   defp purge_source_rows(schema, user_id, device_id) do
+    if schema == LocalEvent, do: Maraithon.LocalCalendar.Availability.clear(user_id, device_id)
+
     {count, _} =
       Repo.delete_all(
         from row in schema,

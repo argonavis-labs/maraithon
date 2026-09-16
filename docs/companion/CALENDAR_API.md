@@ -47,3 +47,33 @@ unchanged events acquire these fields when next uploaded. This payload does not
 certify a complete time window, reconcile missing events as deletions, or bind a
 local calendar to a connected account. Delegated slot offers continue using
 complete Google reads until those separate guarantees are implemented.
+
+
+## Complete availability window
+
+`POST /api/v1/companion/calendar-availability` accepts a paired device's
+`device_id` and `snapshot`. The server replaces that device's previous window
+atomically. This endpoint does not alter calendar history or run discovery.
+
+The version 1 snapshot requires `captured_at`, `from`, `until`, `calendars` and
+`events`. Timestamps use UTC ISO 8601. Capture must be at most five minutes old
+and the window at most 60 days. The entire payload is limited to 1 MiB, 64
+calendars and 2,000 event occurrences. Partial or truncated windows must not be
+sent. Calendar inventory includes calendars with no events. Each calendar has
+`id`, `source_id`, `name` and `source_name`.
+
+Each event has `guid`, `start_at`, `end_at`, `is_all_day` and the existing
+version 1 `source_state`, with calendar and source IDs matching the inventory.
+All-day occurrences also require floating `start_date` and exclusive `end_date`
+from the event's calendar timezone. Titles, notes, locations and attendees are
+excluded. Every occurrence must overlap the declared window.
+
+Successful writes return the normal ingestion counts. An identical retry
+returns one duplicate without refreshing capture time; older or conflicting
+captures are rejected. Revocation and token rotation are rechecked under the
+device row lock. Calendar purges, revocation and re-pairing clear the snapshot.
+The field is excluded from normal device queries and inspection output.
+
+This storage contract alone does not establish the Google account represented
+by a local calendar. Scheduling must continue using Google until explicit
+account binding and a fresh, complete window are available.

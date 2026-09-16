@@ -301,6 +301,7 @@ defmodule MaraithonWeb.Router do
     post "/notes", CompanionController, :ingest_notes
     post "/voice-memos", CompanionController, :ingest_voice_memos
     post "/calendar-events", CompanionController, :ingest_calendar_events
+    post "/calendar-availability", CompanionController, :ingest_calendar_availability
     post "/reminders", CompanionController, :ingest_reminders
     post "/contacts", CompanionController, :ingest_contacts
     post "/files", CompanionController, :ingest_files
