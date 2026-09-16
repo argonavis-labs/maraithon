@@ -97,7 +97,7 @@ The delegation summary on the todo is server-owned and identical on web, Mac, an
 
 ### Assistant setup
 
-A settings page, one row per fact: assistant name; email identity, either **Connect your assistant's Google account** (the existing `/auth/google` flow with `gmail_compose`, after which the account is bound to the assistant identity and never treated as the user's mailbox) or a verified send-as alias picked from the user's own Gmail; Slack name and icon; disclosure line (default "I'm <user>'s AI assistant and handle scheduling and follow-ups."); the disclosure toggle; and whether to copy the user on the assistant's first message in each thread (default off, because the todo already shows the thread). Delegation preferences sit on the same page: timezone, working days and hours, default meeting length, buffer, lead time, daily meeting cap, preferred video link or Calendly link, and the first-send undo window per actor.
+A settings page, one row per fact: assistant name; email identity, either select an already connected Google account, **Connect your assistant's Google account** (the existing `/auth/google` flow with `gmail_compose`, after which the account is bound to the assistant identity and never treated as the user's mailbox), or pick a verified send-as alias from the user's own Gmail; Slack name and icon; disclosure line (default "I'm <user>'s AI assistant and handle scheduling and follow-ups."); the disclosure toggle; and whether to copy the user on the assistant's first message in each thread (default off, because the todo already shows the thread). The Assistant section is available in web, Mac and iPhone settings. The backend stores the selection per user and checks that the connected account belongs to that user. October is Kent's configured assistant, not an application-wide identity or default. Delegation preferences sit on the same page: timezone, working days and hours, default meeting length, buffer, lead time, daily meeting cap, preferred video link or Calendly link, and the first-send undo window per actor.
 
 ## Authority
 
@@ -122,7 +122,7 @@ Every outbound action freezes the grant version, workflow revision, identity, de
 
 | | As me | As my assistant |
 | --- | --- | --- |
-| Gmail sender | Primary send-as of the bound account | The assistant's own connected account (`google:october@ewakened.com`), or a verified alias on the user's account (`sendAs.verificationStatus == "accepted"`) |
+| Gmail sender | Primary send-as of the bound account | The assistant account selected by this user, or a verified alias on the user's account (`sendAs.verificationStatus == "accepted"`) |
 | `From` header | Omitted (Gmail uses the primary) | `"<name> <address>"` for the assistant account's primary address or the verified alias; Gmail rejects unverified addresses, which the preflight checks first |
 | Signature | The user's primary send-as signature, plain text | "<name> · assistant to <user>" plus the disclosure line when enabled |
 | Slack token | The member's user token, `chat:write` | Bot token `slack:<team>`, `chat:write` plus `chat:write.customize` for `username` and `icon_url` |

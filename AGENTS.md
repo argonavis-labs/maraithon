@@ -66,6 +66,19 @@ user know what matters, prepare for their day, and follow through.
   successful recovery restores useful work and delivery, not just a green
   process status.
 
+## Assistant identity
+
+- Each user chooses their assistant's connected email account in Settings →
+  Assistant. Store that choice in the user-scoped `assistant_identities` row;
+  validate account ownership on the server. Web, Mac and iPhone share this
+  setting.
+- `october@ewakened.com` is the assistant for `kent@runner.now` only. It is
+  not an application-wide assistant address or a default for other users.
+  Fixed addresses belong only in the controlled eval fixture and its send gate.
+- Keep a dedicated assistant mailbox separate from the user's own identity,
+  discovery, briefs, voice samples and personal People history. Selecting an
+  assistant does not itself grant permission to send a message.
+
 ## The exact OTP runtime
 
 - PostgreSQL is the authority for ownership; BEAM processes are hints. Node

@@ -2,6 +2,22 @@
 
 Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
+## Assistant selection belongs to each user
+
+Kent clarified that October is his assistant only. The existing `assistant_identities` record stores the selected connected account and sending address per user. Settings reads and writes use the authenticated user's ID, and the backend checks account ownership before saving. Dedicated assistant accounts are marked in account metadata and excluded from personal-source discovery, identity, briefs, voice samples and People history. The fixed October address appears only in the controlled eval fixture and its restricted send gate.
+
+The live web Assistant settings page and installed Mac app both showed October with `october@ewakened.com` selected as the assistant's own account. iPhone's Settings → Assistant & scheduling uses the same shared native form and server API. Physical iPhone interaction was not repeated. No product code or saved configuration needed changing for this clarification. The project rules and execution plan now state the user-specific selection explicitly; no build or automated tests were needed for these documentation changes.
+
+## Conversation across releases
+
+The `durable_memory` controlled Gmail scenario collects four facts, one reply at a time. Before the final reply, it saves a baseline and schedules the existing eval job for at least six hours later, inside the user's working hours. It does not poll during that interval. The final reply also waits for a different serving revision. Each inspection reports elapsed time and current counters without reading provider messages or calling a model.
+
+The baseline covers the grant, scope, task owner, saved ledger, source revision, model calls, unresolved reservations, recorded cost and sent-message count. The unchanged interval is committed before the final reply can send. Active launches deduplicate per actor, and prepared replies keep their deterministic action IDs. The scenario has a three-day deadline and uses the existing controlled-recipient gate, signatures, request admission, send limits and independent review.
+
+The final decision must use the first saved answer after its message has left the six-message prompt window. The check requires that fact in the frozen ledger, its source in recalled evidence, its citation in the decision, all four answers saved with their respective sources, and independently reviewed completion. It reports model calls, stages, actual models and cost per turn. This is a live check of a real interval across releases; it is not evidence of months of operation until those months have elapsed.
+
+Commit `11921c8a` passed `make build`. Successful workflow `35099445591` deployed revision `maraithon-00416-mhz` to all traffic. No automated tests ran under the manual-first policy. October launcher workflow `35099925698` failed without returning an application report. Read-only status workflow `35100725635` found no new saved eval job. Read-only preflight workflow `35102446553` then confirmed both Kent accounts, the Muse model, development spending and execution readiness; it ran as `as_user`, because the preflight workflow step does not yet forward the selected actor. The launcher failure remains undiagnosed, and the cross-release scenario has not run. No existing completed conversation was restarted.
+
 ## Live saved-fact recall
 
 October's completed information conversation saved one fact with one citation. Read-only workflow `35095785564` passed after loading the encrypted conversation from PostgreSQL and removing its prompt cache in memory. The production toolbox fetched the cited Gmail message and verified its account, thread and content digest. The saved fact contains the expected project colour and cites the eval's counterparty reply. The final completion decision had independent review, used the configured Muse model, and kept the ledger within its size bound.
