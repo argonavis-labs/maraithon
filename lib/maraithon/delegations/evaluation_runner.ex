@@ -25,7 +25,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   def start(scenario_id, actor \\ "as_user")
 
   def start(scenario_id, actor)
-      when scenario_id in ~w(information_reply schedule_and_book accepted_slot_becomes_busy durable_memory) and
+      when scenario_id in ~w(information_reply schedule_and_book requested_scheduling accepted_slot_becomes_busy durable_memory) and
              actor in ~w(as_user as_assistant) do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
          :ok <- budget_preflight(),
@@ -345,7 +345,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         job.payload["scenario"],
         d.data["offered_slots"],
         message.text_body,
-        job.inserted_at,
+        d.inserted_at,
         d.actor
       )
 
@@ -519,7 +519,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
           "accepted_slot" =>
             Enum.at(
               d.data["offered_slots"] || [],
-              if(job.payload["scenario"]["id"] == "schedule_and_book", do: 1, else: 0)
+              (job.payload["scenario"]["expect"]["accepted_slot"] || 1) - 1
             ),
           "offered_slots_count" => length(d.data["offered_slots"] || [])
         })
@@ -533,7 +533,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
 
   defp verify_outcome(job, state, d) do
     todo = Repo.get!(Todo, d.todo_id)
-    turns = Repo.all(from t in Turn, where: t.delegation_id == ^d.id)
+    turns =
+      Repo.all(from t in Turn, where: t.delegation_id == ^d.id) |> Enum.map(&Turn.hydrate/1)
     evidence_ids = Enum.map(d.data["evidence"] || [], & &1["id"])
 
     common =
@@ -551,9 +552,22 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         "completion_cites_reply" => state["reply_message_id"] in evidence_ids
       })
 
+    research_verified? =
+      Enum.any?(turns, fn turn ->
+        Map.has_key?(turn.data["model_entries"] || %{}, "researched") and
+          turn.model_calls == 3 and turn.data["decision"]["kind"] == "propose_times" and
+          Policy.approved?(turn.data["decision"], turn.data["policy_review"])
+      end)
+
+    common = Map.put(common, "reviewed_scheduling_research", research_verified?)
+
     cond do
       not common["configured_model_used"] ->
         {:error, :configured_model_not_proven}
+
+      job.payload["scenario"]["expect"]["reviewed_research_turn"] == true and
+          not research_verified? ->
+        {:error, :reviewed_research_not_proven}
 
       d.kind == "scheduling" ->
         verify_calendar(job, Map.merge(state, common), d, todo)
@@ -609,6 +623,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
           same_instant?(event.start, state["accepted_slot"]["start_at"]) and
           same_instant?(event.end, state["accepted_slot"]["end_at"]) and
           event.summary == action.payload["title"] and
+          (event.description || "") == (action.payload["description"] || "") and
           same_instant?(event.start, action.payload["start_at"]) and
           same_instant?(event.end, action.payload["end_at"]) and
           Enum.any?(event.attendees, &(&1.email == @counterparty)) and
@@ -630,6 +645,10 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         is_nil(copy) ->
           {:error, :recipient_calendar_copy_missing}
 
+        DateTime.compare(copy.start, event.start) != :eq or
+            DateTime.compare(copy.end, event.end) != :eq or copy.summary != event.summary ->
+          {:error, :recipient_calendar_copy_changed}
+
         true ->
           {:wait,
            Map.merge(state, %{
@@ -638,6 +657,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
              "verified_booked_action_id" => action.id,
              "recipient_calendar_copy" => true,
              "booked_events" => bookings,
+             "booked_duration_min" => div(DateTime.diff(event.end, event.start), 60),
+             "invitation_description_verified" => true,
              "reoffered" => conflict?
            })}
       end

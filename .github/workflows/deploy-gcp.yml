@@ -45,6 +45,7 @@ on:
         options:
           - information_reply
           - schedule_and_book
+          - requested_scheduling
           - accepted_slot_becomes_busy
           - durable_memory
       delegation_eval_actor:

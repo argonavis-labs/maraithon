@@ -32,6 +32,8 @@ defmodule Maraithon.Delegations.Evaluation do
 
   @doc "Check the actual recipient's offered dates and wording before the fixture accepts a time."
   def verify_offer(scenario, slots, body, requested_at, actor \\ "as_user") do
+    expected = scenario["expect"]
+
     valid =
       is_list(slots) and length(slots) == 3 and is_binary(body) and
         (actor == "as_assistant" or
@@ -43,7 +45,8 @@ defmodule Maraithon.Delegations.Evaluation do
           {:ok, first, _} = DateTime.from_iso8601(slot["start_at"])
           {:ok, last, _} = DateTime.from_iso8601(slot["end_at"])
           prefs = %{"timezone" => slot["timezone"]}
-          date = Preferences.local_time(first, prefs) |> DateTime.to_date()
+          local_start = Preferences.local_time(first, prefs)
+          date = DateTime.to_date(local_start)
           requested = Preferences.local_time(requested_at, prefs) |> DateTime.to_date()
           monday = Date.add(requested, 8 - Date.day_of_week(requested))
 
@@ -51,8 +54,9 @@ defmodule Maraithon.Delegations.Evaluation do
             Date.compare(date, monday) != :lt and Date.compare(date, Date.add(monday, 7)) == :lt
 
           String.contains?(body, Scheduling.slot_label(slot)) and
-            DateTime.diff(last, first) == 1_800 and
-            (scenario["expect"]["requested_week_offset"] != 1 or next_week?)
+            DateTime.diff(last, first) == (expected["duration_min"] || 30) * 60 and
+            (expected["requested_week_offset"] != 1 or next_week?) and
+            (expected["afternoon_only"] != true or local_start.hour >= 12)
         end)
 
     if valid, do: :ok, else: {:error, :received_offer_not_proven}
