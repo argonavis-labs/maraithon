@@ -67,7 +67,8 @@ extension CalendarEventsSource {
             } catch {
                 // A stale or unavailable snapshot makes scheduling use Google.
                 // Keep the independent history cursor and its sync working.
-                eventLog.warning("calendar.availability_upload_failed", source: .calendar)
+                eventLog.warning("calendar.availability_upload_failed", source: .calendar,
+                                 payload: snapshot.failureMetadata(error))
             }
         }
 

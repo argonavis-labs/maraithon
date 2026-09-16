@@ -7,23 +7,25 @@ defmodule Maraithon.LocalCalendar.AvailabilitySnapshot do
   @event_keys ~w(guid start_at end_at start_date end_date is_all_day source_state)
 
   def validate(snapshot, now) when is_map(snapshot) do
-    with true <- Map.keys(snapshot) |> Enum.sort() == Enum.sort(@keys),
-         true <- snapshot["version"] == 1,
-         {:ok, captured} <- timestamp(snapshot["captured_at"]),
-         true <- DateTime.diff(now, captured) in 0..300,
-         {:ok, first} <- timestamp(snapshot["from"]),
-         {:ok, last} <- timestamp(snapshot["until"]),
-         true <- DateTime.diff(last, first) in 1..(60 * 86_400),
-         true <- bounded_list?(snapshot["calendars"], 64),
-         true <- Enum.all?(snapshot["calendars"], &calendar?/1),
+    with {:fields, true} <- {:fields, Enum.sort(Map.keys(snapshot)) == Enum.sort(@keys)},
+         {:version, true} <- {:version, snapshot["version"] == 1},
+         {:captured_at, {:ok, captured}} <- {:captured_at, timestamp(snapshot["captured_at"])},
+         {:freshness, true} <- {:freshness, DateTime.diff(now, captured) in 0..300},
+         {:from, {:ok, first}} <- {:from, timestamp(snapshot["from"])},
+         {:until, {:ok, last}} <- {:until, timestamp(snapshot["until"])},
+         {:window, true} <- {:window, DateTime.diff(last, first) in 1..(60 * 86_400)},
+         {:calendars, true} <- {:calendars, bounded_list?(snapshot["calendars"], 64)},
+         {:calendar_fields, true} <-
+           {:calendar_fields, Enum.all?(snapshot["calendars"], &calendar?/1)},
          calendars = MapSet.new(snapshot["calendars"], &{&1["id"], &1["source_id"]}),
-         true <- MapSet.size(calendars) == length(snapshot["calendars"]),
-         true <- bounded_list?(snapshot["events"], 2_000),
-         true <- Enum.all?(snapshot["events"], &event?(&1, calendars, first, last)),
-         true <- byte_size(Jason.encode!(snapshot)) <= 1_048_576 do
+         {:calendar_ids, true} <-
+           {:calendar_ids, MapSet.size(calendars) == length(snapshot["calendars"])},
+         {:events, true} <- {:events, bounded_list?(snapshot["events"], 2_000)},
+         nil <- Enum.find_value(snapshot["events"], &event_error(&1, calendars, first, last)),
+         {:bytes, true} <- {:bytes, byte_size(Jason.encode!(snapshot)) <= 1_048_576} do
       :ok
     else
-      _ -> {:error, :invalid_calendar_availability}
+      {field, _} -> {:error, "invalid_calendar_availability_#{field}"}
     end
   end
 
@@ -45,26 +47,35 @@ defmodule Maraithon.LocalCalendar.AvailabilitySnapshot do
 
   defp calendar?(_), do: false
 
-  defp event?(item, calendars, first, last) when is_map(item) do
-    with true <- Enum.all?(Map.keys(item), &(&1 in @event_keys)),
-         true <- text?(item["guid"]) and is_boolean(item["is_all_day"]),
+  defp event_error(item, calendars, first, last) when is_map(item) do
+    with {:event_fields, true} <-
+           {:event_fields, Enum.all?(Map.keys(item), &(&1 in @event_keys))},
+         {:event_fields, true} <-
+           {:event_fields, text?(item["guid"]) and is_boolean(item["is_all_day"])},
          state = item["source_state"],
-         true <- LocalEvent.valid_source_state?(state),
-         true <- MapSet.member?(calendars, {state["calendar_id"], state["source_id"]}),
-         {:ok, start_at} <- timestamp(item["start_at"]),
-         {:ok, end_at} <- timestamp(item["end_at"]),
-         true <- DateTime.compare(start_at, end_at) == :lt,
-         true <-
-           DateTime.compare(start_at, last) == :lt and DateTime.compare(end_at, first) == :gt do
-      if item["is_all_day"],
-        do: valid_dates?(item["start_date"], item["end_date"]),
-        else: is_nil(item["start_date"]) and is_nil(item["end_date"])
+         {:event_state, true} <- {:event_state, LocalEvent.valid_source_state?(state)},
+         {:event_calendar, true} <-
+           {:event_calendar,
+            MapSet.member?(calendars, {state["calendar_id"], state["source_id"]})},
+         {:event_start, {:ok, start_at}} <- {:event_start, timestamp(item["start_at"])},
+         {:event_end, {:ok, end_at}} <- {:event_end, timestamp(item["end_at"])},
+         {:event_duration, true} <- {:event_duration, DateTime.compare(start_at, end_at) == :lt},
+         {:event_window, true} <-
+           {:event_window,
+            DateTime.compare(start_at, last) == :lt and DateTime.compare(end_at, first) == :gt},
+         {:event_dates, true} <- {:event_dates, dates?(item)} do
+      nil
     else
-      _ -> false
+      error -> error
     end
   end
 
-  defp event?(_, _, _, _), do: false
+  defp event_error(_, _, _, _), do: {:event_fields, false}
+
+  defp dates?(%{"is_all_day" => true} = item),
+    do: valid_dates?(item["start_date"], item["end_date"])
+
+  defp dates?(item), do: is_nil(item["start_date"]) and is_nil(item["end_date"])
 
   defp valid_dates?(first, last) when is_binary(first) and is_binary(last) do
     with {:ok, first} <- Date.from_iso8601(first),

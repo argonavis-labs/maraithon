@@ -80,6 +80,33 @@ struct CalendarAvailabilityPayload: Encodable, Sendable {
         return formatter.string(from: date)
     }
 
+    func failureMetadata(_ error: Error) -> [String: String] {
+        var result: [String: String] = [:]
+        result["calendars"] = String(calendars.count)
+        result["events"] = String(events.count)
+        result["zero_duration"] = String(events.filter { $0.startAt == $0.endAt }.count)
+        result["negative_duration"] = String(events.filter { $0.startAt > $0.endAt }.count)
+        result["empty_calendar_fields"] = String(calendars.filter { $0.id.isEmpty || $0.sourceID.isEmpty || $0.name.isEmpty || $0.sourceName.isEmpty }.count)
+        result["capture_age_seconds"] = String(Int(Date().timeIntervalSince(capturedAt)))
+        if case MaraithonClientError.clientError(let status, let body) = error {
+            result["http_status"] = String(status)
+            if let data = body?.data(using: .utf8),
+               let value = try? JSONDecoder().decode([String: String].self, from: data),
+               let code = value["error"],
+               Self.failureCodes.contains(code) {
+                result["reason"] = code
+            }
+        } else if case MaraithonClientError.serverError(let status) = error {
+            result["http_status"] = String(status)
+        }
+        return result
+    }
+
+    private static let failureCodes = Set(
+        ["invalid_calendar_availability", "stale_calendar_availability", "device_revoked", "device_mismatch", "privacy_erasure_requested"] +
+        ["fields", "version", "captured_at", "freshness", "from", "until", "window", "calendars", "calendar_fields", "calendar_ids", "events", "bytes", "event_fields", "event_state", "event_calendar", "event_start", "event_end", "event_duration", "event_window", "event_dates"].map { "invalid_calendar_availability_\($0)" }
+    )
+
     enum CodingKeys: String, CodingKey {
         case version, from, until, calendars, events
         case capturedAt = "captured_at"
