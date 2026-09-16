@@ -1,10 +1,14 @@
 defmodule Maraithon.Delegations.SlackSource do
   @moduledoc "Resumable Slack pages, a complete evidence fingerprint, and six recent bodies."
+  import Ecto.Query
+  alias Maraithon.Repo
   alias Maraithon.Connectors.Slack
-  alias Maraithon.Delegations.{Scope, SlackIdentity, SlackIngress}
+  alias Maraithon.Delegations.{Scope, SlackIdentity, SlackIngress, Turn}
+  alias Maraithon.TelegramAssistant.Run
   @page_size 100
   @max_messages 10_000
   @max_pages 1_000
+  @source_fields ~w(version account_id channel thread_id history)
 
   # Preflight has no granted turn yet. Use the same bounded reader without
   # persisting authority or claiming that a partial read is complete.
@@ -13,8 +17,7 @@ defmodule Maraithon.Delegations.SlackSource do
     state = opts[:page_progress] || initial
 
     with true <-
-           Map.take(state, ~w(version account_id channel thread_id history)) ==
-             Map.take(initial, ~w(version account_id channel thread_id history)),
+           Map.take(state, @source_fields) == Map.take(initial, @source_fields),
          {:ok, token} <- SlackIdentity.read_token(user_id, identity, channel) do
       if Keyword.has_key?(opts, :page_progress) do
         with {:ok, _, next} <- page(token, state),
@@ -42,19 +45,88 @@ defmodule Maraithon.Delegations.SlackSource do
     initial =
       start(scope["identity"]["account_id"], channel, thread, include_unthreaded?: history?)
 
-    state = context.run.prompt_snapshot[key] || initial
+    state = context.run.prompt_snapshot[key] || resume(context, key, initial) || initial
 
     with true <-
-           Map.take(state, ~w(version account_id channel thread_id history)) ==
-             Map.take(initial, ~w(version account_id channel thread_id history)),
+           Map.take(state, @source_fields) == Map.take(initial, @source_fields),
          {:ok, token} <- SlackIdentity.read_token(d.user_id, scope["identity"], channel),
-         {:ok, messages, state} <- page(token, state),
+         {:ok, messages, state} <-
+           if(state["phase"] == "done", do: {:ok, [], state}, else: page(token, state)),
          {:ok, snapshot} <- completed(state) do
       {:ok, messages, snapshot, state}
     else
       false -> {:error, :source_gap}
       error -> error
     end
+  end
+
+  # A page can discover a reply and supersede its own turn. Preserve the
+  # authenticated prefix for the replacement turn, but never carry progress
+  # across another source change, a grant change, or into send verification.
+  def checkpoint(progress, context, current, sources) do
+    if is_nil(sources) or current.source_revision != context.turn.source_revision do
+      progress
+      |> Map.put("resume_scope", resume_scope(context.grant, current, progress))
+      |> Map.put("checkpoint_at", DateTime.to_iso8601(DateTime.utc_now()))
+      |> Map.put("read_at", sources && sources["read_at"])
+    end
+  end
+
+  defp resume(context, "slack_read", initial) do
+    expected = resume_scope(context.grant, context.delegation, initial)
+
+    Repo.all(
+      from t in Turn,
+        join: r in Run,
+        on: r.id == t.run_id and r.user_id == t.user_id,
+        where:
+          t.user_id == ^context.delegation.user_id and
+            t.delegation_id == ^context.delegation.id and t.seq < ^context.turn.seq and
+            t.grant_version == ^context.turn.grant_version,
+        order_by: [desc: t.seq],
+        limit: 3,
+        select: %{run: r, seq: t.seq, source_revision: t.source_revision}
+    )
+    |> Enum.find_value(fn row ->
+      progress = Run.hydrate_payloads(row.run).prompt_snapshot["slack_read"]
+
+      if is_map(progress) and progress["resume_scope"] == expected and
+           reusable?(progress, row, context.turn),
+         do: progress
+    end)
+  end
+
+  defp resume(_, _, _), do: nil
+
+  defp reusable?(progress, previous, turn) do
+    with {:ok, at, _} <- DateTime.from_iso8601(progress["checkpoint_at"] || "") do
+      age = DateTime.diff(DateTime.utc_now(), at, :millisecond)
+
+      case progress["phase"] do
+        "done" ->
+          # Only the immediate replacement may adopt a just-finished scan.
+          # A later timer must not mistake that old snapshot for a fresh read.
+          age in 0..30_000 and previous.seq == turn.seq - 1 and
+            previous.source_revision < turn.source_revision
+
+        phase when phase in ~w(replies history) ->
+          age in 0..1_800_000
+
+        _ ->
+          false
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp resume_scope(grant, d, state) do
+    Scope.hash(%{
+      "grant_id" => grant.id,
+      "scope_hash" => grant.data["scope_hash"],
+      "source_revision" => d.source_revision,
+      "source" => Map.take(state, @source_fields)
+    })
   end
 
   defp drain(token, state, deadline) do
@@ -296,7 +368,7 @@ defmodule Maraithon.Delegations.SlackSource do
       |> Map.merge(%{
         "provider" => "slack",
         "complete" => true,
-        "read_at" => DateTime.to_iso8601(DateTime.utc_now()),
+        "read_at" => state["read_at"] || DateTime.to_iso8601(DateTime.utc_now()),
         "fingerprint" => Scope.hash(state["digests"])
       })
 

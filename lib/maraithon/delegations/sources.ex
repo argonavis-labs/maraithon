@@ -92,13 +92,15 @@ defmodule Maraithon.Delegations.Sources do
     # missed reply advances the revision here before any decision can be made.
     Jobs.transaction(job, fn current ->
       route!(current, messages, sources)
+      d = Repo.get!(Maraithon.Delegations.Delegation, current.delegation.id)
 
       run =
-        if current.delegation.provider == "slack",
-          do: save_progress!(current.run, "slack_read", if(sources, do: nil, else: progress)),
-          else: current.run
-
-      d = Repo.get!(Maraithon.Delegations.Delegation, current.delegation.id)
+        if current.delegation.provider == "slack" do
+          progress = SlackSource.checkpoint(progress, current, d, sources)
+          save_progress!(current.run, "slack_read", progress)
+        else
+          current.run
+        end
 
       cond do
         d.source_revision != current.turn.source_revision ->
