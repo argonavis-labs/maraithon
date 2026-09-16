@@ -173,6 +173,7 @@ struct CalendarEventPayload: Codable, Sendable, Equatable {
     let attendeeEmails: [String]
     let createdAt: Date?
     let modifiedAt: Date?
+    var sourceState: CalendarEventState? = nil
 
     enum CodingKeys: String, CodingKey {
         case guid
@@ -191,6 +192,7 @@ struct CalendarEventPayload: Codable, Sendable, Equatable {
         case attendeeEmails = "attendee_emails"
         case createdAt = "created_at"
         case modifiedAt = "modified_at"
+        case sourceState = "source_state"
     }
 }
 

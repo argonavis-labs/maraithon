@@ -1,12 +1,12 @@
 defmodule Maraithon.LocalCalendar.LocalEvent do
   @moduledoc """
-  Append-only mirror of a macOS Calendar.app event synced from a companion
+  Mirror of a macOS Calendar.app event synced from a companion
   device through EventKit. `title` and `notes` are stored encrypted at
   rest via the existing Cloak vault (`Maraithon.Encrypted.Binary`).
 
   The macOS Calendar.app aggregates iCloud, Exchange, Google, and any
-  CalDAV calendars the user has added locally, so this single mirror is
-  the user's complete cross-account calendar picture. Each row is one
+  CalDAV calendars the user has added locally. Changed-event ingestion alone
+  does not prove that the mirror covers a complete window. Each row is one
   occurrence: recurring events are expanded by the EventKit reader so
   date-window queries don't need to evaluate recurrence rules on the
   server.
@@ -26,6 +26,7 @@ defmodule Maraithon.LocalCalendar.LocalEvent do
     field :local_id, :string
     field :calendar_name, :string
     field :calendar_color, :string
+    field :source_state, :map, default: %{}
     field :title, Maraithon.Encrypted.Binary
     field :notes, Maraithon.Encrypted.Binary
     field :location, :string
@@ -50,6 +51,7 @@ defmodule Maraithon.LocalCalendar.LocalEvent do
     :local_id,
     :calendar_name,
     :calendar_color,
+    :source_state,
     :title,
     :notes,
     :location,
@@ -69,14 +71,40 @@ defmodule Maraithon.LocalCalendar.LocalEvent do
   def changeset(event, attrs) do
     event
     |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
+    |> validate_required(@required_fields ++ [:source_state])
     |> validate_length(:source, max: 64)
     |> validate_length(:calendar_name, max: 255)
     |> validate_length(:calendar_color, max: 32)
     |> validate_length(:location, max: 1024)
     |> validate_length(:organizer_email, max: 255)
+    |> validate_change(:source_state, &validate_source_state/2)
     |> unique_constraint([:user_id, :device_id, :source, :guid],
       name: :local_calendar_events_user_device_source_guid_index
     )
+  end
+
+  # This is device-reported state, not proof of account ownership or a complete
+  # window. Old clients leave it empty; no missing state implies availability.
+  @source_states %{
+    "event_status" => ~w(unknown confirmed tentative cancelled),
+    "availability" => ~w(unknown busy free tentative unavailable),
+    "self_response" =>
+      ~w(unknown pending accepted declined tentative delegated completed in_process)
+  }
+  @source_ids ~w(calendar_id source_id source_name external_id)
+
+  defp validate_source_state(_field, state) when state == %{}, do: []
+
+  defp validate_source_state(field, state) do
+    valid? =
+      state["version"] == 1 and
+        Enum.all?(@source_states, fn {key, values} -> state[key] in values end) and
+        Enum.all?(state, fn
+          {"version", 1} -> true
+          {key, value} when key in @source_ids -> is_binary(value) and byte_size(value) <= 2048
+          {key, value} -> value in Map.get(@source_states, key, [])
+        end)
+
+    if valid?, do: [], else: [{field, "must contain a supported calendar source state"}]
   end
 end

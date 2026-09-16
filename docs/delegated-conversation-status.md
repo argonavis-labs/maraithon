@@ -689,6 +689,14 @@ Code inspection found that a closed local admission rejection preserved delegate
 
 `make build` passed with warnings treated as errors. Automated tests were not run under the current development policy. This change does not recover the missing cause of the old failure or prove that the live scheduling scenario passes.
 
+Commit `c9e70be7` deployed through successful workflow `35127688133` to revision `maraithon-00429-p7q`, serving all traffic. A separate labelled `requested_scheduling` attempt passed preflight through launcher `35128182399`, creating job `af4c9031-8d0d-4847-908d-b66347fb5ee9` at `2026-09-16T17:29:58.141605Z`. The old terminal attempt was not reopened or resent.
+
+## Local calendar source state
+
+The companion now captures EventKit calendar and source identifiers, a source label, the opaque external event identifier, cancellation status, availability and the current user's response. The server accepts a bounded, versioned `source_state` object on the existing HTTP and realtime ingestion paths and retains it on each upsert. Legacy or unavailable state stays unknown. The migration refreshes only the reviewed calendar-table fingerprints and checks all protocol proofs before and after the change.
+
+`make build` and the companion's `swift build` passed. No automated tests ran. This is the source-state prerequisite for local availability, not a completed mirror. Unchanged events are not forced through a full resync. Account binding, complete-window receipts and deletion reconciliation still need implementation before scheduling can prefer the mirror. The SDK documents the external event identifier as opaque, so it is not labelled or used as an iCal UID. [Calendar payload contract](companion/CALENDAR_API.md).
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.

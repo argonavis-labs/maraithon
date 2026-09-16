@@ -452,7 +452,8 @@ final class CalendarEventsSource: SourceProtocol {
             attendeesCount: snapshot.attendeesCount,
             attendeeEmails: snapshot.attendeeEmails,
             createdAt: snapshot.createdAt,
-            modifiedAt: snapshot.modifiedAt
+            modifiedAt: snapshot.modifiedAt,
+            sourceState: snapshot.sourceState
         )
     }
 

@@ -67,6 +67,7 @@ struct CalendarEventReader: @unchecked Sendable {
         let attendeeEmails: [String]
         let createdAt: Date?
         let modifiedAt: Date?
+        var sourceState: CalendarEventState? = nil
     }
 
     private let store: EKEventStore
@@ -194,7 +195,8 @@ struct CalendarEventReader: @unchecked Sendable {
             attendeesCount: attendeeEmails.count,
             attendeeEmails: attendeeEmails,
             createdAt: event.creationDate,
-            modifiedAt: event.lastModifiedDate
+            modifiedAt: event.lastModifiedDate,
+            sourceState: CalendarEventState(event: event)
         )
     }
 

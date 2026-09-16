@@ -7,8 +7,8 @@ defmodule Maraithon.LocalCalendar do
 
   macOS Calendar.app aggregates every calendar account the user has
   added locally (iCloud, Exchange, Google via CalDAV, etc.), so this
-  mirror is the full cross-account picture — strictly more complete
-  than the Google Calendar connector alone.
+  mirror can include accounts outside the Google connector. Changed-event
+  ingestion alone does not prove a complete or current availability window.
   """
 
   import Ecto.Query
@@ -22,6 +22,7 @@ defmodule Maraithon.LocalCalendar do
     :local_id,
     :calendar_name,
     :calendar_color,
+    :source_state,
     :title,
     :notes,
     :location,
@@ -314,6 +315,7 @@ defmodule Maraithon.LocalCalendar do
       local_id: fetch(event, :local_id),
       calendar_name: fetch(event, :calendar_name),
       calendar_color: fetch(event, :calendar_color),
+      source_state: fetch(event, :source_state) || %{},
       title: fetch(event, :title),
       notes: fetch(event, :notes),
       location: fetch(event, :location),
