@@ -58,7 +58,7 @@ The saved-memory probe includes the same report for the inspected completion tur
 
 Read-only workflow `35110150724` inspected October's existing completion turn. Its two settled receipts name Muse Spark Contributor: composition cost US$0.000281 and independent review cost US$0.000332, for US$0.000613 total. There were no unresolved charges. The inspection made zero model calls and sent no messages. This verifies an ordinary turn; research and repair remain unverified. [Receipt evidence](evidence/delegated-conversations/2026-09-16-model-receipts.json).
 
-The receipt check is now shared across information, scheduling, memory and longevity evals. Every counted call must have a settled receipt naming the expected model. Zero-call turns need no model receipt. A configured model name alone no longer passes the memory probe's model check. `make build` passed with warnings treated as errors. Automated tests were not run under the manual-first policy. Deployment is pending.
+The receipt check is now shared across information, scheduling, memory and longevity evals. Every counted call must have a settled receipt naming the expected model. Zero-call turns need no model receipt. A configured model name alone no longer passes the memory probe's model check. `make build` passed with warnings treated as errors. Automated tests were not run under the manual-first policy. Commit `4334bd7d` deployed through successful workflow `35111300631`; revision `maraithon-00420-sqt` serves all traffic. This release landed after the canary's saved baseline. Its final verification has not run yet.
 
 ## Thanks-only replies without model calls
 
