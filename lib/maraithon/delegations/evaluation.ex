@@ -3,6 +3,8 @@ defmodule Maraithon.Delegations.Evaluation do
   alias Maraithon.{Accounts, AssistantIdentities, ConnectedAccounts, LLM}
   alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.Delegations.{Preferences, Scheduling}
+  alias Maraithon.HTTP.Admission
+  alias Maraithon.Runtime.PeriodicJobs
 
   @doc "Leave one working hour for the live fixture, including its normal undo windows."
   def window(now, prefs) do
@@ -100,7 +102,8 @@ defmodule Maraithon.Delegations.Evaluation do
   end
 
   defp assistant_report(user_id, accounts, spec) do
-    with {:ok, identity} <- AssistantIdentities.gmail_snapshot(user_id, "as_assistant", nil),
+    with {:ok, identity} <-
+           read_probe(fn -> AssistantIdentities.gmail_snapshot(user_id, "as_assistant", nil) end),
          true <- identity["email"] == spec["assistant"]["email"],
          account when not is_nil(account) <-
            Enum.find(accounts, &(&1.id == identity["account_id"])),
@@ -119,6 +122,9 @@ defmodule Maraithon.Delegations.Evaluation do
       {:error, :gmail_sending_permission_required} ->
         %{"status" => "gmail_sending_permission_required"}
 
+      {:error, reason} ->
+        access_failure(reason)
+
       _ ->
         %{"status" => "assistant_setup_required"}
     end
@@ -133,7 +139,8 @@ defmodule Maraithon.Delegations.Evaluation do
       end)
 
     with [account] <- matching,
-         {:ok, identity} <- AssistantIdentities.gmail_snapshot(user_id, "as_user", account.id),
+         {:ok, identity} <-
+           read_probe(fn -> AssistantIdentities.gmail_snapshot(user_id, "as_user", account.id) end),
          true <- identity["email"] == email,
          {:ok, _events} <-
            GoogleCalendar.events_in_window(
@@ -154,11 +161,50 @@ defmodule Maraithon.Delegations.Evaluation do
         %{"email" => email, "status" => "sender_or_scope_mismatch"}
 
       {:error, reason} ->
-        %{
-          "email" => email,
-          "status" => "access_failed",
-          "failure" => Maraithon.Redaction.error_class(reason)
-        }
+        Map.put(access_failure(reason), "email", email)
     end
+  end
+
+  # A competing mailbox reader can reject this read locally for one second.
+  # Bound retries to two short waits in this operator probe, never a coordinator.
+  # Provider failures and longer cooldowns are reported without retrying.
+  defp read_probe(read, retries \\ 2) do
+    result = read.()
+
+    case result do
+      {:error, reason} when retries > 0 ->
+        case Admission.local_deferral(reason) do
+          {:rate_limited, seconds, _} when seconds in 1..5 ->
+            Process.sleep(seconds * 1_000)
+            read_probe(read, retries - 1)
+
+          _ ->
+            result
+        end
+
+      _ ->
+        result
+    end
+  end
+
+  defp access_failure(reason) do
+    retry_after =
+      case PeriodicJobs.retry_after_seconds_for(reason) do
+        {:ok, seconds} -> seconds
+        :none -> nil
+      end
+
+    local =
+      case Admission.local_deferral(reason) do
+        {:rate_limited, _, kind} -> Atom.to_string(kind)
+        _ -> nil
+      end
+
+    %{
+      "status" => "access_failed",
+      "failure" => Maraithon.Redaction.error_class(reason),
+      "retry_after_seconds" => retry_after,
+      "local_deferral" => local
+    }
   end
 end
