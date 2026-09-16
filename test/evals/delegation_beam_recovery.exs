@@ -178,14 +178,11 @@ defmodule Maraithon.DelegationBeamRecoveryEval do
 
     assert {:error, _} = call(second, :stale_write, [old_job])
 
-    assert {:ok, nil} =
-             Repo.transaction(fn ->
-               # Still no physical proof in storage, so releasing this partition is forbidden.
-               Repo.one(
-                 from p in Coordination.Partition,
-                   where: p.partition_id == ^old_job.partition_id and p.state == "ready"
-               )
-             end)
+    # Still no physical proof in storage, so the old ownership remains draining.
+    partition = Repo.get!(Coordination.Partition, old_job.partition_id)
+    assert partition.state == "draining"
+    assert partition.owner_node_incarnation_id == old_node.id
+    assert partition.ownership_epoch == old_job.coordination_partition_epoch
 
     assert Repo.get!(Grant, fixture.grant_id) |> Grant.hydrate() == grant
     assert Repo.get!(Delegation, fixture.delegation_id).lifetime_sends == 0
