@@ -44,6 +44,7 @@ on:
         type: choice
         options:
           - information_reply
+          - proposed_information_reply
           - schedule_and_book
           - requested_scheduling
           - accepted_slot_becomes_busy

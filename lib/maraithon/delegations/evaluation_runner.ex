@@ -8,6 +8,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   alias Maraithon.Delegations.{
     Evaluation,
     EvaluationCanary,
+    EvaluationProposal,
     EvaluationRecovery,
     Gates,
     Ingress,
@@ -27,12 +28,13 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   def start(scenario_id, actor \\ "as_user")
 
   def start(scenario_id, actor)
-      when scenario_id in ~w(information_reply schedule_and_book requested_scheduling accepted_slot_becomes_busy durable_memory) and
+      when scenario_id in ~w(information_reply proposed_information_reply schedule_and_book requested_scheduling accepted_slot_becomes_busy durable_memory) and
              actor in ~w(as_user as_assistant) do
     with true <- Gates.sends_enabled?(@user, "gmail") and eval_only?(),
          :ok <- budget_preflight(),
          %{} = scenario <-
            Enum.find(Evaluation.scenarios()["scenarios"], &(&1["id"] == scenario_id)),
+         true <- scenario["entry"] != "proposal" or actor == "as_assistant",
          %{"accounts_ready" => true, "model_ready" => true} = report <-
            Evaluation.preflight(actor),
          %{"account_id" => sender_id} <-
@@ -262,6 +264,10 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     end
   end
 
+  defp step(job, %{"todo_id" => _, "phase" => phase} = state)
+       when phase in ~w(waiting_for_proposal waiting_for_proposal_acceptance),
+       do: EvaluationProposal.wait(job, state)
+
   defp step(job, state) do
     with {:ok, action} <-
            action(job, "initial", %{"body" => job.payload["scenario"]["initial_email"]}),
@@ -295,8 +301,23 @@ defmodule Maraithon.Delegations.EvaluationRunner do
                    ),
                  dedupe_key: key
                })
-           end),
-         {:ok, d} <- ensure_delegation(job, todo) do
+           end) do
+      start_conversation(job, Map.put(state, "todo_id", todo.id), todo, message)
+    end
+  end
+
+  defp start_conversation(
+         %{payload: %{"scenario" => %{"entry" => "proposal"}}} = job,
+         state,
+         todo,
+         message
+       ) do
+    with {:ok, _} <- EvaluationProposal.prepare(job, todo, message),
+         do: EvaluationProposal.wait(job, state)
+  end
+
+  defp start_conversation(job, state, todo, _message) do
+    with {:ok, d} <- ensure_delegation(job, todo) do
       {:wait,
        Map.merge(state, %{
          "phase" => "waiting_for_agent",
@@ -639,6 +660,10 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     cond do
       not common["configured_model_used"] ->
         {:error, :configured_model_not_proven}
+
+      job.payload["scenario"]["entry"] == "proposal" and
+          (not is_map(state["proposal"]) or not is_binary(state["proposal_accepted_at"])) ->
+        {:error, :eval_proposal_acceptance_not_proven}
 
       job.payload["scenario"]["expect"]["reviewed_research_turn"] == true and
           not research_verified? ->

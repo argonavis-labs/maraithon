@@ -10,6 +10,16 @@
   "limits": {"total_messages": 12, "calendar_events": 3, "micro_usd": 1000000},
   "scenarios": [
     {
+      "id": "proposed_information_reply",
+      "mode": "live",
+      "entry": "proposal",
+      "kind": "information",
+      "outcome": "Learn the test project colour and record the answer with its source.",
+      "initial_email": "I have the colour for our Maraithon test project. Please ask me for it when you are ready.",
+      "counterparty_replies": ["The test project colour is indigo."],
+      "expect": {"state": "completed", "answer_contains": "indigo", "completion_cites_inbound": true, "proposal_accepted_in_app": true, "max_agent_messages": 2}
+    },
+    {
       "id": "durable_memory",
       "mode": "live",
       "kind": "information",

@@ -787,6 +787,22 @@ October's selected account, name and assistant-account mode. This verifies the
 deployed settings read path, not the full concurrency or historical-attribution
 matrix. The six-hour conversation canary remains in its scheduled quiet period.
 
+## Live proposal entry fixture
+
+The controlled Gmail fixture now has a `proposed_information_reply` scenario.
+It sends the labelled test email through the existing Kent pair, ingests the
+actual recipient copy through Gmail's normal observation path, and binds the
+todo to its resolved counterparty. It then waits for the real Chief of Staff
+proposal. The fixture does not rank a candidate, create a suggestion or call
+`delegate` itself.
+
+Once the proposal is observed, acceptance must create a delegation with the
+same actor and kind before the existing reply and completion checks continue.
+The job records candidate readiness, the proposal and its observation and
+acceptance times. Provider sends still use the controlled-pair gate and existing
+action identities. The scenario requires assistant mode. `make build` and shell
+syntax validation passed; no automated tests ran. Live verification is pending.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
