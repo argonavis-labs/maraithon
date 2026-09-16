@@ -833,7 +833,10 @@ Commit `9c17e172` deployed through successful workflow `35139481014` to
 revision `maraithon-00437-rdw`, serving all traffic. The installed Mac app then
 showed the controlled todo with its chat composer and no placeholder draft card
 or false reconnect warning. Native binaries did not change. Recovery workflow
-`35139998036` was dispatched for the original eval job; its result is pending.
+`35139998036` successfully recovered the original eval job, scheduled at
+`2026-09-16T19:23:51.433062Z`. The refreshed Mac task now shows its saved outcome
+and a plain Delegate button. A Chief of Staff proposal has not appeared yet.
+[Proposal entry observations](evidence/delegated-conversations/2026-09-16-proposal-entry.json).
 
 ## Remaining work
 

@@ -19,9 +19,17 @@
           "delegation_id": null
         }
       ]
+    },
+    {
+      "workflow": 35139998036,
+      "reported_at": "2026-09-16T19:24:04Z",
+      "operation": "resume",
+      "phase": "waiting_for_provider",
+      "scheduled_at": "2026-09-16T19:23:51.433062Z",
+      "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
     }
   ],
-  "verdict": "pending_recovery",
+  "verdict": "pending_proposal",
   "limitations": [
     "The failed attempt retained no exception detail.",
     "A provider-free calculation reproduced an invalid fixture workflow; this does not prove it was the only failure.",
