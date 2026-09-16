@@ -7,7 +7,7 @@ defmodule MaraithonWeb.MobileChatJSON do
   alias Maraithon.TelegramAssistant.WorkSummary
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.TelegramConversations
-  alias Maraithon.Todos.{PublicPayload, Todo, UserFacingCopy}
+  alias Maraithon.Todos.{ActionDrafts, PublicPayload, Todo, UserFacingCopy}
   alias Maraithon.AssistantChat.ThreadNaming
   alias Maraithon.{CalendarLinks, Crm, LocalCalendar, LocalMessages, Timezones}
   alias Maraithon.Repo
@@ -730,8 +730,8 @@ defmodule MaraithonWeb.MobileChatJSON do
 
       %{
         "provider" => "gmail",
-        "title" => "Gmail draft ready",
-        "status" => "Reconnect Gmail to send",
+        "title" => "Suggested Gmail reply",
+        "status" => "Review before sending",
         "from" => from,
         "recipient" => recipient,
         "cc" => email_display_value(read_string(draft, "cc")),
@@ -1884,13 +1884,11 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp primer_raw_draft_body(structured_data, linked_todo) do
     [
-      get_in(structured_data, ["drafted_next_step", "text"]),
-      get_in(linked_todo, ["action_draft", "text"]),
-      get_in(linked_todo, ["action_draft", "body"]),
-      get_in(linked_todo, ["action_draft", "message"])
+      structured_data["drafted_next_step"],
+      linked_todo["action_draft"]
     ]
-    |> Enum.find_value(fn value ->
-      read_public_text(value)
+    |> Enum.find_value(fn draft ->
+      if ActionDrafts.real_draft?(draft), do: read_public_text(ActionDrafts.preview(draft))
     end)
   end
 
