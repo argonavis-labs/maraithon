@@ -170,7 +170,7 @@ defmodule Maraithon.PeopleNetwork do
         p.user_id == ^user_id and p.generation_id == ^generation_id and p.window_days == ^days
   end
 
-  defp search(query, nil), do: where(query, [p], p.rank > 0)
+  defp search(query, nil), do: where(query, [p], p.rank > 0.0)
 
   defp search(query, term) do
     pattern = "%" <> String.replace(term, ["%", "_", "\\"], " ") <> "%"

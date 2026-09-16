@@ -257,7 +257,7 @@ struct PeopleNetworkPersonPage: View {
         } catch {
             guard !Task.isCancelled else { return }
             person = nil
-            self.error = error.localizedDescription
+            self.error = MobileErrorCopy.message(for: error)
         }
     }
 }

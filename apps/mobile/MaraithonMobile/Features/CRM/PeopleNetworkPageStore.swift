@@ -33,7 +33,7 @@ final class PeopleNetworkPageStore {
         } catch is CancellationError {
         } catch {
             guard networkVersion == version, !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            self.error = MobileErrorCopy.message(for: error)
         }
     }
 }
