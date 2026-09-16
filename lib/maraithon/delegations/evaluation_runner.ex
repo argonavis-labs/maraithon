@@ -4,6 +4,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   alias Maraithon.{Delegations, Repo, TelegramAssistant}
   alias Maraithon.AssistantChat.Execution
   alias Maraithon.Connectors.{Gmail, GoogleCalendar}
+
   alias Maraithon.Delegations.{
     Evaluation,
     EvaluationCanary,
@@ -13,6 +14,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
     Policy,
     Turn
   }
+
   alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, JobAuthority}
   alias Maraithon.TelegramAssistant.{ActionReconciliation, PreparedAction, Run}
   alias Maraithon.Todos.{Todo, Workflow}
@@ -166,7 +168,6 @@ defmodule Maraithon.Delegations.EvaluationRunner do
         )
 
       turns = rows |> Enum.take(10) |> Enum.map(&Turn.hydrate/1)
-      chat = "delegation-eval:#{job.id}"
 
       %{
         state: d.state,
@@ -187,17 +188,36 @@ defmodule Maraithon.Delegations.EvaluationRunner do
               evidence_count: length(decision["evidence"] || [])
             }
           end),
-        actions:
-          Repo.all(
-            from a in PreparedAction,
-              where: a.user_id == @user and (a.delegation_id == ^d.id or a.chat_id == ^chat),
-              order_by: [desc: a.inserted_at],
-              limit: 12,
-              select: map(a, [:id, :action_type, :status, :delegation_id, :inserted_at])
-          ),
+        actions: action_details(job, d.id),
         trace: Maraithon.Delegations.Audit.page(@user, d.id)
       }
+    else
+      %{actions: action_details(job, nil)}
     end
+  end
+
+  defp action_details(job, delegation_id) do
+    chat = "delegation-eval:#{job.id}"
+    match = dynamic([a], a.chat_id == ^chat)
+
+    match =
+      if delegation_id, do: dynamic([a], ^match or a.delegation_id == ^delegation_id), else: match
+
+    from(a in PreparedAction,
+      where: a.user_id == @user,
+      where: ^match,
+      order_by: [desc: a.inserted_at],
+      limit: 12
+    )
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      action = PreparedAction.hydrate_payload(row)
+      failure = (action.payload || %{})["_maraithon_execution_error"]
+
+      action
+      |> Map.take([:id, :action_type, :status, :delegation_id, :inserted_at])
+      |> Map.put(:failure, if(is_map(failure), do: Map.take(failure, ~w(class code http_status))))
+    end)
   end
 
   defp step(job, %{"phase" => "calendar_verified", "delegation_id" => id} = state) do
@@ -477,6 +497,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       {:ok, sent, _, :already_executed} -> {:ok, sent}
       {:error, _, _, :manual_reconciliation} -> :wait
       {:error, _, :prepared_action_execution_in_progress} -> :wait
+      {:error, %PreparedAction{status: "confirmed"}, reason} -> {:error, reason}
       _ -> {:error, :eval_send_failed}
     end
   end
@@ -585,8 +606,10 @@ defmodule Maraithon.Delegations.EvaluationRunner do
 
   defp verify_outcome(job, state, d) do
     todo = Repo.get!(Todo, d.todo_id)
+
     turns =
       Repo.all(from t in Turn, where: t.delegation_id == ^d.id) |> Enum.map(&Turn.hydrate/1)
+
     evidence_ids = Enum.map(d.data["evidence"] || [], & &1["id"])
 
     common =
@@ -698,7 +721,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
           {:error, :recipient_calendar_copy_missing}
 
         DateTime.compare(copy.start, event.start) != :eq or
-            DateTime.compare(copy.end, event.end) != :eq or copy.summary != event.summary ->
+          DateTime.compare(copy.end, event.end) != :eq or copy.summary != event.summary ->
           {:error, :recipient_calendar_copy_changed}
 
         true ->

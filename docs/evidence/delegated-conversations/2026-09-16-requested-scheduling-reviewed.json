@@ -13,6 +13,27 @@
     }
   },
   "limits": [
-    "Queued successfully; final result pending."
-  ]
+    "The job ended with eval_send_failed before recording a delegation.",
+    "This result does not prove whether the fixture message was delivered.",
+    "The revised scheduling decisions were not exercised by this attempt."
+  ],
+  "status": {
+    "workflow_id": 35125515701,
+    "report": [
+      {
+        "error": null,
+        "status": "completed",
+        "result": {
+          "calendar_cleanup": "completed",
+          "cleanup_checks": 1,
+          "phase": "failed",
+          "reason": "eval_send_failed"
+        },
+        "details": null,
+        "scheduled_at": "2026-09-16T16:59:54.001944Z",
+        "observation": null,
+        "job_id": "42b77f9f-f81b-46f3-be90-9e38ffa78424"
+      }
+    ]
+  }
 }
