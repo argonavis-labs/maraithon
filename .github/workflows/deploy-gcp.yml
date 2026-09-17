@@ -23,6 +23,7 @@ on:
           - delegation-eval-preflight
           - delegation-eval-start
           - delegation-eval-status
+          - delegation-eval-review
           - delegation-eval-calendar
           - delegation-eval-memory
           - delegation-eval-diagnose
@@ -36,6 +37,10 @@ on:
         type: string
       delegation_eval_execution_id:
         description: Cloud Run eval or migration execution ID for redacted failure diagnostics
+        required: false
+        type: string
+      delegation_eval_review_public_key:
+        description: Base64 PEM public key for encrypted inspection of the controlled proposal review
         required: false
         type: string
       delegation_eval_scenario:
@@ -144,6 +149,7 @@ jobs:
         env:
           OPERATION: ${{ inputs.operation }}
           DELEGATION_EVAL_JOB_ID: ${{ inputs.delegation_eval_job_id }}
+          DELEGATION_EVAL_REVIEW_PUBLIC_KEY: ${{ inputs.delegation_eval_review_public_key }}
           DELEGATION_EVAL_EXECUTION_ID: ${{ inputs.delegation_eval_execution_id }}
           DELEGATION_EVAL_SCENARIO: ${{ inputs.delegation_eval_scenario }}
           DELEGATION_EVAL_ACTOR: ${{ inputs.delegation_eval_actor }}

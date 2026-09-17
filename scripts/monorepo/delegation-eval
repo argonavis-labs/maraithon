@@ -25,13 +25,14 @@ case "${1:-}" in
     ;;
   delegation-eval-start) task=delegation_eval_start ;;
   delegation-eval-status) task=delegation_eval_status ;;
+  delegation-eval-review) task=delegation_eval_review; prefix=DELEGATION_EVAL_ENCRYPTED= ;;
   delegation-eval-calendar) task=delegation_eval_calendar; prefix=DELEGATION_EVAL_CALENDAR= ;;
   delegation-eval-memory) task=delegation_eval_memory ;;
   delegation-eval-resume) task=delegation_eval_resume ;;
   *) echo "Expected a controlled delegation eval operation" >&2; exit 1 ;;
 esac
 
-if [[ "${task}" == delegation_eval_memory || "${task}" == delegation_eval_resume || -n "${DELEGATION_EVAL_JOB_ID:-}" ]]; then
+if [[ "${task}" == delegation_eval_memory || "${task}" == delegation_eval_resume || "${task}" == delegation_eval_review || -n "${DELEGATION_EVAL_JOB_ID:-}" ]]; then
   [[ "${DELEGATION_EVAL_JOB_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
     echo "A controlled eval job UUID is required" >&2; exit 1;
   }
@@ -45,11 +46,19 @@ case "${scenario}" in
 esac
 eval_env+="|DELEGATION_EVAL_SCENARIO=${scenario}"
 eval_env+="|DELEGATION_EVAL_JOB_ID=${DELEGATION_EVAL_JOB_ID:-}"
+eval_code="Maraithon.Release.${task}"
+if [[ "${task}" == delegation_eval_review ]]; then
+  [[ "${DELEGATION_EVAL_REVIEW_PUBLIC_KEY:-}" =~ ^[A-Za-z0-9+/=]{100,2000}$ ]] || {
+    echo "A base64 PEM public key is required for encrypted review output" >&2; exit 1;
+  }
+  eval_env+="|DELEGATION_EVAL_REVIEW_PUBLIC_KEY=${DELEGATION_EVAL_REVIEW_PUBLIC_KEY}"
+  eval_code="$(cat "$(dirname "$0")/delegation-eval-review.exs")"
+fi
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 execution_status=0
 gcloud run jobs execute maraithon-todo-validation --project maraithon --region us-central1 \
-  --args="^@^eval@Maraithon.Release.${task}" --update-env-vars "${eval_env}" --wait --quiet || execution_status=$?
+  --args="^@^eval@${eval_code}" --update-env-vars "${eval_env}" --wait --quiet || execution_status=$?
 
 for attempt in $(seq 1 20); do
   report="$(gcloud logging read \
