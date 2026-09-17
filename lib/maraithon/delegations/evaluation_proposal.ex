@@ -188,9 +188,102 @@ defmodule Maraithon.Delegations.EvaluationProposal do
           attempts: j.attempts
         }
     )
+    |> Enum.map(fn failure ->
+      if failure.error == "source_discovery_incomplete_decisions" and
+           failure.job_type == "runtime_partition:source_account_discovery_reason" do
+        source_job =
+          Repo.get!(Maraithon.Runtime.BackgroundJob, failure.job_id)
+          |> Maraithon.Runtime.BackgroundJob.hydrate_payloads()
+
+        account =
+          Repo.get_by!(ConnectedAccount,
+            id: source_job.payload["account_id"],
+            user_id: job.user_id
+          )
+
+        Map.merge(failure, %{
+          account_id: account.id,
+          handoff:
+            Maraithon.Runtime.SourceAccountDiscovery.handoff_diagnostics(
+              account,
+              source_job.payload
+            )
+        })
+      else
+        failure
+      end
+    end)
   end
 
   def source_failures(_job), do: []
+
+  def source_cycles(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
+    Maraithon.ConnectedAccounts.list_personal_for_user(job.user_id)
+    |> Enum.filter(&(&1.status == "connected"))
+    |> Enum.take(10)
+    |> Enum.map(fn account ->
+      acquisition =
+        Repo.one(
+          from j in Maraithon.Runtime.BackgroundJob,
+            where: j.user_id == ^job.user_id,
+            where: j.dedupe_key == ^"runtime-partition:source-account-discovery:#{account.id}",
+            order_by: [desc: j.inserted_at, desc: j.id],
+            limit: 1
+        )
+
+      completed =
+        Repo.one(
+          from j in Maraithon.Runtime.BackgroundJob,
+            where: j.user_id == ^job.user_id and j.status == "completed",
+            where:
+              like(
+                j.dedupe_key,
+                ^"runtime-partition:source-account-discovery-finalize:#{account.id}:%"
+              ),
+            order_by: [desc: j.completed_at, desc: j.id],
+            limit: 1
+        )
+
+      %{
+        account_id: account.id,
+        provider: account.provider,
+        acquisition: cycle_summary(acquisition),
+        last_completed: cycle_summary(completed)
+      }
+    end)
+  end
+
+  def source_cycles(_job), do: []
+
+  defp cycle_summary(nil), do: nil
+
+  defp cycle_summary(row) do
+    job = Maraithon.Runtime.BackgroundJob.hydrate_payloads(row)
+    children = (job.result || %{})["reason_job_ids"] || []
+    children = Enum.take(children, 200)
+
+    counts =
+      Repo.all(
+        from j in Maraithon.Runtime.BackgroundJob,
+          where: j.user_id == ^job.user_id and j.id in ^children,
+          group_by: j.status,
+          select: {j.status, count(j.id)}
+      )
+      |> Map.new()
+
+    %{
+      job_id: job.id,
+      status: job.status,
+      updated_at: job.updated_at,
+      completed_at: job.completed_at,
+      result:
+        Map.take(
+          job.result || %{},
+          ~w(outcome source_items fanout_count decision_count advanced_watermarks finalizer_job_id)
+        ),
+      children: counts
+    }
+  end
 
   def prepare(job, todo, message) do
     JobAuthority.transaction(job, fn ->

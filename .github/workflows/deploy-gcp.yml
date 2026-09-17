@@ -23,6 +23,7 @@ on:
           - delegation-eval-preflight
           - delegation-eval-start
           - delegation-eval-status
+          - delegation-eval-calendar
           - delegation-eval-memory
           - delegation-eval-diagnose
           - delegation-eval-resume

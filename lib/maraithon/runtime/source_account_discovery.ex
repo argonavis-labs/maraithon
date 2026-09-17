@@ -651,6 +651,45 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
+  @doc "Read-only counts and bounds for an encrypted reasoning handoff, without source text."
+  def handoff_diagnostics(%ConnectedAccount{} = account, payload) when is_map(payload) do
+    with :ok <- validate_ownership(account, nil),
+         {:ok, bundle} <- fetch_map(payload, "source_bundle"),
+         {:ok, bundle} <- restore_partition_bundle(bundle) do
+      candidates = todo_candidates(account, bundle)
+
+      %{
+        source_items: source_item_count(bundle),
+        candidates: length(candidates),
+        evidence_complete: Enum.count(candidates, &candidate_evidence_complete?/1),
+        records:
+          Enum.zip_with(candidates, source_records(bundle), fn candidate, source ->
+            record = get_in(candidate, ["metadata", "source_record"]) || %{}
+
+            context =
+              if source.source == :gmail,
+                do: gmail_thread_context(source.item),
+                else: source.item["thread_context"] || []
+
+            body =
+              if source.source == :gmail,
+                do: BodyText.from_message(source.item),
+                else: source.item["text"]
+
+            Map.take(record, ~w(evidence_complete evidence_bytes source_record_bytes
+                               source_record_prompt_compacted body_bytes text_bytes))
+            |> Map.merge(%{
+              "readable_bytes" => if(is_binary(body), do: byte_size(body), else: 0),
+              "context_bytes" => encoded_bytes(context),
+              "context_items" => length(context)
+            })
+          end)
+      }
+    else
+      {:error, reason} -> %{error: Maraithon.Redaction.error_class(reason)}
+    end
+  end
+
   defp maybe_put_llm_complete(intelligence_opts, opts) do
     case Keyword.get(opts, :llm_complete) do
       fun when is_function(fun, 1) -> Keyword.put(intelligence_opts, :llm_complete, fun)

@@ -62,7 +62,10 @@ defmodule Maraithon.Release do
               report
 
             {:error, {:eval_preflight_required, report}} ->
-              Map.merge(report, %{"phase" => "start_refused", "reason" => "eval_preflight_required"})
+              Map.merge(report, %{
+                "phase" => "start_refused",
+                "reason" => "eval_preflight_required"
+              })
 
             {:error, reason} ->
               %{"phase" => "start_refused", "reason" => Maraithon.Redaction.error_class(reason)}
@@ -90,6 +93,10 @@ defmodule Maraithon.Release do
       end,
       "DELEGATION_EVAL="
     )
+  end
+
+  def delegation_eval_calendar do
+    delegation_eval(&Maraithon.Delegations.EvaluationCalendar.run/0, "DELEGATION_EVAL_CALENDAR=")
   end
 
   defp delegation_eval(fun, prefix) do

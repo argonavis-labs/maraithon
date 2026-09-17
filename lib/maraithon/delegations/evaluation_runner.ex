@@ -197,7 +197,8 @@ defmodule Maraithon.Delegations.EvaluationRunner do
       %{
         actions: action_details(job, nil),
         proposal_runtime: EvaluationProposal.diagnostics(job),
-        source_failures: EvaluationProposal.source_failures(job)
+        source_failures: EvaluationProposal.source_failures(job),
+        source_cycles: EvaluationProposal.source_cycles(job)
       }
     end
   end

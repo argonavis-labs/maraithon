@@ -25,6 +25,7 @@ case "${1:-}" in
     ;;
   delegation-eval-start) task=delegation_eval_start ;;
   delegation-eval-status) task=delegation_eval_status ;;
+  delegation-eval-calendar) task=delegation_eval_calendar; prefix=DELEGATION_EVAL_CALENDAR= ;;
   delegation-eval-memory) task=delegation_eval_memory ;;
   delegation-eval-resume) task=delegation_eval_resume ;;
   *) echo "Expected a controlled delegation eval operation" >&2; exit 1 ;;
