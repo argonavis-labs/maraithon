@@ -3465,5 +3465,17 @@
         "job_id": "ba6a82d0-d1d3-4937-8028-1b312a7b0046"
       }
     ]
+  },
+  "session_closed": {
+    "commit": "f90373e2",
+    "deployment_workflow_run": 35247918999,
+    "deployed_revision": "maraithon-00459-ftc",
+    "spending_restore_workflow_run": 35248347641,
+    "serving_revision": "maraithon-00460-c4b",
+    "serving_traffic_percent": 100,
+    "service_development_spending": false,
+    "eval_job_development_spending": false,
+    "verified_at": "2026-09-17T16:45:07Z",
+    "temporary_private_review_files_removed": true
   }
 }

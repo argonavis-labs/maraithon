@@ -42,11 +42,12 @@ fallback checks are complete. The next work is listed below.
   automated hardening follows the current development-mode policy.
 - [ ] Complete the controlled Gmail pilot before expanding the live send gate
   beyond the labelled Kent-pair eval.
-- [ ] Commit and deploy finished changes as they land. Restore the normal US$7
-  spending pause when active development ends.
 
 ## Completed, with recorded evidence
 
+- [x] Commit and deploy the September 17 changes, then restore the normal US$7
+  spending pause. The serving app and eval job both have the development
+  spending override turned off, verified at `16:45Z`.
 - [x] Accept a generated “Delegate to October?” suggestion through the actual
   task UI and complete the resulting controlled conversation. The explicit
   handoff case passed: one assistant message, one reply, a Done todo and a

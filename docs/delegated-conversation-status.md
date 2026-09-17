@@ -1304,6 +1304,13 @@ remaining oversized Chief of Staff request is separate: repeated steps reject
 roughly 296 KB against the 128 KB request budget, while proposal reviews
 continue afterward. Its skill and affected product outcome still need diagnosis.
 
+Commit `f90373e2` deployed through workflow `35247918999` to revision
+`maraithon-00459-ftc`. At the end of active development, workflow `35248347641`
+restored `LLM_DEVELOPMENT_SPENDING=false` on both the serving app and the eval
+job. It verified revision `maraithon-00460-c4b` serving all traffic and both
+settings at `16:45:07Z`. The normal US$7 pause applies again. Temporary private
+review payloads and their encryption keys were removed from the local machine.
+
 [Recovery evidence](evidence/delegated-conversations/2026-09-17-recovery.json).
 
 ## Remaining work
