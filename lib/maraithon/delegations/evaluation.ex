@@ -143,12 +143,14 @@ defmodule Maraithon.Delegations.Evaluation do
            read_probe(fn -> AssistantIdentities.gmail_snapshot(user_id, "as_user", account.id) end),
          true <- identity["email"] == email,
          {:ok, _events} <-
-           GoogleCalendar.events_in_window(
-             user_id,
-             account.id,
-             DateTime.utc_now(),
-             DateTime.add(DateTime.utc_now(), 1, :day)
-           ) do
+           read_probe(fn ->
+             GoogleCalendar.events_in_window(
+               user_id,
+               account.id,
+               DateTime.utc_now(),
+               DateTime.add(DateTime.utc_now(), 1, :day)
+             )
+           end) do
       %{"email" => email, "account_id" => account.id, "status" => "ready"}
     else
       [] ->
