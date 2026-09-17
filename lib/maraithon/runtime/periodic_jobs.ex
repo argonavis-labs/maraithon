@@ -2069,11 +2069,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
             Map.get(handoff, "fanout_count"),
             account.id
           ),
-        partition_key:
-          hashed_key(
-            "source-discovery-reason",
-            "#{account.user_id}:#{acquisition_job.id}:#{fanout_index}"
-          ),
+        # Every batch reconciles the same user-wide todo inventory. Use the
+        # existing execution partition to stop sibling batches invalidating
+        # each other's intake snapshot while their model calls are in flight.
+        partition_key: hashed_key("source-discovery-reason", account.user_id),
         rate_limit_key: "model",
         max_attempts: 2,
         scheduled_at: database_now!(),

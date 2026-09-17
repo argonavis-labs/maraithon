@@ -19,8 +19,11 @@ defines the intended behaviour.
   9:49 p.m. Toronto still showed repeated 20-batch Runner cycles with failed
   AI reviews. The diagnostic now includes processing and finalisation failures
   so dependent completion errors cannot hide the earlier cause. The fresh report
-  returned interrupted model outcomes around deployment; a follow-up separates
-  distinct causes so repeated interruptions do not hide earlier failures.
+  returned interrupted model outcomes around deployment. The revised report
+  isolates competing batches invalidating the todo intake snapshot, plus a
+  separate incomplete-decision failure. A local fix serialises new discovery
+  batches per user; its build passes. Live recovery and the incomplete-decision
+  failure remain open.
 - [ ] Verify scheduling uses the three approved Mac calendars when fresh and
   falls back to Google when unavailable or stale. The selections are now saved;
   the consumer and fallback still need a live check.

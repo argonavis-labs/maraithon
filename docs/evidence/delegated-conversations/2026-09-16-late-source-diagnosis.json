@@ -120,5 +120,129 @@
       "observation": null,
       "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
     }
-  ]
+  ],
+  "followup": {
+    "workflow_id": "35173928790",
+    "revision": "maraithon-00450-dfw",
+    "reported_at": "2026-09-17T02:22:11Z",
+    "read_only": true,
+    "report": [
+      {
+        "error": null,
+        "status": "completed",
+        "result": {
+          "calendar_cleanup": "completed",
+          "cleanup_checks": 1,
+          "phase": "failed",
+          "proposal_candidate_ready": true,
+          "reason": "eval_stopped",
+          "recovered_at": "2026-09-16T19:23:21.433062Z",
+          "recovered_initial_failure": "background_job_error",
+          "todo_id": "ae3d2027-04b2-4768-8826-d5ba1e3a1ce0"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T02:16:20.046677Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "bbc03df3-7db1-4030-bd16-57ea37d4bb8a",
+              "attempts": 2
+            },
+            {
+              "error": "todo_intake_changed",
+              "at": "2026-09-17T02:16:12.384919Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "651f2309-bb51-4062-b967-ea76a281f618",
+              "attempts": 2
+            },
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T02:15:56.977748Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "ca8010c5-cda8-4041-b7cf-77068bc4726d",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T02:15:48.685345Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "ff3111a5-1a74-40a1-924f-76453dcfb26b",
+              "attempts": 1
+            },
+            {
+              "error": "provider_outcome_ambiguous",
+              "at": "2026-09-17T02:06:50.643159Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "1f21b878-bbd3-46be-95c7-d8cfa6ac46ce",
+              "attempts": 0
+            },
+            {
+              "error": "source_discovery_incomplete_decisions",
+              "at": "2026-09-17T02:06:38.155697Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "8a3d326c-f1e3-4953-8cee-6b73b452cc13",
+              "attempts": 2
+            }
+          ],
+          "actions": [
+            {
+              "id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-16T19:05:45.071313Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26349
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T02:00:54.989197Z",
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T21:08:51.120119Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T21:01:13.199774Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T20:53:14.003420Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "memo_updated_at": "2026-09-17T02:01:04.749387Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-16T20:05:53.466645Z",
+        "observation": null,
+        "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
+      }
+    ]
+  }
 }

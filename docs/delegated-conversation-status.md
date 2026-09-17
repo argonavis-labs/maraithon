@@ -1062,6 +1062,29 @@ The failure list now keeps the latest instance of each distinct cause and stage,
 at most 16 entries within one hour, so repeated deployment interruptions do not
 hide earlier processing errors. This follow-up awaits deployment and inspection.
 
+Commit `c4f6921c` deployed through successful workflow `35173675523` to
+`maraithon-00450-dfw`. Read-only report `35173928790` now decodes the planning
+summary: a proposal review was attempted at `02:00:54Z` and recorded, with a
+memo updated at `02:01:04Z`. This proves a saved review, not a generated or
+accepted suggestion. The report also identifies `todo_intake_changed` in a
+discovery reasoning batch at `02:16:12Z`, plus a separate
+`source_discovery_incomplete_decisions` failure at `02:06:38Z`.
+
+Code inspection explains the contention: discovery batches had separate
+execution partitions even though each reasons against the same user-wide
+todo inventory. New discovery batches now share the existing per-user execution
+partition. The scheduler admits one at a time, with account fairness still
+choosing the next batch. Different users can still progress concurrently.
+The optimistic write check remains in place for genuine changes during a model
+call. This can make one user's initial backlog slower, but avoids sibling
+batches repeatedly invalidating work that has already consumed a model call.
+Existing queued jobs keep their original partition and identity.
+
+`make build` passed with warnings treated as errors. No automated tests ran.
+This contention fix awaits deployment and live recovery evidence. The separate
+incomplete-decision failure remains open; no evidence-completeness check was
+removed to advance the source cursor.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
