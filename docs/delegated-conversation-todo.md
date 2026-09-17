@@ -21,9 +21,10 @@ defines the intended behaviour.
   so dependent completion errors cannot hide the earlier cause. The fresh report
   returned interrupted model outcomes around deployment. The revised report
   isolates competing batches invalidating the todo intake snapshot, plus a
-  separate incomplete-decision failure. A local fix serialises new discovery
-  batches per user; its build passes. Live recovery and the incomplete-decision
-  failure remain open.
+  separate incomplete-decision failure. The fix to serialise new discovery
+  batches per user is deployed on `maraithon-00451-v76`; its build and deployment
+  health check passed. A complete new discovery cycle and the incomplete-decision
+  failure still need verification.
 - [ ] Verify scheduling uses the three approved Mac calendars when fresh and
   falls back to Google when unavailable or stale. The selections are now saved;
   the consumer and fallback still need a live check.

@@ -1085,6 +1085,13 @@ This contention fix awaits deployment and live recovery evidence. The separate
 incomplete-decision failure remains open; no evidence-completeness check was
 removed to advance the source cursor.
 
+Commit `1caeb066` deployed through successful workflow `35174298132` to
+`maraithon-00451-v76`, serving all traffic. The deployment health check passed.
+At 10:29 p.m. Toronto, the latest source results visible in Activity still
+predated that deployment. A completed cycle under the new scheduling rule has
+not yet been observed. Runner recovery, the separate incomplete-decision
+failure, and live suggestion generation and acceptance remain open.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
