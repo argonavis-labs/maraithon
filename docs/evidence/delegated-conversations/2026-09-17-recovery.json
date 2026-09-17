@@ -1,0 +1,2101 @@
+{
+  "initial_inspection": {
+    "workflow_run": 35230040996,
+    "serving_revision": "maraithon-00451-v76",
+    "report": [
+      {
+        "error": null,
+        "status": "completed",
+        "result": {
+          "calendar_cleanup": "completed",
+          "cleanup_checks": 1,
+          "phase": "failed",
+          "proposal_candidate_ready": true,
+          "reason": "eval_stopped",
+          "recovered_at": "2026-09-16T19:23:21.433062Z",
+          "recovered_initial_failure": "background_job_error",
+          "todo_id": "ae3d2027-04b2-4768-8826-d5ba1e3a1ce0"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T13:47:36.854206Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "08b737fe-c7fa-4d5c-b960-721544e3e7e6",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T13:47:36.477775Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "bd7c68a7-aad5-4dde-8e6e-749bb5f7073e",
+              "attempts": 1
+            },
+            {
+              "error": "source_discovery_incomplete_decisions",
+              "at": "2026-09-17T13:47:25.656886Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "0e3501fb-db5b-4320-84c9-6f82c9d0d9be",
+              "attempts": 2
+            }
+          ],
+          "actions": [
+            {
+              "id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-16T19:05:45.071313Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26690
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T12:44:56.498693Z",
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T21:08:51.120119Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T21:01:13.199774Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T20:53:14.003420Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "memo_updated_at": "2026-09-17T12:45:05.629030Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-16T20:05:53.466645Z",
+        "observation": null,
+        "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
+      }
+    ]
+  },
+  "handoff_inspection": {
+    "workflow_run": 35231399289,
+    "serving_revision": "maraithon-00452-pfp",
+    "report": [
+      {
+        "error": null,
+        "status": "completed",
+        "result": {
+          "calendar_cleanup": "completed",
+          "cleanup_checks": 1,
+          "phase": "failed",
+          "proposal_candidate_ready": true,
+          "reason": "eval_stopped",
+          "recovered_at": "2026-09-16T19:23:21.433062Z",
+          "recovered_initial_failure": "background_job_error",
+          "todo_id": "ae3d2027-04b2-4768-8826-d5ba1e3a1ce0"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_closure_acquisition_incomplete",
+              "at": "2026-09-17T14:09:09.494425Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "2dc9b6be-6e15-4ab8-860a-4f6fa50778e6",
+              "attempts": 5
+            },
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T14:05:17.077799Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "eea66544-31cc-4447-84db-34dfe5f154cd",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:05:12.968893Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "e9bce687-752c-46d2-b540-3d1263855a84",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:05:04.113878Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "84f73d10-eec1-4092-b26e-c8426113b2a9",
+              "attempts": 1
+            },
+            {
+              "error": "provider_outcome_ambiguous",
+              "at": "2026-09-17T14:01:02.755127Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "1e45c175-a223-4d2f-8965-367550619884",
+              "attempts": 0
+            },
+            {
+              "error": "source_discovery_incomplete_decisions",
+              "at": "2026-09-17T13:47:25.656886Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "account_id": 2,
+              "job_id": "0e3501fb-db5b-4320-84c9-6f82c9d0d9be",
+              "attempts": 2,
+              "handoff": {
+                "candidates": 5,
+                "source_items": 5,
+                "evidence_complete": 4,
+                "records": [
+                  {
+                    "body_bytes": 78,
+                    "context_bytes": 21521,
+                    "context_items": 8,
+                    "evidence_complete": true,
+                    "readable_bytes": 78
+                  },
+                  {
+                    "body_bytes": 187,
+                    "context_bytes": 21098,
+                    "context_items": 7,
+                    "evidence_complete": true,
+                    "readable_bytes": 187
+                  },
+                  {
+                    "context_bytes": 101267,
+                    "context_items": 42,
+                    "evidence_bytes": 106291,
+                    "evidence_complete": false,
+                    "readable_bytes": 3875
+                  },
+                  {
+                    "body_bytes": 6835,
+                    "context_bytes": 2,
+                    "context_items": 0,
+                    "evidence_complete": true,
+                    "readable_bytes": 6835
+                  },
+                  {
+                    "body_bytes": 243,
+                    "context_bytes": 2,
+                    "context_items": 0,
+                    "evidence_complete": true,
+                    "readable_bytes": 243
+                  }
+                ]
+              }
+            }
+          ],
+          "source_cycles": [
+            {
+              "provider": "google:kent.fenwick@gmail.com",
+              "account_id": 1,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "7872126c-91d9-4dd3-bafc-f86e9843782e",
+                  "outcome": "fanout_ready",
+                  "source_items": 2
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T14:05:16.318268Z",
+                "job_id": "c37a4a2d-3c97-40b4-8971-51ceb6b10bfd",
+                "completed_at": "2026-09-17T14:05:16.318268Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 2,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 2
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:06:09.058497Z",
+                "job_id": "7872126c-91d9-4dd3-bafc-f86e9843782e",
+                "completed_at": "2026-09-17T14:06:09.058497Z"
+              }
+            },
+            {
+              "provider": "google:kent@runner.now",
+              "account_id": 2,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 22,
+                  "finalizer_job_id": "36354348-4bbf-41df-a2fd-c125751d4b57",
+                  "outcome": "fanout_ready",
+                  "source_items": 143
+                },
+                "children": {
+                  "completed": 2,
+                  "pending": 19,
+                  "running": 1
+                },
+                "updated_at": "2026-09-17T14:06:38.718973Z",
+                "job_id": "f6075e3e-3230-4c12-b795-be161e63e79a",
+                "completed_at": "2026-09-17T14:06:38.718973Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-14T19:26:03.992389Z",
+                "job_id": "16bbe5b2-9a25-4eee-ab3b-aa50f88dc1f4",
+                "completed_at": "2026-09-14T19:26:03.992389Z"
+              }
+            },
+            {
+              "provider": "google:kent@voteagora.com",
+              "account_id": 3,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:05:16.055404Z",
+                "job_id": "327c31a0-861e-4a91-9ab3-31db89ba7eb2",
+                "completed_at": "2026-09-17T14:05:16.055404Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T13:43:36.672948Z",
+                "job_id": "d186ff04-02ad-4f43-bcc8-4b810dd5a4d2",
+                "completed_at": "2026-09-17T13:43:36.672948Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA",
+              "account_id": 6,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "9f01d2c3-4f34-445a-92c9-e527da19e641",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T14:05:17.343531Z",
+                "job_id": "30fe4f32-4cb1-423e-b7dc-e48b7ced8e9f",
+                "completed_at": "2026-09-17T14:05:17.343531Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:06:21.497742Z",
+                "job_id": "9f01d2c3-4f34-445a-92c9-e527da19e641",
+                "completed_at": "2026-09-17T14:06:21.497742Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA:user:U0B7BN6HCSE",
+              "account_id": 7,
+              "acquisition": null,
+              "last_completed": null
+            }
+          ],
+          "actions": [
+            {
+              "id": "a18af6fe-527a-61d4-ca48-4b50ee9f6ecb",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-16T19:05:45.071313Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26697
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T12:44:56.498693Z",
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:09:59.649285Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 302745,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T21:08:51.120119Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-16T21:01:13.199774Z",
+                  "request": {
+                    "available": false
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "memo_updated_at": "2026-09-17T12:45:05.629030Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-16T20:05:53.466645Z",
+        "observation": null,
+        "job_id": "fade27a9-e362-484b-b160-f26bf8507dab"
+      }
+    ]
+  },
+  "initial_calendar_inspection": {
+    "workflow_run": 35231916481,
+    "serving_revision": "maraithon-00452-pfp",
+    "report": {
+      "binding_count": 3,
+      "bindings_valid": true,
+      "calendar_account_ids": [],
+      "checked_at": "2026-09-17T14:13:53.949193Z",
+      "events_created": 0,
+      "messages_sent": 0,
+      "scheduling": {
+        "coverage": {
+          "account_ids": [
+            1
+          ],
+          "complete": true,
+          "duration_min": 30,
+          "from": "2026-09-18T14:13:53.949193Z",
+          "read_at": "2026-09-17T14:13:53.998815Z",
+          "read_from": "2026-09-18T03:45:00Z",
+          "read_until": "2026-09-26T04:15:00Z",
+          "slot_preferences": {
+            "day_preference": "earliest",
+            "time_preference": "any"
+          },
+          "source": "google",
+          "timezone": "America/Toronto",
+          "until": "2026-09-25T14:13:53.949193Z"
+        },
+        "slot_count": 8
+      },
+      "selected_calendars": [
+        {
+          "id": "e227e7c7f47a0d44210868efcf46c230eecce6d8bb2a400c69013e90025cc354",
+          "label": "kent@voteagora.com \u00b7 kent@voteagora.com \u00b7 kent-pro.local"
+        },
+        {
+          "id": "2f5d714ce21f20d50b62dd178a1b5f99cf8e50eeb54ce841f5982dc03d05af89",
+          "label": "kent@runner.now \u00b7 kent@runner.now \u00b7 kent-pro.local"
+        },
+        {
+          "id": "e2398d593ed6d5ab2f824668a07cfe4c753e16f7ab57fbfb416fb9418282dac2",
+          "label": "Kent Fenwick \u00b7 kent.fenwick@gmail.com \u00b7 kent-pro.local"
+        }
+      ],
+      "snapshots": [
+        {
+          "calendar_count": 17,
+          "captured_at": "2026-09-17T01:47:18Z",
+          "device_id": "b2e35b77-378b-470c-8530-c7619083d487",
+          "event_count": 302,
+          "validation": "invalid_calendar_availability_freshness"
+        },
+        {
+          "calendar_count": 0,
+          "captured_at": null,
+          "device_id": "4320c1a9-429a-4eb6-aaf0-0c1abb746139",
+          "event_count": 0,
+          "validation": "invalid_calendar_availability_fields"
+        }
+      ]
+    }
+  },
+  "fresh_calendar_inspection": {
+    "workflow_run": 35232692016,
+    "serving_revision": "maraithon-00453-4m9",
+    "report": {
+      "binding_count": 3,
+      "bindings_valid": true,
+      "calendar_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "checked_at": "2026-09-17T14:23:31.784058Z",
+      "events_created": 0,
+      "messages_sent": 0,
+      "scheduling": {
+        "coverage": {
+          "account_ids": [
+            1,
+            2,
+            3
+          ],
+          "calendar_bindings": {
+            "1": "e2398d593ed6d5ab2f824668a07cfe4c753e16f7ab57fbfb416fb9418282dac2",
+            "2": "2f5d714ce21f20d50b62dd178a1b5f99cf8e50eeb54ce841f5982dc03d05af89",
+            "3": "e227e7c7f47a0d44210868efcf46c230eecce6d8bb2a400c69013e90025cc354"
+          },
+          "captured_at": "2026-09-17T14:20:56Z",
+          "complete": true,
+          "duration_min": 30,
+          "from": "2026-09-18T14:23:31.784058Z",
+          "read_at": "2026-09-17T14:23:31.842509Z",
+          "read_from": "2026-09-18T03:45:00Z",
+          "read_until": "2026-09-26T04:15:00Z",
+          "slot_preferences": {
+            "day_preference": "earliest",
+            "time_preference": "any"
+          },
+          "snapshot_from": "2026-09-16T14:20:56Z",
+          "snapshot_until": "2026-11-01T14:20:56Z",
+          "source": "companion",
+          "timezone": "America/Toronto",
+          "until": "2026-09-25T14:23:31.784058Z"
+        },
+        "slot_count": 3
+      },
+      "selected_calendars": [
+        {
+          "id": "e227e7c7f47a0d44210868efcf46c230eecce6d8bb2a400c69013e90025cc354",
+          "label": "kent@voteagora.com \u00b7 kent@voteagora.com \u00b7 kent-pro.local"
+        },
+        {
+          "id": "2f5d714ce21f20d50b62dd178a1b5f99cf8e50eeb54ce841f5982dc03d05af89",
+          "label": "kent@runner.now \u00b7 kent@runner.now \u00b7 kent-pro.local"
+        },
+        {
+          "id": "e2398d593ed6d5ab2f824668a07cfe4c753e16f7ab57fbfb416fb9418282dac2",
+          "label": "Kent Fenwick \u00b7 kent.fenwick@gmail.com \u00b7 kent-pro.local"
+        }
+      ],
+      "snapshots": [
+        {
+          "calendar_count": 17,
+          "captured_at": "2026-09-17T14:20:56Z",
+          "device_id": "b2e35b77-378b-470c-8530-c7619083d487",
+          "event_count": 307,
+          "validation": "fresh"
+        },
+        {
+          "calendar_count": 0,
+          "captured_at": null,
+          "device_id": "4320c1a9-429a-4eb6-aaf0-0c1abb746139",
+          "event_count": 0,
+          "validation": "invalid_calendar_availability_fields"
+        }
+      ]
+    }
+  },
+  "proposal_preflight_refusal": {
+    "workflow_run": 35233431726,
+    "serving_revision": "maraithon-00453-4m9",
+    "report": {
+      "accounts": [
+        {
+          "account_id": 2,
+          "email": "kent@runner.now",
+          "status": "ready"
+        },
+        {
+          "email": "kent.fenwick@gmail.com",
+          "failure": "rate_limited",
+          "local_deferral": "provider_busy",
+          "retry_after_seconds": 1,
+          "status": "access_failed"
+        }
+      ],
+      "accounts_ready": false,
+      "actor": "as_assistant",
+      "assistant": {
+        "account_id": 9,
+        "disclose_ai": true,
+        "display_name": "October",
+        "email": "october@ewakened.com",
+        "isolated_from_personal_sources": true,
+        "status": "ready"
+      },
+      "budget_ready": true,
+      "development_spending": true,
+      "events_created": 0,
+      "execution_ready": true,
+      "expected_model": "meta/muse-spark-1.3-contributor",
+      "live_eval_passed": false,
+      "messages_sent": 0,
+      "model": "meta/muse-spark-1.3-contributor",
+      "model_calls": 0,
+      "model_ready": true,
+      "phase": "start_refused",
+      "reason": "eval_preflight_required"
+    }
+  },
+  "stale_calendar_inspection": {
+    "workflow_run": 35233964423,
+    "serving_revision": "maraithon-00453-4m9",
+    "report": {
+      "binding_count": 3,
+      "bindings_valid": true,
+      "calendar_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "checked_at": "2026-09-17T14:33:17.971661Z",
+      "events_created": 0,
+      "messages_sent": 0,
+      "scheduling": {
+        "coverage": {
+          "account_ids": [
+            1,
+            2,
+            3
+          ],
+          "complete": true,
+          "duration_min": 30,
+          "from": "2026-09-18T14:33:17.971661Z",
+          "read_at": "2026-09-17T14:33:18.043603Z",
+          "read_from": "2026-09-18T03:45:00Z",
+          "read_until": "2026-09-26T04:15:00Z",
+          "slot_preferences": {
+            "day_preference": "earliest",
+            "time_preference": "any"
+          },
+          "source": "google",
+          "timezone": "America/Toronto",
+          "until": "2026-09-25T14:33:17.971661Z"
+        },
+        "slot_count": 6
+      },
+      "selected_calendars": [
+        {
+          "id": "e227e7c7f47a0d44210868efcf46c230eecce6d8bb2a400c69013e90025cc354",
+          "label": "kent@voteagora.com \u00b7 kent@voteagora.com \u00b7 kent-pro.local"
+        },
+        {
+          "id": "2f5d714ce21f20d50b62dd178a1b5f99cf8e50eeb54ce841f5982dc03d05af89",
+          "label": "kent@runner.now \u00b7 kent@runner.now \u00b7 kent-pro.local"
+        },
+        {
+          "id": "e2398d593ed6d5ab2f824668a07cfe4c753e16f7ab57fbfb416fb9418282dac2",
+          "label": "Kent Fenwick \u00b7 kent.fenwick@gmail.com \u00b7 kent-pro.local"
+        }
+      ],
+      "snapshots": [
+        {
+          "calendar_count": 17,
+          "captured_at": "2026-09-17T14:23:56Z",
+          "device_id": "b2e35b77-378b-470c-8530-c7619083d487",
+          "event_count": 307,
+          "validation": "invalid_calendar_availability_freshness"
+        },
+        {
+          "calendar_count": 0,
+          "captured_at": null,
+          "device_id": "4320c1a9-429a-4eb6-aaf0-0c1abb746139",
+          "event_count": 0,
+          "validation": "invalid_calendar_availability_fields"
+        }
+      ]
+    }
+  },
+  "proposal_fixture_start": {
+    "workflow_run": 35234518883,
+    "serving_revision": "maraithon-00453-4m9",
+    "report": {
+      "scheduled_at": "2026-09-17T14:39:25.168043Z",
+      "job_id": "0dcf780d-6bd1-4621-af34-6c642ceae49c",
+      "phase": "queued",
+      "scenario": "proposed_information_reply"
+    }
+  },
+  "proposal_first_inspection": {
+    "workflow_run": 35235380860,
+    "serving_revision": "maraithon-00453-4m9",
+    "report": [
+      {
+        "error": null,
+        "status": "pending",
+        "result": {
+          "phase": "waiting_for_proposal",
+          "proposal_candidate_ready": true,
+          "todo_id": "fcf19fe5-637a-4cac-89f9-597b4064fbdb"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_discovery_dependency_failed",
+              "at": "2026-09-17T14:19:11.456849Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "75445789-9208-464b-a2f1-5fdff397882a",
+              "attempts": 1
+            },
+            {
+              "error": "source_discovery_acquisition_incomplete {\"fetches\":[{\"failure_code\":\"rate_limited\",\"status\":\"error\",\"truncated\":false}],\"source\":\"gmail\",\"status\":\"partial\"}",
+              "at": "2026-09-17T14:18:59.273873Z",
+              "job_type": "runtime_partition:source_account_discovery",
+              "job_id": "3d460e01-4b3b-4c03-bc34-f636794e02b0",
+              "attempts": 5
+            },
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T14:18:55.452218Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "5a260023-bbbc-4d85-a5ed-e66b79a1abff",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.344757Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "36354348-4bbf-41df-a2fd-c125751d4b57",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.260087Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "e8589ad2-c22a-4bf4-ae77-dfc74e2d037e",
+              "attempts": 1
+            },
+            {
+              "error": "provider_outcome_ambiguous",
+              "at": "2026-09-17T14:17:36.059364Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "19328de7-9926-4e8d-94cc-ac26ad1d38f6",
+              "attempts": 0
+            },
+            {
+              "error": "source_closure_acquisition_incomplete",
+              "at": "2026-09-17T14:09:09.494425Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "2dc9b6be-6e15-4ab8-860a-4f6fa50778e6",
+              "attempts": 5
+            },
+            {
+              "error": "source_discovery_incomplete_decisions",
+              "at": "2026-09-17T13:47:25.656886Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "account_id": 2,
+              "job_id": "0e3501fb-db5b-4320-84c9-6f82c9d0d9be",
+              "attempts": 2,
+              "handoff": {
+                "candidates": 5,
+                "source_items": 5,
+                "evidence_complete": 5,
+                "records": [
+                  {
+                    "body_bytes": 78,
+                    "context_bytes": 21521,
+                    "context_items": 8,
+                    "evidence_complete": true,
+                    "readable_bytes": 78
+                  },
+                  {
+                    "body_bytes": 187,
+                    "context_bytes": 21098,
+                    "context_items": 7,
+                    "evidence_complete": true,
+                    "readable_bytes": 187
+                  },
+                  {
+                    "body_bytes": 3875,
+                    "context_bytes": 101267,
+                    "context_items": 42,
+                    "evidence_complete": true,
+                    "readable_bytes": 3875,
+                    "source_record_bytes": 106291,
+                    "source_record_prompt_compacted": true
+                  },
+                  {
+                    "body_bytes": 6835,
+                    "context_bytes": 2,
+                    "context_items": 0,
+                    "evidence_complete": true,
+                    "readable_bytes": 6835
+                  },
+                  {
+                    "body_bytes": 243,
+                    "context_bytes": 2,
+                    "context_items": 0,
+                    "evidence_complete": true,
+                    "readable_bytes": 243
+                  }
+                ]
+              }
+            }
+          ],
+          "source_cycles": [
+            {
+              "provider": "google:kent.fenwick@gmail.com",
+              "account_id": 1,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "05d96836-fd88-43a9-89a2-e24c8a0d1a4c",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T14:44:50.010392Z",
+                "job_id": "44f18742-d488-4750-af92-c09ba061e58f",
+                "completed_at": "2026-09-17T14:44:50.010392Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:46:33.665855Z",
+                "job_id": "05d96836-fd88-43a9-89a2-e24c8a0d1a4c",
+                "completed_at": "2026-09-17T14:46:33.665855Z"
+              }
+            },
+            {
+              "provider": "google:kent@runner.now",
+              "account_id": 2,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 23,
+                  "finalizer_job_id": "db30a719-7b72-409c-b509-5e6927de6eb6",
+                  "outcome": "fanout_ready",
+                  "source_items": 144
+                },
+                "children": {
+                  "completed": 20,
+                  "pending": 2,
+                  "running": 1
+                },
+                "updated_at": "2026-09-17T14:20:34.434832Z",
+                "job_id": "edb72e95-d236-494e-863a-f342b56cf536",
+                "completed_at": "2026-09-17T14:20:34.434832Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-14T19:26:03.992389Z",
+                "job_id": "16bbe5b2-9a25-4eee-ab3b-aa50f88dc1f4",
+                "completed_at": "2026-09-14T19:26:03.992389Z"
+              }
+            },
+            {
+              "provider": "google:kent@voteagora.com",
+              "account_id": 3,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:41:11.256750Z",
+                "job_id": "67a39db8-1c72-426e-9bde-53ef3b24686a",
+                "completed_at": "2026-09-17T14:41:11.256750Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T13:43:36.672948Z",
+                "job_id": "d186ff04-02ad-4f43-bcc8-4b810dd5a4d2",
+                "completed_at": "2026-09-17T13:43:36.672948Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA",
+              "account_id": 6,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "5bb5b8f2-82be-440f-9af9-732c6f15c0f6",
+                  "outcome": "fanout_ready",
+                  "source_items": 4
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T14:41:12.280297Z",
+                "job_id": "181d6f0e-fc9c-4761-bf1c-5f16017e433d",
+                "completed_at": "2026-09-17T14:41:12.280297Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 4,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 4
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:43:10.017437Z",
+                "job_id": "5bb5b8f2-82be-440f-9af9-732c6f15c0f6",
+                "completed_at": "2026-09-17T14:43:10.017437Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA:user:U0B7BN6HCSE",
+              "account_id": 7,
+              "acquisition": null,
+              "last_completed": null
+            }
+          ],
+          "actions": [
+            {
+              "id": "d204132a-e26e-52b5-7485-d13fd5be4978",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-17T14:39:27.273522Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26740
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T14:20:42.444447Z",
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:41:48.115886Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 305010,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:31:13.762907Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 312904,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:20:23.537716Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 312928,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "memo_updated_at": "2026-09-17T14:20:49.776587Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-17T14:47:16.761141Z",
+        "observation": null,
+        "job_id": "0dcf780d-6bd1-4621-af34-6c642ceae49c"
+      }
+    ]
+  },
+  "runner_completed_recovery": {
+    "workflow_run": 35236062313,
+    "serving_revision": "maraithon-00453-4m9",
+    "report": [
+      {
+        "error": null,
+        "status": "pending",
+        "result": {
+          "phase": "waiting_for_proposal",
+          "proposal_candidate_ready": true,
+          "todo_id": "fcf19fe5-637a-4cac-89f9-597b4064fbdb"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_discovery_dependency_failed",
+              "at": "2026-09-17T14:19:11.456849Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "75445789-9208-464b-a2f1-5fdff397882a",
+              "attempts": 1
+            },
+            {
+              "error": "source_discovery_acquisition_incomplete {\"fetches\":[{\"failure_code\":\"rate_limited\",\"status\":\"error\",\"truncated\":false}],\"source\":\"gmail\",\"status\":\"partial\"}",
+              "at": "2026-09-17T14:18:59.273873Z",
+              "job_type": "runtime_partition:source_account_discovery",
+              "job_id": "3d460e01-4b3b-4c03-bc34-f636794e02b0",
+              "attempts": 5
+            },
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T14:18:55.452218Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "5a260023-bbbc-4d85-a5ed-e66b79a1abff",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.344757Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "36354348-4bbf-41df-a2fd-c125751d4b57",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.260087Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "e8589ad2-c22a-4bf4-ae77-dfc74e2d037e",
+              "attempts": 1
+            },
+            {
+              "error": "provider_outcome_ambiguous",
+              "at": "2026-09-17T14:17:36.059364Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "19328de7-9926-4e8d-94cc-ac26ad1d38f6",
+              "attempts": 0
+            },
+            {
+              "error": "source_closure_acquisition_incomplete",
+              "at": "2026-09-17T14:09:09.494425Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "2dc9b6be-6e15-4ab8-860a-4f6fa50778e6",
+              "attempts": 5
+            }
+          ],
+          "source_cycles": [
+            {
+              "provider": "google:kent.fenwick@gmail.com",
+              "account_id": 1,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:50:28.451550Z",
+                "job_id": "e18b4f48-0bc8-43fb-b946-611ac5824a95",
+                "completed_at": "2026-09-17T14:50:28.451550Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:46:33.665855Z",
+                "job_id": "05d96836-fd88-43a9-89a2-e24c8a0d1a4c",
+                "completed_at": "2026-09-17T14:46:33.665855Z"
+              }
+            },
+            {
+              "provider": "google:kent@runner.now",
+              "account_id": 2,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "b1684ae7-f825-4197-97fd-b19128c61e38",
+                  "outcome": "fanout_ready",
+                  "source_items": 3
+                },
+                "children": {
+                  "running": 1
+                },
+                "updated_at": "2026-09-17T14:50:27.841607Z",
+                "job_id": "2319d12c-a773-4228-86dc-b4dbb65dcb71",
+                "completed_at": "2026-09-17T14:50:27.841607Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 144,
+                  "fanout_count": 23,
+                  "outcome": "finalized",
+                  "source_items": 144
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:49:23.726226Z",
+                "job_id": "db30a719-7b72-409c-b509-5e6927de6eb6",
+                "completed_at": "2026-09-17T14:49:23.726226Z"
+              }
+            },
+            {
+              "provider": "google:kent@voteagora.com",
+              "account_id": 3,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:50:26.403542Z",
+                "job_id": "41aab983-7fb0-4751-b3f6-fbe2579bb40e",
+                "completed_at": "2026-09-17T14:50:26.403542Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:50:14.879761Z",
+                "job_id": "3728f938-44e4-4e88-a327-aa8b4d872b03",
+                "completed_at": "2026-09-17T14:50:14.879761Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA",
+              "account_id": 6,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "19220213-090e-46f3-bfdc-3d415a611749",
+                  "outcome": "fanout_ready",
+                  "source_items": 2
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T14:50:27.251800Z",
+                "job_id": "c2d194ae-185b-4fbc-b2c6-9b833dfa21c6",
+                "completed_at": "2026-09-17T14:50:27.251800Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 2,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 2
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:51:21.428980Z",
+                "job_id": "19220213-090e-46f3-bfdc-3d415a611749",
+                "completed_at": "2026-09-17T14:51:21.428980Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA:user:U0B7BN6HCSE",
+              "account_id": 7,
+              "acquisition": null,
+              "last_completed": null
+            }
+          ],
+          "actions": [
+            {
+              "id": "d204132a-e26e-52b5-7485-d13fd5be4978",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-17T14:39:27.273522Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26742
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T14:20:42.444447Z",
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:41:48.115886Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 305010,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:31:13.762907Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 312904,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:20:23.537716Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 312928,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "memo_updated_at": "2026-09-17T14:20:49.776587Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-17T14:52:32.972739Z",
+        "observation": null,
+        "job_id": "0dcf780d-6bd1-4621-af34-6c642ceae49c"
+      }
+    ]
+  },
+  "preflight_retry_deployment": {
+    "commit": "7cabb30da038e7a15b1375cdebe0df2d091b4fdd",
+    "workflow_run": 35236639090,
+    "serving_revision": "maraithon-00454-z6t",
+    "deployed_at": "2026-09-17T14:57:58Z",
+    "conclusion": "success"
+  },
+  "proposal_after_retry_deployment": {
+    "workflow_run": 35237230686,
+    "serving_revision": "maraithon-00454-z6t",
+    "report": [
+      {
+        "error": null,
+        "status": "pending",
+        "result": {
+          "phase": "waiting_for_proposal",
+          "proposal_candidate_ready": true,
+          "todo_id": "fcf19fe5-637a-4cac-89f9-597b4064fbdb"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_discovery_dependency_failed",
+              "at": "2026-09-17T14:19:11.456849Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "75445789-9208-464b-a2f1-5fdff397882a",
+              "attempts": 1
+            },
+            {
+              "error": "source_discovery_acquisition_incomplete {\"fetches\":[{\"failure_code\":\"rate_limited\",\"status\":\"error\",\"truncated\":false}],\"source\":\"gmail\",\"status\":\"partial\"}",
+              "at": "2026-09-17T14:18:59.273873Z",
+              "job_type": "runtime_partition:source_account_discovery",
+              "job_id": "3d460e01-4b3b-4c03-bc34-f636794e02b0",
+              "attempts": 5
+            },
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T14:18:55.452218Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "5a260023-bbbc-4d85-a5ed-e66b79a1abff",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.344757Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "36354348-4bbf-41df-a2fd-c125751d4b57",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.260087Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "e8589ad2-c22a-4bf4-ae77-dfc74e2d037e",
+              "attempts": 1
+            },
+            {
+              "error": "provider_outcome_ambiguous",
+              "at": "2026-09-17T14:17:36.059364Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "19328de7-9926-4e8d-94cc-ac26ad1d38f6",
+              "attempts": 0
+            },
+            {
+              "error": "source_closure_acquisition_incomplete",
+              "at": "2026-09-17T14:09:09.494425Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "2dc9b6be-6e15-4ab8-860a-4f6fa50778e6",
+              "attempts": 5
+            }
+          ],
+          "source_cycles": [
+            {
+              "provider": "google:kent.fenwick@gmail.com",
+              "account_id": 1,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:56:14.005905Z",
+                "job_id": "6463e8cf-9b9c-494e-ac9a-cd2d7e9a314e",
+                "completed_at": "2026-09-17T14:56:14.005905Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:46:33.665855Z",
+                "job_id": "05d96836-fd88-43a9-89a2-e24c8a0d1a4c",
+                "completed_at": "2026-09-17T14:46:33.665855Z"
+              }
+            },
+            {
+              "provider": "google:kent@runner.now",
+              "account_id": 2,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "d14120b3-3dfe-4a86-8c53-08c2c7012c53",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "pending": 1
+                },
+                "updated_at": "2026-09-17T15:03:57.127289Z",
+                "job_id": "5dfcaaff-38d2-4526-bd3c-90022bbd4c76",
+                "completed_at": "2026-09-17T15:03:57.127289Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:01:05.400763Z",
+                "job_id": "e130b9b9-5628-4217-b9f0-f9bffa057727",
+                "completed_at": "2026-09-17T15:01:05.400763Z"
+              }
+            },
+            {
+              "provider": "google:kent@voteagora.com",
+              "account_id": 3,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:04:14.454415Z",
+                "job_id": "7f6a3558-46fd-4952-83d4-cd109bcca212",
+                "completed_at": "2026-09-17T15:04:14.454415Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:50:14.879761Z",
+                "job_id": "3728f938-44e4-4e88-a327-aa8b4d872b03",
+                "completed_at": "2026-09-17T14:50:14.879761Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA",
+              "account_id": 6,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:56:12.672840Z",
+                "job_id": "091cc1ba-b0fe-4b28-ae10-ac5c792d9030",
+                "completed_at": "2026-09-17T14:56:12.672840Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 2,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 2
+                },
+                "children": {},
+                "updated_at": "2026-09-17T14:51:21.428980Z",
+                "job_id": "19220213-090e-46f3-bfdc-3d415a611749",
+                "completed_at": "2026-09-17T14:51:21.428980Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA:user:U0B7BN6HCSE",
+              "account_id": 7,
+              "acquisition": null,
+              "last_completed": null
+            }
+          ],
+          "actions": [
+            {
+              "id": "d204132a-e26e-52b5-7485-d13fd5be4978",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-17T14:39:27.273522Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26763
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T15:03:31.898374Z",
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T15:03:14.827693Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 295834,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:52:26.343676Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 295848,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:41:48.115886Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 305010,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "memo_updated_at": "2026-09-17T15:03:38.516472Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-17T15:04:26.421155Z",
+        "observation": null,
+        "job_id": "0dcf780d-6bd1-4621-af34-6c642ceae49c"
+      }
+    ]
+  },
+  "proposal_policy_deployment": {
+    "commit": "2232cf59eb6fc903f43b38608c600b98b40364ac",
+    "workflow_run": 35238138221,
+    "serving_revision": "maraithon-00455-9n9",
+    "deployed_at": "2026-09-17T15:12:14Z",
+    "conclusion": "success"
+  },
+  "proposal_review_diagnosis": {
+    "workflow_run": 35238776086,
+    "serving_revision": "maraithon-00455-9n9",
+    "report": [
+      {
+        "error": null,
+        "status": "pending",
+        "result": {
+          "phase": "waiting_for_proposal",
+          "proposal_candidate_ready": true,
+          "todo_id": "fcf19fe5-637a-4cac-89f9-597b4064fbdb"
+        },
+        "details": {
+          "source_failures": [
+            {
+              "error": "source_discovery_dependency_failed",
+              "at": "2026-09-17T14:19:11.456849Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "75445789-9208-464b-a2f1-5fdff397882a",
+              "attempts": 1
+            },
+            {
+              "error": "source_discovery_acquisition_incomplete {\"fetches\":[{\"failure_code\":\"rate_limited\",\"status\":\"error\",\"truncated\":false}],\"source\":\"gmail\",\"status\":\"partial\"}",
+              "at": "2026-09-17T14:18:59.273873Z",
+              "job_type": "runtime_partition:source_account_discovery",
+              "job_id": "3d460e01-4b3b-4c03-bc34-f636794e02b0",
+              "attempts": 5
+            },
+            {
+              "error": "source_discovery_finalizer_failed",
+              "at": "2026-09-17T14:18:55.452218Z",
+              "job_type": "runtime_partition:source_account_closure_acquire",
+              "job_id": "5a260023-bbbc-4d85-a5ed-e66b79a1abff",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.344757Z",
+              "job_type": "runtime_partition:source_account_discovery_finalize",
+              "job_id": "36354348-4bbf-41df-a2fd-c125751d4b57",
+              "attempts": 1
+            },
+            {
+              "error": "source_graph_abandoned",
+              "at": "2026-09-17T14:18:51.260087Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "e8589ad2-c22a-4bf4-ae77-dfc74e2d037e",
+              "attempts": 1
+            },
+            {
+              "error": "provider_outcome_ambiguous",
+              "at": "2026-09-17T14:17:36.059364Z",
+              "job_type": "runtime_partition:source_account_discovery_reason",
+              "job_id": "19328de7-9926-4e8d-94cc-ac26ad1d38f6",
+              "attempts": 0
+            }
+          ],
+          "source_cycles": [
+            {
+              "provider": "google:kent.fenwick@gmail.com",
+              "account_id": 1,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "60e5a9eb-b370-43d0-9647-9dbaa072f68f",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T15:13:05.256880Z",
+                "job_id": "477dd8a3-9bb7-4149-832f-f026c1d7e0c6",
+                "completed_at": "2026-09-17T15:13:05.256880Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:14:24.097656Z",
+                "job_id": "60e5a9eb-b370-43d0-9647-9dbaa072f68f",
+                "completed_at": "2026-09-17T15:14:24.097656Z"
+              }
+            },
+            {
+              "provider": "google:kent@runner.now",
+              "account_id": 2,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "3d7222d3-cfa2-4060-ac6b-cab52449747d",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T15:14:36.971757Z",
+                "job_id": "3c64f0ae-38c3-42d8-ba0c-0a21964c523d",
+                "completed_at": "2026-09-17T15:14:36.971757Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:15:05.677213Z",
+                "job_id": "3d7222d3-cfa2-4060-ac6b-cab52449747d",
+                "completed_at": "2026-09-17T15:15:05.677213Z"
+              }
+            },
+            {
+              "provider": "google:kent@voteagora.com",
+              "account_id": 3,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "dad50d04-9787-4a56-9fa8-b639950c1d49",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T15:13:38.216242Z",
+                "job_id": "d796d712-c8d2-44d1-a975-c47d1a03b4e7",
+                "completed_at": "2026-09-17T15:13:38.216242Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:14:41.218901Z",
+                "job_id": "dad50d04-9787-4a56-9fa8-b639950c1d49",
+                "completed_at": "2026-09-17T15:14:41.218901Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA",
+              "account_id": 6,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "a578f49e-577f-4929-89b7-9a2c2c0826ea",
+                  "outcome": "fanout_ready",
+                  "source_items": 4
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T15:13:05.511136Z",
+                "job_id": "d24ba1e0-6b52-4cf1-a32e-ccb3b31e18c4",
+                "completed_at": "2026-09-17T15:13:05.511136Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 4,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 4
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:13:50.578674Z",
+                "job_id": "a578f49e-577f-4929-89b7-9a2c2c0826ea",
+                "completed_at": "2026-09-17T15:13:50.578674Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA:user:U0B7BN6HCSE",
+              "account_id": 7,
+              "acquisition": null,
+              "last_completed": null
+            }
+          ],
+          "actions": [
+            {
+              "id": "d204132a-e26e-52b5-7485-d13fd5be4978",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-17T14:39:27.273522Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26780
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T15:14:24.649175Z",
+              "current_candidate_count": 2,
+              "current_candidates_reviewed": true,
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T15:14:16.278599Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 296268,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T15:03:14.827693Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 295834,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T14:52:26.343676Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 295848,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "last_proposal_review": {
+                "status": "completed",
+                "started_at": "2026-09-17T15:14:25.315354Z",
+                "completed_at": "2026-09-17T15:14:32.015261Z",
+                "fixture_in_prompt": true,
+                "fixture_selected": false,
+                "proposal_count": 0,
+                "step_id": "d3c0b763-0f83-4352-af11-46aa5cdca6a1"
+              },
+              "memo_updated_at": "2026-09-17T15:14:32.183701Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-17T15:15:15.568080Z",
+        "observation": null,
+        "job_id": "0dcf780d-6bd1-4621-af34-6c642ceae49c"
+      }
+    ]
+  },
+  "encrypted_review_inspection": {
+    "workflow_run": 35240022303,
+    "serving_revision": "maraithon-00456-lc6",
+    "plaintext_committed": false,
+    "finding": "The planner classified the controlled factual request as self-assignment because the named counterparty was Kent, despite the proposed as_assistant actor and acceptance requirement.",
+    "proposal_count": 0
+  },
+  "handoff_policy_deployment": {
+    "commit": "f46c85977c6d7790e28d06d74203c8c14e4a487b",
+    "workflow_run": 35240561397,
+    "serving_revision": "maraithon-00457-ppr",
+    "deployed_at": "2026-09-17T15:32:41Z",
+    "conclusion": "success"
+  },
+  "unique_project_fixture_start": {
+    "workflow_run": 35241087007,
+    "serving_revision": "maraithon-00457-ppr",
+    "report": {
+      "scheduled_at": "2026-09-17T15:37:42.046979Z",
+      "job_id": "7da1574b-3175-492b-a00b-1f1ee901bc53",
+      "phase": "queued",
+      "scenario": "proposed_information_reply"
+    }
+  },
+  "unique_project_first_inspection": {
+    "workflow_run": 35241540321,
+    "serving_revision": "maraithon-00457-ppr",
+    "report": [
+      {
+        "error": null,
+        "status": "pending",
+        "result": {
+          "phase": "waiting_for_proposal",
+          "proposal_candidate_ready": true,
+          "todo_id": "bfadff3b-5ccf-446f-8cac-fa8eb683b20c"
+        },
+        "details": {
+          "source_failures": [],
+          "source_cycles": [
+            {
+              "provider": "google:kent.fenwick@gmail.com",
+              "account_id": 1,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:35:38.273044Z",
+                "job_id": "4708831c-f541-4cff-8f91-a888b66aa45e",
+                "completed_at": "2026-09-17T15:35:38.273044Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 2,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 2
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:22:35.942055Z",
+                "job_id": "14b9f824-980f-40f9-8f56-90a7cca721a7",
+                "completed_at": "2026-09-17T15:22:35.942055Z"
+              }
+            },
+            {
+              "provider": "google:kent@runner.now",
+              "account_id": 2,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "e617b838-9019-4795-b096-de8fc32fa178",
+                  "outcome": "fanout_ready",
+                  "source_items": 1
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T15:37:53.947126Z",
+                "job_id": "a5897e2f-1dce-411a-a4fb-a4794a32a190",
+                "completed_at": "2026-09-17T15:37:53.947126Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:39:35.660786Z",
+                "job_id": "e617b838-9019-4795-b096-de8fc32fa178",
+                "completed_at": "2026-09-17T15:39:35.660786Z"
+              }
+            },
+            {
+              "provider": "google:kent@voteagora.com",
+              "account_id": 3,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "outcome": "empty_delta",
+                  "source_items": 0
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:36:09.513077Z",
+                "job_id": "e6cfd845-ff5c-46ec-8ba0-bd699865d5d3",
+                "completed_at": "2026-09-17T15:36:09.513077Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 1,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 1
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:14:41.218901Z",
+                "job_id": "dad50d04-9787-4a56-9fa8-b639950c1d49",
+                "completed_at": "2026-09-17T15:14:41.218901Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA",
+              "account_id": 6,
+              "acquisition": {
+                "status": "completed",
+                "result": {
+                  "fanout_count": 1,
+                  "finalizer_job_id": "d8b0c17d-cea9-4758-b107-8cbabd3c8912",
+                  "outcome": "fanout_ready",
+                  "source_items": 4
+                },
+                "children": {
+                  "completed": 1
+                },
+                "updated_at": "2026-09-17T15:35:37.425919Z",
+                "job_id": "cae004b7-7aa5-48e7-9b41-3bd0d9d0f566",
+                "completed_at": "2026-09-17T15:35:37.425919Z"
+              },
+              "last_completed": {
+                "status": "completed",
+                "result": {
+                  "advanced_watermarks": 1,
+                  "decision_count": 4,
+                  "fanout_count": 1,
+                  "outcome": "finalized",
+                  "source_items": 4
+                },
+                "children": {},
+                "updated_at": "2026-09-17T15:36:46.383218Z",
+                "job_id": "d8b0c17d-cea9-4758-b107-8cbabd3c8912",
+                "completed_at": "2026-09-17T15:36:46.383218Z"
+              }
+            },
+            {
+              "provider": "slack:T0B7FA3NVHA:user:U0B7BN6HCSE",
+              "account_id": 7,
+              "acquisition": null,
+              "last_completed": null
+            }
+          ],
+          "actions": [
+            {
+              "id": "87f9d32d-2ad0-8d8b-ea01-2fc75e53294a",
+              "status": "executed",
+              "failure": null,
+              "inserted_at": "2026-09-17T15:37:44.032676Z",
+              "action_type": "gmail_send",
+              "delegation_id": null
+            }
+          ],
+          "proposal_runtime": [
+            {
+              "status": "running",
+              "snapshot": {
+                "state_name": "idle",
+                "sequence_num": 26799
+              },
+              "agent_id": "0ad516f5-d526-4e6c-9d8c-5e9625fac1c9",
+              "install_status": "enabled",
+              "cycle_memo_generated": false,
+              "delegation_review_attempted_at": "2026-09-17T15:35:55.134553Z",
+              "current_candidate_count": 3,
+              "current_candidates_reviewed": false,
+              "delegation_review_recorded": true,
+              "failed_steps": [
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T15:35:47.488244Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 295857,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T15:25:24.946361Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 295859,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                },
+                {
+                  "error": "invalid_request",
+                  "at": "2026-09-17T15:14:16.278599Z",
+                  "request": {
+                    "available": false,
+                    "rejection": {
+                      "field": "json_budget",
+                      "message_content_bytes": 296268,
+                      "reason": "request_exceeds_budget"
+                    }
+                  },
+                  "effect_type": "llm_call"
+                }
+              ],
+              "last_proposal_review": {
+                "status": "completed",
+                "started_at": "2026-09-17T15:35:55.713183Z",
+                "completed_at": "2026-09-17T15:36:05.128811Z",
+                "fixture_in_prompt": false,
+                "fixture_selected": false,
+                "proposal_count": 0,
+                "step_id": "73454995-a646-43e7-a768-13e512a86f7d"
+              },
+              "memo_updated_at": "2026-09-17T15:36:05.290057Z",
+              "pending_skill": null,
+              "snapshot_decode_error": null
+            }
+          ]
+        },
+        "scheduled_at": "2026-09-17T15:40:21.412156Z",
+        "observation": null,
+        "job_id": "7da1574b-3175-492b-a00b-1f1ee901bc53"
+      }
+    ]
+  }
+}

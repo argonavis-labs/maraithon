@@ -1,33 +1,18 @@
 # Maraithon development checklist
 
-Updated September 16, 2026. This is the short working list. The
+Updated September 17, 2026. This is the short working list. The
 [status report](delegated-conversation-status.md) holds the detailed evidence
 and limits; the [execution plan](delegated-conversation-execution-plan.md)
 defines the intended behaviour.
 
 ## Doing now
 
-- [ ] Make delegation suggestions appear reliably and verify accepting one
-  through the actual task UI. The first controlled run expired without a
-  suggestion. A local fix lets scheduled planning reconsider an expired
-  suggestion after the task's next review without reranking unchanged rejected
-  candidates on every completion poll. The fix is deployed; live proposal
-  generation and acceptance remain open.
-- [ ] Resolve Runner Gmail's repeated processing and finalisation failures.
-  Sequential thread reads have restored successful acquisition on two other
-  accounts, but the Runner pipeline is still unfinished. Live Activity at
-  9:49 p.m. Toronto still showed repeated 20-batch Runner cycles with failed
-  AI reviews. The diagnostic now includes processing and finalisation failures
-  so dependent completion errors cannot hide the earlier cause. The fresh report
-  returned interrupted model outcomes around deployment. The revised report
-  isolates competing batches invalidating the todo intake snapshot, plus a
-  separate incomplete-decision failure. The fix to serialise new discovery
-  batches per user is deployed on `maraithon-00451-v76`; its build and deployment
-  health check passed. A complete new discovery cycle and the incomplete-decision
-  failure still need verification.
-- [ ] Verify scheduling uses the three approved Mac calendars when fresh and
-  falls back to Google when unavailable or stale. The selections are now saved;
-  the consumer and fallback still need a live check.
+- [ ] Verify accepting a generated delegation suggestion through the actual
+  task UI. The planner treated the controlled factual ask as self-assignment.
+  Revision `maraithon-00457-ppr` clarifies that a proposed assistant handoff
+  still requires acceptance and distinguishes fact collection from user judgement.
+  New fixtures use a unique project and require written confirmation. A fresh
+  live run is starting; generation, acceptance and completion remain open.
 
 ## Next
 
@@ -63,6 +48,17 @@ defines the intended behaviour.
   spending pause when active development ends.
 
 ## Completed, with recorded evidence
+
+- [x] Recover Runner Gmail discovery after contention and incomplete-evidence
+  failures. At `14:49:23Z`, the fixed serving revision completed all 23 batches,
+  recorded 144 decisions for 144 source items and advanced its watermark.
+  A subsequent incremental scan started with three new items. The exact coverage
+  requirement and current-message size guard remain enforced.
+- [x] Verify scheduling uses all three approved Mac calendars when fresh and
+  falls back to all three Google accounts when stale. The missing conflict-account
+  selections were saved in Settings. The actual consumer returned complete
+  three-account coverage from the companion at `14:23Z` and Google at `14:33Z`
+  after the snapshot expired. No messages or calendar events were created.
 
 - [x] Add a per-user Assistant section and connected-email selector. October is
   assigned to Kent's user only and excluded from personal-source scheduling.

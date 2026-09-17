@@ -1092,6 +1092,169 @@ predated that deployment. A completed cycle under the new scheduling rule has
 not yet been observed. Runner recovery, the separate incomplete-decision
 failure, and live suggestion generation and acceptance remain open.
 
+
+## September 17 recovery checks
+
+Read-only workflow `35230040996` inspected the serving `maraithon-00451-v76`
+revision at `13:57Z`. Its one-hour failure window contained no
+`todo_intake_changed` errors. Runner still failed with
+`source_discovery_incomplete_decisions` at `13:47:25Z`, followed by an abandoned
+finaliser and dependent completion failure. Live Activity showed most of the
+22 reasoning batches completing sequentially. This is evidence that contention
+has subsided, not proof of a completed Runner cycle.
+
+The next diagnostic reports bounded evidence sizes and candidate counts from
+that exact encrypted handoff. It also reports each account's latest acquisition
+and last completed finaliser. A separate read-only calendar operation calls the
+actual scheduling consumer and reports its coverage source and selected Mac
+bindings, without message sends or calendar writes. `make build` passed; no
+automated tests ran under the current development policy.
+
+
+Diagnostic commit `2372c43a` deployed through workflow `35230430896` to
+`maraithon-00452-pfp`. Read-only report `35231399289` identified the exact
+incomplete-evidence failure: one of five candidates had a 3,875-byte current
+message and 101,267 bytes of history across 42 earlier thread messages. The
+106,291-byte combined evidence exceeded the 104,000-byte guard before the
+existing bounded prompt projection could run. Runner's last completed nonempty
+discovery finaliser was still September 14 at `19:26:03Z`.
+
+The fix applies the existing 104,000-byte guard to the current record separately
+from supplemental history. Large current messages still fail closed. Long
+history uses the existing bounded model projection, now keeping the most recent
+context and explicitly marking its original item count and compaction. The
+full history remains in the encrypted handoff. Every source item must still
+receive a decision before the cursor advances. This does not mean the model
+read every historical message in full.
+
+The same report captured a separate Chief of Staff request rejected locally at
+`14:09:59Z`: 302,745 bytes of message content exceeded the request budget. The
+report does not identify that skill or establish whether it blocks proposal
+review; live proposal verification remains necessary.
+
+
+Calendar workflow `35231916481` used the actual scheduling consumer. It correctly
+rejected the stale Mac snapshot captured at `01:47:18Z` and used Google, but its
+coverage included only account 1. The three Mac bindings were valid; the
+separate `calendar_account_ids` setting was empty. At `14:15Z`, the live
+Assistant settings form saved all three approved accounts under “Also check for
+conflicts”: personal Gmail, Runner and Agora. This configuration correction
+still needs fresh and stale consumer verification across all three accounts.
+
+
+Commits `7f1f944f` and `1cc068c7` deployed through successful workflow
+`35232247527` to `maraithon-00453-4m9`, serving all traffic at `14:17:55Z`.
+The source prompt now explains that compacted history is not proof of an open
+or completed commitment. `make build` passed. The existing oversized-current-
+message guard and exact decision-coverage checks remain in place; no dormant
+tests were changed or run. The installed Mac companion launched and completed
+its calendar check at `14:17:50Z`. Consumer verification is still in progress.
+
+
+Fresh calendar workflow `35232692016` passed at `14:23:31Z`: the actual
+scheduling consumer returned `source: companion`, complete coverage of accounts
+1, 2 and 3, all three saved binding IDs, and three available slots. Its snapshot
+was captured at `14:20:56Z`. The companion was closed at approximately `14:25Z`
+to let that real snapshot expire for the three-account fallback check. This
+verifies local snapshot freshness; it does not independently prove remote CalDAV
+synchronisation freshness.
+
+
+Stale calendar workflow `35233964423` passed at `14:33:17Z`. The last snapshot
+was captured at `14:23:56Z`, failed the five-minute freshness check, and the
+actual scheduling consumer returned complete Google coverage for accounts
+1, 2 and 3 with six available slots. Both calendar probes sent zero messages
+and created zero events. The fresh-source and stale-fallback checklist item is
+complete. The Mac companion was reopened to resume normal updates.
+
+The first fresh proposal start, workflow `35233431726`, refused preflight
+because a calendar read met a one-second local provider-admission delay. It
+created no fixture and sent nothing. Commit `7cabb30d` applies the existing
+bounded read retry to that calendar preflight; deployment is held until Runner's
+active recovery cycle finishes. The second start, workflow `35234518883`,
+succeeded on the serving revision and created fixture
+`0dcf780d-6bd1-4621-af34-6c642ceae49c` at `14:39:25Z`. Its task is
+`fcf19fe5-637a-4cac-89f9-597b4064fbdb`.
+
+Read-only report `35235380860` confirms that task is waiting for a proposal and
+passes the production candidate gate. Only its initial fixture email has been
+sent. The historical failing Runner handoff now reports all five records as
+complete, including the compacted long thread. The current recovery has 144
+source items across 23 batches; 20 were completed at inspection, with no failed
+batch. The Chief of Staff has completed later cycles, but the last recorded
+proposal review still predates this fixture. Separate oversized skill requests
+continue to be rejected locally; they are not proof that proposal review failed.
+
+Read-only report `35236062313` confirms Runner recovery on
+`maraithon-00453-4m9`. Finaliser `db30a719-7b72-409c-b509-5e6927de6eb6`
+completed at `14:49:23.726226Z`: 23 batches, 144 source items, 144 decisions,
+and one advanced watermark. The live Activity page shows all 23 batches and
+the finaliser completed. The next incremental acquisition started at `14:50Z`
+with three source items, rather than replaying the same 144-item backlog.
+There were no new incomplete-decision or todo-intake-contention failures in the
+report's one-hour window. This closes the Runner recovery item, without making
+a claim about every runtime-health condition.
+
+The bounded calendar-preflight retry in `7cabb30d` deployed through successful
+workflow `35236639090` to `maraithon-00454-z6t` at `14:57:58Z`, serving all
+traffic. It retries brief local provider contention through the existing read
+probe, while preserving refusal for provider errors and longer waits.
+
+Report `35237230686` confirms a fresh Chief of Staff proposal review at
+`15:03:31Z` and memo completion at `15:03:38Z`; the fixture remains eligible
+and waiting for a proposal. The separate oversized skill request did not prevent
+this review. The report's recorded-review flag does not establish whether this
+specific candidate was selected or rejected.
+
+Commit `2232cf59` clarifies an ambiguous ranking instruction: an unknown answer
+is a valid reason to ask the named counterparty, while inventing facts remains
+excluded. The earlier wording excluded work requiring “facts not provided,”
+which could also discourage information requests. This is a plausible cause,
+not a proven model decision. The review digest now includes a policy version so
+a changed ranking rule gets one fresh scheduled review. The diagnostic adds
+whether the current candidates match the saved review and whether the fixture
+was included and selected in that review, without exposing source or memo text.
+`make build` passed; no automated tests ran.
+
+Commit `2232cf59` deployed through successful workflow `35238138221` to
+`maraithon-00455-9n9`, serving all traffic at `15:12:14Z`.
+
+Report `35238776086` proves the model received the fresh fixture and returned
+zero proposals at `15:14:32Z`. Its saved review matches both current candidates.
+The problem is the ranking decision, not omission from the prompt or a failed
+proposal write. The earlier wording change alone did not resolve it.
+
+Encrypted inspection workflow `35240022303` read that saved review. Its rationale
+classified the factual ask as self-assignment because the counterparty was Kent,
+even though the proposed actor was the assistant and a suggestion still required
+user acceptance. Private planning text was encrypted before logging and was not
+committed. The read-only operator path in `3fede59c` deployed through workflow
+`35239700720` to `maraithon-00456-lc6` at `15:23:58Z`. The first inspection branch
+was rejected by the existing main-branch cloud identity condition; no IAM policy
+was changed.
+
+Commit `f46c8597` explains the distinction between proposing an accepted handoff,
+autonomous self-assignment, collecting a fact and making the user's judgement.
+The model can still decline a candidate. New proposal fixtures also get a unique
+project and request written confirmation, so an answer learned from an earlier
+fixture cannot satisfy the new task. Existing fixture payloads and deadlines are
+unchanged. `make build` passed; no automated tests ran.
+
+Commit `f46c8597` deployed through successful workflow `35240561397` to
+`maraithon-00457-ppr`, serving all traffic at `15:32:41Z`. The earlier fixture's
+hour ends at `15:39Z`; a new unique-project fixture is being started with its own
+full window for generation, UI acceptance and completion.
+
+The unique-project fixture started through workflow `35241087007` at
+`15:37:42Z`, job `7da1574b-3175-492b-a00b-1f1ee901bc53`, task
+`bfadff3b-5ccf-446f-8cac-fa8eb683b20c`. Report `35241540321` confirms it passes
+the candidate gate but arrived after the `15:35Z` review. The current candidate
+digest differs from that review, so the normal scheduled review is due.
+The same report confirms another Runner incremental finaliser at `15:39:35Z`:
+one source item, one decision and one advanced watermark.
+
+[Recovery evidence](evidence/delegated-conversations/2026-09-17-recovery.json).
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
@@ -1099,7 +1262,6 @@ failure, and live suggestion generation and acceptance remain open.
 3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage. The recovered controlled task passed the production candidate gate but reached its original deadline without a proposal. Diagnosis of incomplete Gmail acquisition and failed scheduled Chief of Staff work is in progress.
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and longer longevity coverage. The original six-hour Gmail canary passed across releases with stable quiet state, older-fact recall and independent review. Send recovery, older coordinator checkpoints, and interrupted model decisions have local whole-BEAM evidence. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Verify the revised call budget across the remaining paths and reduce redundant calls and daily workload volume. The information eval's two calls per turn meet the revised ordinary-turn target; live research turns have three settled calls with independent review; repair still needs verification against that ceiling. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
-6. Manually verify the account-matching consumer with explicit user-selected calendars. Deployment, complete availability ingestion and live inventory presentation are verified. The replacement window includes unchanged events and reconciles local deletions; explicit bindings and a five-minute limit control use in slot proposals. Final booking always checks Google. Live coverage must establish the selected window and fallback behavior; a local capture timestamp does not prove remote CalDAV freshness.
 
 The pilot voice sampler has local and small live Gmail evidence. Incremental learning and profile promotion remain a separate spec. Slack can now retain a scan superseded by its own newly discovered messages; general incremental history reuse remains unfinished. The redacted operational trace is deployed, with live recovery checks outstanding. The user-facing conversation history is deployed; its live verification limits are recorded above. Durable preflight is deployed with live Gmail preview evidence; long Slack reads and worker-loss recovery still need verification. The requested next-week window, 45-minute duration and afternoon ranking now have passing live scheduling evidence. Saved meeting links reach offers and invitations, but a nonempty configured link still needs live verification. The scheduled October information conversation and its fresh provider recall probe passed. The six-hour canary subsequently verified a later reviewed model turn using an older fact; its report also confirms one People context entry, without proving broader relationship inference. The original task email can now supply evidence for reviewed facts; bounded date-window selection of synchronized historical messages now has live Gmail read evidence; a model using that path and Slack recall remain unverified. Gmail evidence fingerprints already ignore read, inbox, star, and custom labels, retaining only sent and draft classification. Gmail thread continuity has local coverage and a deployed compatibility check; an actual provider split still needs live evidence.
 
