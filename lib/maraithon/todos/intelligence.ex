@@ -853,6 +853,10 @@ defmodule Maraithon.Todos.Intelligence do
     - This request is the exact source-account fan-out intake. For each candidate,
       `metadata.source_record.body`, `.text`, and `.thread_context` are the sealed
       provider evidence to evaluate; they are not model-generated candidate copy.
+      A `source_record_prompt_compacted` or `thread_context_prompt_compacted` flag
+      means this prompt contains a bounded projection of the retained evidence.
+      Evaluate the supplied text; never invent what omitted history says or treat
+      its omission as proof that a commitment is open or completed.
     - `metadata.source_account_identity` contains the connected OAuth account's
       provider identity. Use its account_email or authenticated Slack user ID
       (`authed_user_id`/`slack_user_id`) to match source senders and mentioned_users,
