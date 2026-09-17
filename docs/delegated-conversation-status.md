@@ -2,7 +2,7 @@
 
 For the current short checklist, see [what is done and what remains](delegated-conversation-todo.md).
 
-Updated September 16, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
+Updated September 17, 2026. Controlled Gmail information and scheduling evals now pass as both Kent and October. The Kent-pair busy-slot recovery eval also passes. Mailbox signatures, assistant isolation, brief reporting, work/personal categories, and the cost warning are deployed. The full [execution plan](delegated-conversation-execution-plan.md) is not complete.
 
 ## Assistant selection belongs to each user
 
@@ -1253,13 +1253,64 @@ digest differs from that review, so the normal scheduled review is due.
 The same report confirms another Runner incremental finaliser at `15:39:35Z`:
 one source item, one decision and one advanced watermark.
 
+Report `35242154689` confirms the unique-project candidate was included in the
+`15:46:35Z` model call, which again returned zero proposals. Encrypted inspection
+`35242859901` found the same own-fact/self-assignment rejection repeated in the
+memo for the new candidate. The recorded prompt contained the deployed handoff
+clarification, so this was not a stale serving revision.
+
+Commit `c6c89b9c` moves current candidate review ahead of memo composition and
+asks for proposal decisions before the memo in the same JSON response. The memo
+must reflect the fresh review; an earlier model rejection or a quiet skill cycle
+alone does not reject a new candidate. Actual user preferences, source constraints
+and the option to decline remain in force. New fixtures explicitly ask for an
+assistant handoff. No extra model call is introduced. `make build` passed; no
+automated tests ran. Live acceptance remains open.
+
+Commit `c6c89b9c` deployed through successful workflow `35243758930` to
+`maraithon-00458-xv8`, serving all traffic at `16:02:46Z`. A new controlled
+source explicitly requests an assistant handoff; live acceptance is being
+verified against that case.
+
+The explicit-handoff fixture started through workflow `35244282578` at
+`16:09:04Z`, job `ba6a82d0-d1d3-4937-8028-1b312a7b0046`, task
+`360267f7-0ce8-444e-b966-509269462216`. Its source asks the recipient to have
+their assistant request and retain a written colour confirmation for its unique
+project. This is the positive handoff case; it does not prove that every
+ambiguous or self-addressed information task should be suggested.
+
+The scheduled model review at `16:24:27Z` selected the explicit-handoff task
+and completed at `16:25:21Z`. Report `35246453765` confirms the fixture was in
+the prompt, selected, and observed by the eval at `16:25:28Z`. The task UI showed
+“Delegate to October?”; its preview named October, the controlled Kent Gmail
+recipient, the written-confirmation outcome and no CC recipients. Acceptance
+through that control at about `16:31Z` started the delegation. No ordinary
+Delegate control or prepared Gmail draft was used to substitute for the suggestion.
+
+At `16:33Z`, the live UI showed the todo Done and the delegation Completed.
+Conversation history showed the sent question, fresh reply and completion. Its
+single saved fact records the unique project's colour as indigo and links to the
+reply in October's mailbox. Final report `35247550089` passed: one assistant
+message, one counterparty reply, todo state `done`, and completion citing the
+reply. All four settled model calls used Muse Spark Contributor, with two calls
+per ordinary turn and independent review. Recorded cost was US$0.001355, with
+no unresolved charge. This cost covers this conversation, not the day's
+application workload or all development attempts.
+
+The three abandoned proposal fixtures were dismissed through the task UI;
+the completed task and its source-linked result remain available. No broader
+send gate, Slack send, or calendar write was enabled for this check. The
+remaining oversized Chief of Staff request is separate: repeated steps reject
+roughly 296 KB against the 128 KB request budget, while proposal reviews
+continue afterward. Its skill and affected product outcome still need diagnosis.
+
 [Recovery evidence](evidence/delegated-conversations/2026-09-17-recovery.json).
 
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
 2. Finish the remaining Slack product paths. Local ingress, sending, authorship, DM and reconciliation checks pass. Kent deferred the controlled live Slack eval; autonomous Slack sends remain disabled.
-3. Verify proposal acceptance on a real controlled task and inspect its native presentation. Proposal generation, projection and brief integration are deployed with local coverage. The recovered controlled task passed the production candidate gate but reached its original deadline without a proposal. Diagnosis of incomplete Gmail acquisition and failed scheduled Chief of Staff work is in progress.
+3. Inspect generated-suggestion presentation on the native apps, including a physical iPhone. Live web generation, acceptance and source-backed completion now pass for the explicit-handoff case above. Separately identify and bound the oversized Chief of Staff skill request; Runner discovery recovery does not establish full runtime health.
 4. Finish the rest of whole-app recovery and race checks, schema evolution, and longer longevity coverage. The original six-hour Gmail canary passed across releases with stable quiet state, older-fact recall and independent review. Send recovery, older coordinator checkpoints, and interrupted model decisions have local whole-BEAM evidence. Automatic recovery with every producer running, disaster restore and the remaining crash matrix still need coverage. Shared Gmail and Slack request admission are deployed with focused coverage. Gmail also has read-only production checks; live Slack evaluation remains deferred.
 5. Verify the revised call budget across the remaining paths and reduce redundant calls and daily workload volume. The information eval's two calls per turn meet the revised ordinary-turn target; live research turns have three settled calls with independent review; repair still needs verification against that ceiling. The measured day had 1,542 attempts, above the earlier 300 to 500 target.
 

@@ -28,6 +28,7 @@ on:
           - delegation-eval-memory
           - delegation-eval-diagnose
           - delegation-eval-resume
+          - restore-spending-pause
           - reset-rebuild-kent
           - replay-gmail
           - replay-slack
@@ -125,6 +126,27 @@ jobs:
           MARAITHON_GCP_PROJECT: maraithon
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
+
+      - name: Restore the normal spending pause
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'restore-spending-pause'
+        run: |
+          gcloud run services update maraithon --project maraithon --region us-central1 \
+            --update-env-vars LLM_DEVELOPMENT_SPENDING=false --quiet
+          gcloud run jobs update maraithon-todo-validation --project maraithon --region us-central1 \
+            --update-env-vars LLM_DEVELOPMENT_SPENDING=false --quiet
+          gcloud run services describe maraithon --project maraithon --region us-central1 \
+            --format=json | jq -e '
+              select([.spec.template.spec.containers[0].env[] |
+                select(.name == "LLM_DEVELOPMENT_SPENDING") | .value] == ["false"]) |
+              .status.latestReadyRevisionName as $ready |
+              select([.status.traffic[] | select(.percent > 0) |
+                {revisionName, percent}] == [{revisionName: $ready, percent: 100}]) |
+              {serving_revision: $ready, development_spending: false}'
+          gcloud run jobs describe maraithon-todo-validation --project maraithon --region us-central1 \
+            --format=json | jq -e '
+              [.spec.template.spec.template.spec.containers[0].env[] |
+                select(.name == "LLM_DEVELOPMENT_SPENDING") | .value] == ["false"]'
+          echo "LLM_DEVELOPMENT_SPENDING=false"
 
       - name: Diagnose runtime coordination
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'diagnose-runtime'

@@ -5,17 +5,15 @@ Updated September 17, 2026. This is the short working list. The
 and limits; the [execution plan](delegated-conversation-execution-plan.md)
 defines the intended behaviour.
 
-## Doing now
-
-- [ ] Verify accepting a generated delegation suggestion through the actual
-  task UI. The planner treated the controlled factual ask as self-assignment.
-  Revision `maraithon-00457-ppr` clarifies that a proposed assistant handoff
-  still requires acceptance and distinguishes fact collection from user judgement.
-  New fixtures use a unique project and require written confirmation. A fresh
-  live run is starting; generation, acceptance and completion remain open.
+The September 17 Runner recovery, generated-suggestion acceptance and calendar
+fallback checks are complete. The next work is listed below.
 
 ## Next
 
+- [ ] Identify and bound the separate oversized Chief of Staff skill request.
+  Recent production steps reject roughly 296 KB of message content against the
+  128 KB request budget. Proposal reviews continue afterward; the affected skill
+  and its product outcome still need diagnosis.
 - [ ] Measure current daily OpenRouter spend and call volume after the remaining
   retry fixes. Separate normal operation from development evals, and compare
   with the original audit. Do not treat the small per-conversation cost as proof
@@ -49,6 +47,12 @@ defines the intended behaviour.
 
 ## Completed, with recorded evidence
 
+- [x] Accept a generated “Delegate to October?” suggestion through the actual
+  task UI and complete the resulting controlled conversation. The explicit
+  handoff case passed: one assistant message, one reply, a Done todo and a
+  saved fact citing that reply. Four settled Muse calls cost US$0.001355, with
+  two calls per ordinary turn and independent review. Earlier ambiguous cases
+  were declined; this does not establish suggestion quality for every task.
 - [x] Recover Runner Gmail discovery after contention and incomplete-evidence
   failures. At `14:49:23Z`, the fixed serving revision completed all 23 batches,
   recorded 144 decisions for 144 source items and advanced its watermark.
