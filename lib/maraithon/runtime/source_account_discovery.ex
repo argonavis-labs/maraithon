@@ -36,7 +36,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @handoff_max_encoded_source_bundle_bytes 2_000_000
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
-  @candidate_source_record_max_bytes 104_000
+  # Bound the current source item independently of supplemental thread history.
+  # A long thread must not reject an otherwise readable new message before the
+  # model-facing projection below can fit its historical context.
+  @candidate_current_record_max_bytes 104_000
   # A source record is serialized once into the prompt and once again into the
   # provider request. Keeping the model-facing projection well below the
   # request ceiling leaves room for JSON escaping, the decision contract, and
@@ -780,7 +783,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     complete = Map.put(evidence, "evidence_complete", true)
 
     cond do
-      encoded_bytes(complete) > @candidate_source_record_max_bytes ->
+      encoded_bytes(Map.delete(complete, "thread_context")) > @candidate_current_record_max_bytes ->
         evidence
         |> Map.take(~w(id message_id thread_id google_provider team_id channel_id ts thread_ts))
         |> Map.put("evidence_complete", false)
@@ -815,6 +818,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       |> Map.put("evidence_complete", true)
       |> Map.put("source_record_bytes", encoded_bytes(evidence))
       |> Map.put("source_record_prompt_compacted", true)
+      |> Map.put("thread_context_items", length(Map.get(evidence, "thread_context", [])))
+      |> Map.put("thread_context_prompt_compacted", true)
 
     [
       {@candidate_prompt_excerpt_max_bytes, @candidate_prompt_context_max_items,
@@ -852,7 +857,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
               is_integer(max_string_bytes) and max_string_bytes >= 0 do
     context
     |> Enum.filter(&is_map/1)
-    |> Enum.take(max_items)
+    # Acquisition orders history oldest first. Keep the most recent context
+    # alongside the complete sealed record, not just the start of a long thread.
+    |> Enum.take(-max_items)
     |> Enum.map(fn item ->
       PromptBudget.compact(item,
         string_bytes: max(max_string_bytes, 1),
