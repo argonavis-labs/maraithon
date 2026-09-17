@@ -11,14 +11,15 @@ defines the intended behaviour.
   through the actual task UI. The first controlled run expired without a
   suggestion. A local fix lets scheduled planning reconsider an expired
   suggestion after the task's next review without reranking unchanged rejected
-  candidates on every completion poll. The build passes; deployment and live
-  verification remain open.
+  candidates on every completion poll. The fix is deployed; live proposal
+  generation and acceptance remain open.
 - [ ] Resolve Runner Gmail's repeated processing and finalisation failures.
   Sequential thread reads have restored successful acquisition on two other
   accounts, but the Runner pipeline is still unfinished. Live Activity at
   9:49 p.m. Toronto still showed repeated 20-batch Runner cycles with failed
   AI reviews. The diagnostic now includes processing and finalisation failures
-  so dependent completion errors cannot hide the earlier cause.
+  so dependent completion errors cannot hide the earlier cause. That diagnostic
+  is deployed; a fresh read-only report is pending.
 - [ ] Verify scheduling uses the three approved Mac calendars when fresh and
   falls back to Google when unavailable or stale. The selections are now saved;
   the consumer and fallback still need a live check.

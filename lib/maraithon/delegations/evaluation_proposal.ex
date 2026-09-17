@@ -136,7 +136,13 @@ defmodule Maraithon.Delegations.EvaluationProposal do
         where: j.stage_rank <= 2,
         order_by: [desc: j.at, desc: j.job_id],
         limit: 16,
-        select: map(j, [:job_id, :job_type, :error, :at, :attempts])
+        select: %{
+          job_id: type(j.job_id, Ecto.UUID),
+          job_type: j.job_type,
+          error: j.error,
+          at: type(j.at, :utc_datetime_usec),
+          attempts: j.attempts
+        }
     )
   end
 

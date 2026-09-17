@@ -1035,8 +1035,15 @@ No source content or request body is added to the report. Request-budget error
 reporting also tolerates malformed message lists without raising a second error.
 
 `make build` passed with warnings treated as errors. Automated tests were not
-run under the manual-first policy. Deployment and live verification of these
-changes remain open.
+run under the manual-first policy. Commit `cfdaf991` deployed through successful
+workflow `35172180735` to revision `maraithon-00448-kvq`, serving all traffic.
+The normal deployment health check passed. Read-only workflow `35172503572`
+failed while encoding its report. Diagnostic workflow `35172764644` identified
+`Jason.EncodeError` at the report boundary. A provider-free query-plan inspection
+found that selecting a map from the ranked subquery lost Ecto's UUID loading:
+job IDs reached the report as raw bytes. Explicit UUID and timestamp types now
+preserve JSON-compatible values. This failure affected the inspection job, not
+the serving application. Live proposal generation and acceptance remain open.
 
 ## Remaining work
 
