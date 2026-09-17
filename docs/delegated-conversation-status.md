@@ -1012,6 +1012,32 @@ prove a size-limit cause. The original proposal eval remains failed at its
 original deadline. This inspection made no provider or model calls, sent no
 messages and changed no conversation records.
 
+## Proposal review and source-failure follow-up
+
+At 9:49 p.m. Toronto on September 16, live Activity still showed repeated
+20-batch Runner Gmail discovery cycles with failed AI reviews. Several later
+scheduled Chief of Staff runs had completed. This does not establish source
+pipeline recovery or a working suggestion.
+
+The pending suggestion fix now tracks the previous saved proposal in the
+review digest. When the task's next completion review expires that proposal,
+the scheduled planner can rank it again. An unchanged candidate that the model
+declined stays quiet through completion polling. The existing wake interval
+still bounds retries, and neither fingerprint is included in the model prompt.
+
+Read-only status workflow `35155546296` exposed two diagnostic gaps: it returned
+only acquisition failures, and checkpoint decoding failed with
+`unknown_snapshot_symbol`. The diagnostic now loads the known Chief of Staff
+and skill modules before resolving existing snapshot symbols. It includes up
+to two failures from each source-worker stage, at most 16 total, so failed
+processing and finalisation are visible alongside their dependent errors.
+No source content or request body is added to the report. Request-budget error
+reporting also tolerates malformed message lists without raising a second error.
+
+`make build` passed with warnings treated as errors. Automated tests were not
+run under the manual-first policy. Deployment and live verification of these
+changes remain open.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.

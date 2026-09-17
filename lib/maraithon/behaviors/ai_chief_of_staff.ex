@@ -588,10 +588,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         do: DelegationProposals.candidates(state.user_id),
         else: []
 
-    # Polling a completion check changes the persistence fingerprint, but is
-    # not new evidence for the ranker. Only the model-facing candidate matters.
-    digest =
-      Maraithon.Delegations.Scope.hash(Enum.map(candidates, &Map.delete(&1, "fingerprint")))
+    digest = DelegationProposals.review_digest(candidates)
 
     state = %{state | delegation_candidates: candidates, delegation_candidate_digest: digest}
 

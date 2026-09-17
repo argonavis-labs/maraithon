@@ -10,6 +10,14 @@ defmodule Maraithon.Delegations.EvaluationProposal do
   alias Maraithon.Todos.{Todo, Workflow}
 
   def diagnostics(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
+    # Release evals do not start the Agent or its skills. Load the known code
+    # before the closed snapshot decoder resolves its existing symbols.
+    modules =
+      [Maraithon.Behaviors.AIChiefOfStaff, Maraithon.Behaviors.ManifestAgent] ++
+        Map.values(Maraithon.ChiefOfStaff.Skills.modules())
+
+    Enum.each(modules, &Code.ensure_loaded!/1)
+
     Repo.all(
       from a in Maraithon.Agents.Agent,
         where: a.user_id == ^job.user_id,
@@ -59,7 +67,9 @@ defmodule Maraithon.Delegations.EvaluationProposal do
           |> Enum.map(&failed_step_summary/1),
         memo_updated_at: get_in(state, [:cycle_memory, "updated_at"]),
         pending_skill: state[:pending_effect_skill_id],
-        cycle_memo_generated: state[:cycle_memo_generated]
+        cycle_memo_generated: state[:cycle_memo_generated],
+        delegation_review_attempted_at: state[:delegation_review_attempted_at],
+        delegation_review_recorded: is_binary(state[:delegation_review_digest])
       }
     end)
   end
@@ -103,18 +113,30 @@ defmodule Maraithon.Delegations.EvaluationProposal do
 
   def source_failures(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
     since = DateTime.add(DateTime.utc_now(), -1, :hour)
+    job_types = Maraithon.Runtime.BackgroundJobs.source_account_job_types()
 
-    Repo.all(
+    # Include processing and finalization, not just acquisition. Keep two
+    # failures per stage so dependent closure failures cannot hide the cause.
+    failures =
       from j in Maraithon.Runtime.BackgroundJob,
         where: j.user_id == ^job.user_id and j.status == "failed" and j.updated_at >= ^since,
-        where:
-          j.job_type in [
-            "runtime_partition:source_account_discovery",
-            "runtime_partition:source_account_closure_acquire"
-          ],
-        order_by: [desc: j.updated_at],
-        limit: 8,
-        select: %{job_id: j.id, job_type: j.job_type, error: j.last_error, at: j.updated_at}
+        where: j.job_type in ^job_types,
+        windows: [stage: [partition_by: j.job_type, order_by: [desc: j.updated_at, desc: j.id]]],
+        select: %{
+          job_id: j.id,
+          job_type: j.job_type,
+          error: j.last_error,
+          at: j.updated_at,
+          attempts: j.attempts,
+          stage_rank: over(row_number(), :stage)
+        }
+
+    Repo.all(
+      from j in subquery(failures),
+        where: j.stage_rank <= 2,
+        order_by: [desc: j.at, desc: j.job_id],
+        limit: 16,
+        select: map(j, [:job_id, :job_type, :error, :at, :attempts])
     )
   end
 

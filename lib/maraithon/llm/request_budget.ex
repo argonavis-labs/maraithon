@@ -87,6 +87,8 @@ defmodule Maraithon.LLM.RequestBudget do
       %{content: content}, bytes when is_binary(content) -> bytes + byte_size(content)
       _, bytes -> bytes
     end)
+  rescue
+    _ -> 0
   end
 
   defp message_content_bytes(_), do: 0

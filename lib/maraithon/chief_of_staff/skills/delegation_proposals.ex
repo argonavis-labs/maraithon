@@ -71,6 +71,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.DelegationProposals do
       %{
         "todo_id" => todo.id,
         "fingerprint" => fingerprint,
+        "previous_proposal_fingerprint" => get_in(todo.metadata || %{}, [@key, "fingerprint"]),
         "actor" => actor,
         "kind" => kind,
         "label" => "Delegate to #{name}?",
@@ -167,8 +168,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.DelegationProposals do
     Return ONLY JSON: {"memo":"your short memo", "delegation_proposals":[
       {"todo_id":"an exact candidate ID", "reason":"one short concrete reason"}]}.
     Return an empty proposal array when none would help.
-    Candidates: #{Jason.encode!(Enum.map(candidates, &Map.delete(&1, "fingerprint")))}
+    Candidates: #{Jason.encode!(Enum.map(candidates, &Map.drop(&1, ~w(fingerprint previous_proposal_fingerprint))))}
     """
+  end
+
+  def review_digest(candidates) do
+    # Completion polling expires a saved proposal, but it adds no evidence to
+    # a rejected candidate. Track the last proposal so each expired suggestion
+    # gets another review without reranking every task on every poll.
+    Scope.hash(Enum.map(candidates, &Map.delete(&1, "fingerprint")))
   end
 
   def persist(candidates, decisions, context)
