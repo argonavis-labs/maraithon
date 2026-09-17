@@ -11,6 +11,7 @@ defmodule Maraithon.Delegations.EvaluationProposal do
 
   def diagnostics(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
     Code.ensure_loaded!(Maraithon.Behaviors.AIChiefOfStaff)
+    candidates = DelegationProposals.candidates(job.user_id)
 
     Repo.all(
       from a in Maraithon.Agents.Agent,
@@ -65,6 +66,13 @@ defmodule Maraithon.Delegations.EvaluationProposal do
         pending_skill: state[:pending_effect_skill_id],
         cycle_memo_generated: state[:cycle_memo_generated],
         delegation_review_attempted_at: state[:delegation_review_attempted_at],
+        current_candidate_count: length(candidates),
+        current_candidates_reviewed:
+          if(is_nil(decode_error),
+            do: state[:delegation_review_digest] == DelegationProposals.review_digest(candidates)
+          ),
+        last_proposal_review:
+          proposal_review_summary(agent.id, state[:delegation_review_attempted_at], job),
         delegation_review_recorded:
           if(is_nil(decode_error), do: is_binary(state[:delegation_review_digest]))
       }
@@ -72,6 +80,52 @@ defmodule Maraithon.Delegations.EvaluationProposal do
   end
 
   def diagnostics(_job), do: nil
+
+  defp proposal_review_summary(agent_id, %DateTime{} = attempted_at, job) do
+    step =
+      Repo.one(
+        from s in Maraithon.Agents.AgentRunStep,
+          where: s.agent_id == ^agent_id and s.effect_type == "llm_call",
+          where: s.started_at >= ^attempted_at and is_nil(s.payload_purged_at),
+          order_by: [asc: s.started_at, asc: s.id],
+          limit: 1
+      )
+
+    if step do
+      step = Maraithon.Agents.AgentRunStep.hydrate_payloads!(step)
+      todo_id = (job.result || %{})["todo_id"]
+      messages = step.request_payload["messages"] || []
+      content = step.response_payload["content"]
+
+      decisions =
+        case is_binary(content) && Jason.decode(content) do
+          {:ok, %{"delegation_proposals" => proposals}} when is_list(proposals) -> proposals
+          _ -> nil
+        end
+
+      %{
+        step_id: step.id,
+        status: step.status,
+        started_at: step.started_at,
+        completed_at: step.completed_at,
+        fixture_in_prompt:
+          is_binary(todo_id) and
+            Enum.any?(messages, fn
+              %{"content" => text} when is_binary(text) -> String.contains?(text, todo_id)
+              _ -> false
+            end),
+        proposal_count: if(is_list(decisions), do: length(decisions)),
+        fixture_selected:
+          is_list(decisions) and
+            Enum.any?(decisions, fn
+              %{"todo_id" => id} -> id == todo_id
+              _ -> false
+            end)
+      }
+    end
+  end
+
+  defp proposal_review_summary(_agent_id, _attempted_at, _job), do: nil
 
   # A release eval has no running skills to load every historical state symbol.
   # Project only the known planning fields, then use the same closed decoder.
