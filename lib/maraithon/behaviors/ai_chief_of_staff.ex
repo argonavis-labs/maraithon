@@ -863,9 +863,16 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     skills_ran = state.pending_emits |> Enum.map(& &1.skill_id) |> Enum.uniq()
     deltas = (state.assistant_fetch_telemetry || %{}) |> Map.get("sources", %{})
 
+    response_format =
+      if state.delegation_candidates == [],
+        do: "Return only the memo text.",
+        else: "Return the JSON object specified above, with delegation_proposals before memo."
+
     """
-    You are the Chief of Staff's cross-cycle memory. Write a short memo \
-    (max #{@memo_max_chars} characters, plain text, no markdown) capturing \
+    #{DelegationProposals.prompt(state.delegation_candidates)}
+
+    You are the Chief of Staff's cross-cycle memory. The memo text must be short \
+    (max #{@memo_max_chars} characters, plain text, no markdown) and capture \
     the state of the world and what you decided or held this cycle, so \
     your next wakeup can reason over the delta instead of starting from \
     scratch.
@@ -877,10 +884,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     - Skills that produced output: #{if skills_ran == [], do: "none", else: Enum.join(skills_ran, ", ")}
     - Per-source new-item counts since the last watermark: #{safe_json(deltas)}
 
-    Write the memo now. Be concrete and terse: note open threads, anything \
+    Write the memo after any candidate review above. Be concrete and terse: \
+    note open threads, anything \
     you decided to hold or suppress, and anything worth watching next \
     cycle. Do not repeat these instructions.
-    #{DelegationProposals.prompt(state.delegation_candidates)}
+    #{response_format}
     """
   end
 

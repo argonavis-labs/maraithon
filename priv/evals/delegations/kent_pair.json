@@ -15,8 +15,8 @@
       "entry": "proposal",
       "kind": "information",
       "outcome": "Obtain written confirmation of the colour for {{project}} and retain the reply as its source.",
-      "next_action": "Ask the sender for written confirmation of the colour for {{project}}.",
-      "initial_email": "I have chosen the colour for {{project}}. Please ask me for written confirmation when you are ready, so you can keep my reply as the project record.",
+      "next_action": "Ask your assistant to obtain the sender's written colour confirmation for {{project}}.",
+      "initial_email": "I have chosen the colour for {{project}}. Please have your assistant email me to request written confirmation, then keep my reply as the project record. I will give the assistant the confirmed colour when they ask.",
       "counterparty_replies": ["I confirm that the colour for {{project}} is indigo."],
       "expect": {"state": "completed", "answer_contains": "indigo", "completion_cites_inbound": true, "proposal_accepted_in_app": true, "max_agent_messages": 2}
     },
