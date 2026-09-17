@@ -45,6 +45,7 @@ defmodule Maraithon.Delegations.EvaluationRunner do
            Evaluation.window(DateTime.utc_now(), Maraithon.Delegations.Preferences.get(@user)) do
       accounts = Map.new(report["accounts"], &{&1["email"], &1["account_id"]})
       id = Ecto.UUID.generate()
+      scenario = instance_scenario(scenario, id)
 
       deadline =
         if scenario_id == "durable_memory",
@@ -96,6 +97,21 @@ defmodule Maraithon.Delegations.EvaluationRunner do
   end
 
   def start(_, _), do: {:error, :unsupported_eval_scenario}
+
+  # A proposal must concern fresh work. Reusing a project already answered by
+  # earlier fixtures lets the planner correctly treat the ask as redundant.
+  defp instance_scenario(%{"id" => "proposed_information_reply"} = scenario, id) do
+    project = "Maraithon trial #{id}"
+
+    Enum.reduce(~w(outcome initial_email next_action), scenario, fn field, acc ->
+      Map.update!(acc, field, &String.replace(&1, "{{project}}", project))
+    end)
+    |> Map.update!("counterparty_replies", fn replies ->
+      Enum.map(replies, &String.replace(&1, "{{project}}", project))
+    end)
+  end
+
+  defp instance_scenario(scenario, _id), do: scenario
 
   defp budget_preflight do
     if Maraithon.Delegations.Budget.account_budget_ok?(DateTime.utc_now()),
@@ -300,10 +316,11 @@ defmodule Maraithon.Delegations.EvaluationRunner do
                  source_account_id: job.payload["owner_account_id"],
                  source_item_id: message.message_id,
                  next_action:
-                   if(job.payload["scenario"]["kind"] == "scheduling",
-                     do: "Offer a few available meeting times.",
-                     else: "Ask Kent for the test project colour."
-                   ),
+                   job.payload["scenario"]["next_action"] ||
+                     if(job.payload["scenario"]["kind"] == "scheduling",
+                       do: "Offer a few available meeting times.",
+                       else: "Ask Kent for the test project colour."
+                     ),
                  dedupe_key: key
                })
            end) do

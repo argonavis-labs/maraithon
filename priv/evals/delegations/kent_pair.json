@@ -14,9 +14,10 @@
       "mode": "live",
       "entry": "proposal",
       "kind": "information",
-      "outcome": "Learn the test project colour and record the answer with its source.",
-      "initial_email": "I have the colour for our Maraithon test project. Please ask me for it when you are ready.",
-      "counterparty_replies": ["The test project colour is indigo."],
+      "outcome": "Obtain written confirmation of the colour for {{project}} and retain the reply as its source.",
+      "next_action": "Ask the sender for written confirmation of the colour for {{project}}.",
+      "initial_email": "I have chosen the colour for {{project}}. Please ask me for written confirmation when you are ready, so you can keep my reply as the project record.",
+      "counterparty_replies": ["I confirm that the colour for {{project}} is indigo."],
       "expect": {"state": "completed", "answer_contains": "indigo", "completion_cites_inbound": true, "proposal_accepted_in_app": true, "max_agent_messages": 2}
     },
     {
