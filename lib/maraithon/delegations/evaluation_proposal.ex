@@ -10,13 +10,7 @@ defmodule Maraithon.Delegations.EvaluationProposal do
   alias Maraithon.Todos.{Todo, Workflow}
 
   def diagnostics(%{payload: %{"scenario" => %{"entry" => "proposal"}}} = job) do
-    # Release evals do not start the Agent or its skills. Load the known code
-    # before the closed snapshot decoder resolves its existing symbols.
-    modules =
-      [Maraithon.Behaviors.AIChiefOfStaff, Maraithon.Behaviors.ManifestAgent] ++
-        Map.values(Maraithon.ChiefOfStaff.Skills.modules())
-
-    Enum.each(modules, &Code.ensure_loaded!/1)
+    Code.ensure_loaded!(Maraithon.Behaviors.AIChiefOfStaff)
 
     Repo.all(
       from a in Maraithon.Agents.Agent,
@@ -41,7 +35,9 @@ defmodule Maraithon.Delegations.EvaluationProposal do
         if snapshot do
           snapshot = Maraithon.Runtime.Snapshot.hydrate_payloads!(snapshot)
 
-          case Maraithon.Runtime.SnapshotFormat.decode_stored(snapshot.state_data) do
+          case Maraithon.Runtime.SnapshotFormat.decode_stored(
+                 diagnostic_snapshot(snapshot.state_data)
+               ) do
             {:ok, state, _} when is_map(state) -> {state, nil}
             {:error, reason} -> {%{}, Maraithon.Redaction.error_class(reason)}
           end
@@ -69,12 +65,55 @@ defmodule Maraithon.Delegations.EvaluationProposal do
         pending_skill: state[:pending_effect_skill_id],
         cycle_memo_generated: state[:cycle_memo_generated],
         delegation_review_attempted_at: state[:delegation_review_attempted_at],
-        delegation_review_recorded: is_binary(state[:delegation_review_digest])
+        delegation_review_recorded:
+          if(is_nil(decode_error), do: is_binary(state[:delegation_review_digest]))
       }
     end)
   end
 
   def diagnostics(_job), do: nil
+
+  # A release eval has no running skills to load every historical state symbol.
+  # Project only the known planning fields, then use the same closed decoder.
+  # This is a read-only summary, never a replacement or restored checkpoint.
+  defp diagnostic_snapshot(
+         %{
+           "format" => "maraithon.agent_snapshot",
+           "format_version" => 1,
+           "value" => %{"$type" => "map", "entries" => entries} = value
+         } = envelope
+       )
+       when map_size(envelope) == 3 and map_size(value) == 2 and is_list(entries) do
+    state =
+      Enum.find_value(entries, value, fn
+        [key, %{"$type" => "map", "entries" => nested} = source]
+        when map_size(source) == 2 and is_list(nested) ->
+          if snapshot_key(key) == "source_state", do: source
+
+        _ ->
+          nil
+      end)
+
+    fields = ~w(cycle_memory pending_effect_skill_id cycle_memo_generated
+                delegation_review_attempted_at delegation_review_digest)
+
+    selected =
+      Enum.filter(state["entries"], fn
+        [key, _value] -> snapshot_key(key) in fields
+        _ -> false
+      end)
+
+    Map.put(envelope, "value", %{"$type" => "map", "entries" => selected})
+  end
+
+  defp diagnostic_snapshot(value), do: value
+
+  defp snapshot_key(%{"$type" => "symbol", "value" => name} = key)
+       when map_size(key) == 2 and is_binary(name),
+       do: name
+
+  defp snapshot_key(name) when is_binary(name), do: name
+  defp snapshot_key(_), do: nil
 
   defp failed_step_summary(step) do
     summary = %{
@@ -115,25 +154,30 @@ defmodule Maraithon.Delegations.EvaluationProposal do
     since = DateTime.add(DateTime.utc_now(), -1, :hour)
     job_types = Maraithon.Runtime.BackgroundJobs.source_account_job_types()
 
-    # Include processing and finalization, not just acquisition. Keep two
-    # failures per stage so dependent closure failures cannot hide the cause.
+    # Retain distinct causes so repeated deployment interruptions do not hide
+    # a processing failure that happened earlier in the same bounded window.
     failures =
       from j in Maraithon.Runtime.BackgroundJob,
         where: j.user_id == ^job.user_id and j.status == "failed" and j.updated_at >= ^since,
         where: j.job_type in ^job_types,
-        windows: [stage: [partition_by: j.job_type, order_by: [desc: j.updated_at, desc: j.id]]],
+        windows: [
+          cause: [
+            partition_by: [j.job_type, j.last_error],
+            order_by: [desc: j.updated_at, desc: j.id]
+          ]
+        ],
         select: %{
           job_id: j.id,
           job_type: j.job_type,
           error: j.last_error,
           at: j.updated_at,
           attempts: j.attempts,
-          stage_rank: over(row_number(), :stage)
+          cause_rank: over(row_number(), :cause)
         }
 
     Repo.all(
       from j in subquery(failures),
-        where: j.stage_rank <= 2,
+        where: j.cause_rank == 1,
         order_by: [desc: j.at, desc: j.job_id],
         limit: 16,
         select: %{

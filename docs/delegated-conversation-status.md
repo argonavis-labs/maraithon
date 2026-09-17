@@ -1045,6 +1045,23 @@ job IDs reached the report as raw bytes. Explicit UUID and timestamp types now
 preserve JSON-compatible values. This failure affected the inspection job, not
 the serving application. Live proposal generation and acceptance remain open.
 
+Commit `9d3f22fa` deployed through successful workflow `35172918302` to
+`maraithon-00449-f7m`. Read-only workflow `35173258033` then returned a valid
+report. The newest processing failures were `provider_outcome_ambiguous` around
+deployment, followed by `source_graph_abandoned` finalisers and dependent
+completion failures. The report does not establish the cause of earlier Runner
+failures. The original fixture still has only its initial sent email, with no
+delegation. The live task still showed a plain Delegate button.
+[Read-only evidence](evidence/delegated-conversations/2026-09-16-late-source-diagnosis.json).
+
+The report still could not decode the full checkpoint in the release eval.
+The follow-up projects the five planning fields from the stored JSON envelope
+and passes them through the existing closed decoder. It does not restore or
+rewrite a checkpoint, or claim that every historical skill field can be decoded.
+The failure list now keeps the latest instance of each distinct cause and stage,
+at most 16 entries within one hour, so repeated deployment interruptions do not
+hide earlier processing errors. This follow-up awaits deployment and inspection.
+
 ## Remaining work
 
 1. Extend live coverage beyond the controlled Gmail pair and finish the assistant-account audit for previously learned memories and person facts. October's information and regular scheduling evals pass; the busy-slot recovery eval has passed as Kent. New relationship learning now captures input provenance, rechecks assistant designation before saving, and filters known assistant-derived records from personal prompts. That does not establish source attribution for older learning or every merged People field. No historical records were removed or rewritten during this inspection.
