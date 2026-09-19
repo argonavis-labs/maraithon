@@ -447,6 +447,9 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   defp proof_reason(%AgentTerminationProof{proof_kind: "external_node_destroyed"}),
     do: "external_node_destroyed"
 
+  defp proof_reason(%AgentTerminationProof{proof_kind: "superseded_dead_incarnation"}),
+    do: "superseded_dead_incarnation"
+
   defp maybe_coordination_scope(_agent, _lease, :legacy), do: :legacy
 
   defp maybe_coordination_scope(agent, lease, :exact) do

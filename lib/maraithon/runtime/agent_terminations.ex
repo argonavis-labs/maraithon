@@ -29,6 +29,11 @@ defmodule Maraithon.Runtime.AgentTerminations do
   @default_backoffs_ms [5_000, 15_000, 30_000]
   @reconciliation_claim_ms 30_000
   @max_batch 500
+  # A node incarnation whose lease has not been renewed for this long is
+  # provably dead on cpu-unthrottled Cloud Run (the scheduler always runs and
+  # renews every ~2s). Far larger than any lease TTL, so it never races a live
+  # instance. The database trigger re-verifies this independently.
+  @superseded_dead_margin_seconds 600
   @attestation_domain "maraithon-agent-termination-v1"
   @operator_role "admin+external_agent_termination_attestor"
 
@@ -334,6 +339,107 @@ defmodule Maraithon.Runtime.AgentTerminations do
 
   def request_expired_batch(_limit, _opts),
     do: {:error, :invalid_agent_termination_limit}
+
+  @doc """
+  Automatically proves and clears Agent leases stranded by a definitively dead
+  node incarnation, so a partition frozen by a hard instance loss self-heals
+  without an operator signature.
+
+  Eligibility is provable from coordination state only: the owning incarnation's
+  lease is expired past `@superseded_dead_margin_seconds` and a different
+  incarnation is currently `ready` with a live lease. The
+  `enforce_agent_termination_proof` trigger re-verifies both conditions, so a
+  loose caller can never delete a lease whose owner might still run.
+  """
+  def reclaim_superseded_dead_incarnations(limit \\ 100)
+
+  def reclaim_superseded_dead_incarnations(limit)
+      when is_integer(limit) and limit in 1..@max_batch do
+    ids =
+      Repo.all(
+        from incident in AgentTerminationIncident,
+          where: incident.status == "requested",
+          where:
+            fragment(
+              """
+              EXISTS (
+                SELECT 1 FROM public.runtime_node_incarnations AS dead
+                WHERE dead.id = ?
+                  AND dead.lease_expires_at <
+                        timezone('UTC', clock_timestamp()) - (? * interval '1 second')
+              )
+              """,
+              incident.node_incarnation_id,
+              ^@superseded_dead_margin_seconds
+            ),
+          where:
+            fragment(
+              """
+              EXISTS (
+                SELECT 1 FROM public.runtime_node_incarnations AS live
+                WHERE live.id <> ? AND live.state = 'ready'
+                  AND live.lease_expires_at > timezone('UTC', clock_timestamp())
+              )
+              """,
+              incident.node_incarnation_id
+            ),
+          order_by: [asc: incident.requested_at, asc: incident.id],
+          limit: ^limit,
+          select: incident.id
+      )
+
+    Enum.reduce(ids, [], fn id, acc ->
+      case reclaim_one_superseded(id) do
+        {:ok, status} -> [{id, status} | acc]
+        {:error, _reason} -> acc
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  def reclaim_superseded_dead_incarnations(_limit),
+    do: {:error, :invalid_agent_termination_limit}
+
+  defp reclaim_one_superseded(incident_id) do
+    Repo.transaction(fn ->
+      incident = lock_incident(incident_id)
+      now = DatabaseClock.now!()
+
+      case incident.status do
+        "requested" ->
+          evidence_id =
+            "superseded-dead-incarnation:" <>
+              to_string(incident.node_incarnation_id) <>
+              ":lease:" <> to_string(incident.lease_token)
+
+          digest = :crypto.hash(:sha256, evidence_id)
+
+          proof =
+            case lock_proof(incident.id) do
+              nil ->
+                insert_proof!(incident, %{
+                  proof_kind: "superseded_dead_incarnation",
+                  evidence_id: evidence_id,
+                  evidence_digest: digest,
+                  proved_by: "runtime_auto_reclaim",
+                  proved_at: now
+                })
+
+              %AgentTerminationProof{proof_kind: "superseded_dead_incarnation"} = proof ->
+                proof
+
+              _other ->
+                Repo.rollback(:termination_proof_mismatch)
+            end
+
+          _proven = mark_proven!(incident, proof, now, policy_from_incident(incident))
+          :reclaimed
+
+        _already ->
+          :skipped
+      end
+    end)
+  end
 
   @doc "Claims and reconciles a bounded page of proven incidents with durable retry leases."
   def reconcile_due(limit \\ 100)

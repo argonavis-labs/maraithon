@@ -44,7 +44,10 @@ defmodule Maraithon.Runtime.AgentTerminationProof do
       :proved_by,
       :proved_at
     ])
-    |> validate_inclusion(:proof_kind, ~w(local_down external_node_destroyed))
+    |> validate_inclusion(
+      :proof_kind,
+      ~w(local_down external_node_destroyed superseded_dead_incarnation)
+    )
     |> validate_length(:local_pid, min: 1, max: 255, count: :bytes)
     |> validate_length(:down_reason, min: 1, max: 255, count: :bytes)
     |> validate_length(:evidence_id, min: 1, max: 256, count: :bytes)

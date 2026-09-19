@@ -403,6 +403,9 @@ defmodule Maraithon.Runtime.AgentWatcher do
 
     if Application.get_env(:maraithon, :start_background_workers, true) do
       _requested = AgentTerminations.request_expired_batch(100)
+      # Self-heal partitions frozen by a hard instance loss: prove and clear
+      # leases whose owning incarnation is provably dead, before reconciling.
+      _reclaimed = safe_reclaim_superseded_dead_incarnations()
       _reconciled = AgentTerminations.reconcile_due(100)
     end
 
@@ -1502,6 +1505,15 @@ defmodule Maraithon.Runtime.AgentWatcher do
         end
       end
     end
+  end
+
+  # Never let stranded-lease reclaim crash the watcher; it retries next tick.
+  defp safe_reclaim_superseded_dead_incarnations do
+    AgentTerminations.reclaim_superseded_dead_incarnations(100)
+  rescue
+    _error -> :error
+  catch
+    :exit, _reason -> :error
   end
 
   defp schedule_reconcile(delay_ms), do: Process.send_after(self(), :reconcile, delay_ms)
