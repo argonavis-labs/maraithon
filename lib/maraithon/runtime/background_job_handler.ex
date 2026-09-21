@@ -428,7 +428,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         provider: account.provider,
         count: Map.get(result, :count, 0)
       })
-      |> put_gmail_sync_dedupe_key(job)
+      |> put_gmail_sync_dedupe_key(job, result)
 
     case Connector.publish(gmail_account_topic(user_id, account), event) do
       :ok -> :ok
@@ -452,10 +452,22 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     end
   end
 
-  defp put_gmail_sync_dedupe_key(event, job) do
+  # Keyed on the cursor the sync ended at: a job that drains history in
+  # several bounded steps publishes one completion per step, and the
+  # directive store rejects a reused key whose payload (the count) changed.
+  defp put_gmail_sync_dedupe_key(event, job, result) do
     case job.dedupe_key || job.id do
       identity when is_binary(identity) and identity != "" ->
-        Map.put(event, :dedupe_key, "#{identity}:gmail_sync_completed")
+        key =
+          case Map.get(result, :history_id) do
+            cursor when is_binary(cursor) and cursor != "" ->
+              "#{identity}:gmail_sync_completed:#{cursor}"
+
+            _none ->
+              "#{identity}:gmail_sync_completed"
+          end
+
+        Map.put(event, :dedupe_key, key)
 
       _missing_identity ->
         event

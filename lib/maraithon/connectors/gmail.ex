@@ -214,6 +214,9 @@ defmodule Maraithon.Connectors.Gmail do
 
     dedupe_key = gmail_webhook_dedupe_key(message_id, user_id, history_id)
 
+    # One sync per mailbox at a time: notifications arrive in bursts, and
+    # concurrent syncs of the same mailbox only contend for its request lane
+    # (surfacing as rate_limited retries) while draining the same history.
     case BackgroundJobs.enqueue("gmail_incremental_sync", %{
            "user_id" => user_id,
            "queue" => "connectors",
@@ -221,7 +224,8 @@ defmodule Maraithon.Connectors.Gmail do
              "notification_history_id" => history_id,
              "provider" => provider
            },
-           "dedupe_key" => dedupe_key
+           "dedupe_key" => dedupe_key,
+           "partition_key" => Maraithon.Runtime.PeriodicJobs.provider_partition(user_id, provider)
          }) do
       {:ok, _job} ->
         event =
