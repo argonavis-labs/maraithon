@@ -42,6 +42,8 @@ defmodule Maraithon.Connectors.Gmail do
   alias Maraithon.Connectors.Connector
   alias Maraithon.Runtime.BackgroundJobs
 
+  import Ecto.Query, only: [from: 2]
+
   require Logger
 
   @default_api_base "https://gmail.googleapis.com/gmail/v1"
@@ -50,11 +52,31 @@ defmodule Maraithon.Connectors.Gmail do
   @default_failed_precondition_retry_delay_ms 1_000
   @max_failed_precondition_retry_delay_ms 5_000
   @gmail_id_pattern ~r/\A[0-9A-Fa-f]+\z/
-  # Safety cap on how many `history.list` pages we'll follow for a single
-  # incremental sync before giving up and falling back to a full resync. A
-  # legitimate delta should never come close to this; it exists so a
-  # pathological/looping response can't wedge a background job forever.
+  # Gmail's maximum `history.list` page size. Walking the history log 500
+  # records at a time keeps a stale cursor from needing hundreds of requests
+  # to catch up.
+  @history_page_size 500
+  # Safety cap on how many `history.list` pages one bounded sync step follows.
+  # Reaching it is not a failure: the step hydrates what it read and advances
+  # the cursor to the last history record it consumed, so the next step
+  # resumes exactly there. A stale cursor therefore converges in a handful of
+  # bounded steps instead of escalating into a complete-mailbox rebuild that
+  # a large mailbox can never finish (which left the stale cursor in place and
+  # replayed the same doomed rebuild on every mailbox notification).
   @max_history_pages 25
+  # Stop following history pages once a step has this many new message ids to
+  # hydrate. Hydration is sequential and one rate limit discards the whole
+  # step, so each step stays short enough to succeed under normal quota.
+  @history_step_message_limit 250
+  # Bounded steps one `sync_history/3` call drains before handing the
+  # remainder back to the caller (`complete?: false`).
+  @max_history_steps 4
+  # Expired-cursor rebuild bounds. Gmail no longer has the history the cursor
+  # points at, so the rebuild starts from the newest message already ingested
+  # for the mailbox (minus a margin) rather than enumerating the whole mailbox.
+  @resync_margin_seconds 2 * 24 * 60 * 60
+  @default_resync_lookback_seconds 30 * 24 * 60 * 60
+  @max_resync_messages 5_000
   # Per-chunk cap on concurrent-ish full-content fetches during an
   # incremental history sync. Every message id from the history delta is
   # processed (in chunks of this size) — the old behavior of truncating to
@@ -234,7 +256,7 @@ defmodule Maraithon.Connectors.Gmail do
     case GmailAccess.for_user(user_id) do
       {:ok, token} ->
         case fetch_history(token, history_id) do
-          {:ok, messages, _latest_history_id} -> {:ok, messages}
+          {:ok, %{messages: messages}} -> {:ok, messages}
           {:error, reason} -> {:error, reason}
         end
 
@@ -249,12 +271,20 @@ defmodule Maraithon.Connectors.Gmail do
 
   Reads the stored `gmail_history_id` cursor for `account` and uses it as
   `startHistoryId` (the *last processed* id, not the notification's own id).
-  On success, ingests the messages and advances the cursor to the response's
-  max historyId. When the stored id has expired (Gmail 404s) or no cursor
-  exists yet, rebuilds the complete mailbox before resetting the cursor to the
-  mailbox's current history head.
+  The history log is drained in bounded steps: each step follows a capped
+  number of `history.list` pages, hydrates the messages it found, and
+  advances the cursor to the last history record it consumed. A step that
+  stops early therefore loses nothing, and a long backlog converges across
+  steps instead of growing until only a full rebuild could recover it. Up to
+  `max_history_steps` steps run per call; `complete?: false` in the result
+  tells the caller more history remains.
 
-  Returns `{:ok, %{count: n, history_id: id, mode: :incremental | :full_resync}}`
+  When the stored id has expired (Gmail 404s) or no cursor exists yet,
+  rebuilds a bounded window (from the newest message already ingested for
+  the mailbox, minus a margin) before resetting the cursor to the mailbox's
+  current history head.
+
+  Returns `{:ok, %{count: n, history_id: id, mode: :incremental | :full_resync, complete?: bool}}`
   or `{:error, reason}`.
   """
   def sync_history(user_id, account, opts \\ []) do
@@ -282,11 +312,49 @@ defmodule Maraithon.Connectors.Gmail do
   defp cursor_history_id(_cursor), do: nil
 
   defp incremental_sync(user_id, account, token, history_id, provider) do
+    incremental_sync(user_id, account, token, history_id, provider, 1, 0)
+  end
+
+  defp incremental_sync(user_id, account, token, history_id, provider, step, ingested) do
     case fetch_history(token, history_id) do
-      {:ok, messages, latest_history_id} ->
+      {:ok, %{messages: messages, history_id: next_history_id, complete?: complete?}} ->
+        next_history_id = next_history_id || history_id
+
         with :ok <- ingest_messages(user_id, messages, account: account, provider: provider),
-             {:ok, _cursor} <- persist_history_cursor(account, latest_history_id || history_id) do
-          {:ok, %{count: length(messages), history_id: latest_history_id, mode: :incremental}}
+             {:ok, _cursor} <- persist_history_cursor(account, next_history_id) do
+          ingested = ingested + length(messages)
+
+          result = %{
+            count: ingested,
+            history_id: next_history_id,
+            mode: :incremental,
+            complete?: complete?
+          }
+
+          cond do
+            complete? ->
+              {:ok, result}
+
+            step >= max_history_steps() ->
+              Logger.info("Gmail history sync paused with history remaining",
+                history_id: next_history_id,
+                steps: step,
+                ingested: ingested
+              )
+
+              {:ok, result}
+
+            true ->
+              incremental_sync(
+                user_id,
+                account,
+                token,
+                next_history_id,
+                provider,
+                step + 1,
+                ingested
+              )
+          end
         end
 
       {:error, :history_expired} ->
@@ -298,23 +366,47 @@ defmodule Maraithon.Connectors.Gmail do
   end
 
   defp full_resync(user_id, account, token, provider) do
-    # Once Gmail expires a historyId it no longer tells us where the unread gap
-    # begins. A recent-window rebuild followed by jumping to the current head
-    # can therefore discard arbitrarily old messages. Enumerate the complete
-    # mailbox instead; if pagination cannot finish, fetch_messages/2 returns an
-    # error and the prior cursor is preserved.
+    # Gmail no longer has the history the cursor points at, so the exact gap is
+    # unknown. Everything up to the newest message already ingested for this
+    # mailbox was covered by earlier syncs, so rebuild from that point (minus a
+    # margin) and reset the cursor to the mailbox's current head. Enumerating
+    # the complete mailbox instead can never finish for a large mailbox, and a
+    # rebuild that cannot finish leaves the expired cursor in place, so every
+    # later notification repeats the same doomed rebuild.
+    window = resync_window(user_id, account, provider)
+
     case fetch_messages(token,
+           query: "after:#{DateTime.to_unix(window.since)}",
            label_ids: [],
            message_format: :metadata,
            access_token: true,
            paginate: true,
+           max_total_results: max_resync_messages(),
            include_fetch_metadata: true
          ) do
-      {:ok, messages, %{complete?: true}} ->
+      {:ok, messages, %{detail_failure_count: 0, body_fallback_count: 0} = fetch_metadata} ->
+        if fetch_metadata.truncated? do
+          Logger.warning(
+            "Gmail resync window exceeded its message bound; its oldest messages were not rebuilt",
+            since: DateTime.to_iso8601(window.since),
+            anchor: window.anchor,
+            listed_count: fetch_metadata.listed_count,
+            message_bound: max_resync_messages()
+          )
+        end
+
         with :ok <- ingest_messages(user_id, messages, account: account, provider: provider),
              {:ok, history_id} <- current_history_id(token),
              {:ok, _cursor} <- persist_history_cursor(account, history_id) do
-          {:ok, %{count: length(messages), history_id: history_id, mode: :full_resync}}
+          Logger.info("Gmail resync rebuilt a bounded mailbox window and reset the cursor",
+            since: DateTime.to_iso8601(window.since),
+            anchor: window.anchor,
+            count: length(messages),
+            history_id: history_id
+          )
+
+          {:ok,
+           %{count: length(messages), history_id: history_id, mode: :full_resync, complete?: true}}
         end
 
       {:ok, _messages, fetch_metadata} ->
@@ -323,6 +415,51 @@ defmodule Maraithon.Connectors.Gmail do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # The rebuild window starts at the newest message already ingested for this
+  # mailbox, minus a margin for late delivery, or at a default lookback when
+  # nothing has been ingested for it yet.
+  defp resync_window(user_id, account, provider) do
+    identity = ingestion_identity(user_id, account: account, provider: provider)
+
+    case newest_ingested_gmail_message_at(user_id, identity.provider) do
+      %DateTime{} = newest ->
+        %{
+          since: DateTime.add(newest, -resync_margin_seconds(), :second),
+          anchor: "newest_ingested_message"
+        }
+
+      _none ->
+        %{
+          since: DateTime.add(DateTime.utc_now(), -default_resync_lookback_seconds(), :second),
+          anchor: "default_lookback"
+        }
+    end
+  end
+
+  defp newest_ingested_gmail_message_at(user_id, provider) do
+    pattern = escape_like(gmail_observation_id(provider, "")) <> "%"
+
+    from(observation in Observation,
+      where: observation.user_id == ^user_id,
+      where: observation.source == "gmail",
+      where: like(observation.source_item_id, ^pattern),
+      select: max(observation.occurred_at)
+    )
+    |> Maraithon.Repo.one()
+    |> case do
+      %DateTime{} = newest -> newest
+      %NaiveDateTime{} = newest -> DateTime.from_naive!(newest, "Etc/UTC")
+      _none -> nil
+    end
+  end
+
+  defp escape_like(value) when is_binary(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
   end
 
   defp persist_history_cursor(_account, nil), do: :ok
@@ -925,20 +1062,25 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  # Follows `nextPageToken` across `users/me/history` pages, accumulating
-  # history records BEFORE the cursor is advanced. Google returns
-  # `historyId` (the mailbox's current head, used for cursor advancement) on
-  # every page, but only the *final* page's records complete the delta - if
-  # we stopped at page 1 like the old single-request implementation did,
-  # pages 2+ would be silently dropped forever once the cursor moved past
-  # them.
+  # Walks `users/me/history` in one bounded step. Every page reports
+  # `historyId` (the mailbox's current head), but only a completed walk may
+  # advance the cursor there; a step that stops at its page or message cap
+  # advances only to the last history record it consumed, so nothing between
+  # that record and the head is skipped. Records are requested without a
+  # `historyTypes` filter: Gmail pages the raw log either way (filtered pages
+  # come back empty but still carry `nextPageToken`), and unfiltered pages
+  # always carry record ids, which is what makes a capped step resumable.
   defp fetch_history(access_token, history_id) do
-    fetch_history_page(access_token, history_id, nil, [], 1)
+    fetch_history_page(access_token, history_id, nil, new_history_walk(), 1)
   end
 
-  defp fetch_history_page(access_token, history_id, page_token, acc_history, page) do
+  defp new_history_walk do
+    %{message_ids: [], seen: MapSet.new(), message_count: 0, last_record_id: nil}
+  end
+
+  defp fetch_history_page(access_token, history_id, page_token, walk, page) do
     params =
-      %{startHistoryId: history_id, historyTypes: "messageAdded"}
+      %{startHistoryId: history_id, maxResults: history_page_size()}
       |> maybe_put_page_token(page_token)
       |> URI.encode_query()
 
@@ -946,35 +1088,36 @@ defmodule Maraithon.Connectors.Gmail do
 
     case GmailAccess.request(:get, url, access_token) do
       {:ok, response} ->
-        # Gmail omits the "history" key entirely when a page's filtered
-        # result set is empty (e.g. a page with only non-messageAdded
-        # events). That can happen on ANY page of the pagination loop, not
-        # just a single-page response - treat it as an empty page and keep
-        # following nextPageToken rather than discarding acc_history and
-        # stopping short.
-        history = response["history"] || []
-        acc_history = acc_history ++ history
+        # Gmail omits the "history" key entirely when a page has no records.
+        walk = absorb_history_page(walk, response["history"] || [])
         next_page_token = response["nextPageToken"]
 
         cond do
-          present?(next_page_token) and page < max_history_pages() ->
-            fetch_history_page(access_token, history_id, next_page_token, acc_history, page + 1)
+          not present?(next_page_token) ->
+            finish_history_walk(access_token, walk, response["historyId"], true, page)
 
-          present?(next_page_token) ->
-            # Safety cap hit - treat like a history overflow rather than risk
-            # advancing the cursor past unread pages. The caller's existing
-            # history_expired fallback does a bounded full resync and resets
-            # the cursor to the mailbox's current head.
-            Logger.warning(
-              "Gmail history pagination exceeded safety cap; falling back to full resync",
+          page < max_history_pages() and walk.message_count < history_step_message_limit() ->
+            fetch_history_page(access_token, history_id, next_page_token, walk, page + 1)
+
+          is_nil(walk.last_record_id) ->
+            # Nothing on these pages carried a record id, so there is no safe
+            # point to resume from. Keep the cursor; the caller retries later.
+            Logger.warning("Gmail history step made no progress within its page cap",
               history_id: history_id,
               pages: page
             )
 
-            {:error, :history_expired}
+            {:error, {:gmail_history_no_progress, page}}
 
           true ->
-            build_history_result(access_token, acc_history, response["historyId"])
+            Logger.info("Gmail history step stopped at its cap with history remaining",
+              history_id: history_id,
+              next_history_id: walk.last_record_id,
+              pages: page,
+              message_count: walk.message_count
+            )
+
+            finish_history_walk(access_token, walk, walk.last_record_id, false, page)
         end
 
       {:error, {:http_status, 404, _}} ->
@@ -986,21 +1129,71 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp build_history_result(access_token, history_records, latest_history_id) do
-    # Extract added message IDs across all accumulated pages
-    message_ids =
-      history_records
-      |> Enum.flat_map(fn h -> h["messagesAdded"] || [] end)
-      |> Enum.map(fn ma -> ma["message"]["id"] end)
-      |> Enum.uniq()
+  defp absorb_history_page(walk, records) when is_list(records) do
+    Enum.reduce(records, walk, fn
+      record, walk when is_map(record) ->
+        walk = track_history_record_id(walk, record["id"])
 
+        record
+        |> Map.get("messagesAdded")
+        |> List.wrap()
+        |> Enum.reduce(walk, fn added, walk -> track_added_message(walk, added) end)
+
+      _record, walk ->
+        walk
+    end)
+  end
+
+  defp track_history_record_id(walk, id) do
+    case parse_history_record_id(id) do
+      nil -> walk
+      value -> %{walk | last_record_id: max(value, walk.last_record_id || value)}
+    end
+  end
+
+  defp parse_history_record_id(id) when is_integer(id) and id > 0, do: id
+
+  defp parse_history_record_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {value, ""} when value > 0 -> value
+      _other -> nil
+    end
+  end
+
+  defp parse_history_record_id(_id), do: nil
+
+  defp track_added_message(walk, %{"message" => %{"id" => id}})
+       when is_binary(id) and id != "" do
+    if MapSet.member?(walk.seen, id) do
+      walk
+    else
+      %{
+        walk
+        | message_ids: [id | walk.message_ids],
+          seen: MapSet.put(walk.seen, id),
+          message_count: walk.message_count + 1
+      }
+    end
+  end
+
+  defp track_added_message(walk, _added), do: walk
+
+  defp finish_history_walk(access_token, walk, next_history_id, complete?, pages) do
     # Never advance a history cursor past unread messages. Share the sequential
     # hydration path so rate limits preserve their retry deadline in both modes.
+    message_ids = Enum.reverse(walk.message_ids)
     refs = Enum.map(message_ids, &%{"id" => &1})
 
     case fetch_message_details(refs, access_token, message_format: :full) do
       {:ok, messages, 0} ->
-        {:ok, messages, latest_history_id}
+        {:ok,
+         %{
+           messages: messages,
+           history_id:
+             history_id_string(next_history_id) || history_id_string(walk.last_record_id),
+           complete?: complete?,
+           pages: pages
+         }}
 
       {:ok, _messages, failure_count} ->
         Logger.warning("Gmail history sync left messages unread; preserving the prior cursor",
@@ -1015,14 +1208,31 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
+  defp history_id_string(value) when is_integer(value), do: Integer.to_string(value)
+  defp history_id_string(value) when is_binary(value) and value != "", do: value
+  defp history_id_string(_value), do: nil
+
   defp maybe_put_page_token(params, page_token) when is_binary(page_token) and page_token != "",
     do: Map.put(params, :pageToken, page_token)
 
   defp maybe_put_page_token(params, _page_token), do: params
 
-  defp max_history_pages do
+  defp max_history_pages, do: gmail_setting(:max_history_pages, @max_history_pages)
+  defp history_page_size, do: gmail_setting(:history_page_size, @history_page_size)
+
+  defp history_step_message_limit,
+    do: gmail_setting(:history_step_message_limit, @history_step_message_limit)
+
+  defp max_history_steps, do: gmail_setting(:max_history_steps, @max_history_steps)
+  defp max_resync_messages, do: gmail_setting(:max_resync_messages, @max_resync_messages)
+  defp resync_margin_seconds, do: gmail_setting(:resync_margin_seconds, @resync_margin_seconds)
+
+  defp default_resync_lookback_seconds,
+    do: gmail_setting(:default_resync_lookback_seconds, @default_resync_lookback_seconds)
+
+  defp gmail_setting(key, default) do
     Application.get_env(:maraithon, :gmail, [])
-    |> Keyword.get(:max_history_pages, @max_history_pages)
+    |> Keyword.get(key, default)
   end
 
   defp parse_message(message) do

@@ -32,6 +32,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   # Default backoff applied when a provider returns 429 without a parseable
   # `Retry-After` header.
   @default_rate_limit_retry_seconds 30
+  # Delay before a Gmail sync job resumes draining a history backlog it
+  # could not finish in one bounded call.
+  @gmail_history_drain_delay_ms 5_000
 
   def execute(%BackgroundJob{job_type: "assistant_action_reconcile"} = job),
     do: Maraithon.TelegramAssistant.ActionReconciliation.execute(job)
@@ -112,7 +115,16 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
           case Gmail.sync_history(user_id, account, provider: provider) do
             {:ok, result} ->
               with :ok <- publish_gmail_sync_completed(user_id, account, job, result) do
-                {:ok, Map.put(result, :source, "gmail_incremental_sync")}
+                result = Map.put(result, :source, "gmail_incremental_sync")
+
+                if Map.get(result, :complete?, true) do
+                  {:ok, result}
+                else
+                  # A bounded history step advanced the cursor but left history
+                  # behind; keep draining from the new cursor without waiting
+                  # for the next mailbox notification.
+                  {:ok, result, {:reschedule_in, @gmail_history_drain_delay_ms}}
+                end
               end
 
             {:error, reason} ->

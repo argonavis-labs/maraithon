@@ -1061,7 +1061,12 @@ defmodule Maraithon.Connectors.GmailTest do
                Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
     end
 
-    test "rebuilds the complete mailbox before resetting an expired history cursor" do
+    test "rebuilds a bounded window before resetting an expired history cursor" do
+      # Expectation updated 2026-09-21: the rebuild used to enumerate the
+      # complete mailbox, which a large mailbox can never finish, so the
+      # expired cursor never moved and every notification replayed the same
+      # rebuild. It now lists a bounded window (`q=after:<epoch>`) anchored on
+      # the newest message already ingested for the mailbox.
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, :gmail,
@@ -1091,7 +1096,7 @@ defmodule Maraithon.Connectors.GmailTest do
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
         params = URI.decode_query(conn.query_string)
-        refute Map.has_key?(params, "q")
+        assert params["q"] =~ ~r/\Aafter:\d+\z/
         assert params["maxResults"] == "500"
 
         conn
@@ -1502,12 +1507,18 @@ defmodule Maraithon.Connectors.GmailTest do
       assert cursor.value == "1050"
     end
 
-    test "falls back to full resync when history pagination exceeds the safety cap" do
+    test "advances the cursor to the last consumed record when pagination exceeds the safety cap" do
+      # Expectation updated 2026-09-21: a capped walk used to fall back to a
+      # complete-mailbox rebuild, which a large mailbox can never finish, so
+      # the stale cursor never moved and every mailbox notification replayed
+      # the same doomed rebuild. A capped step now ingests what it read and
+      # resumes from the last history record it consumed.
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, :gmail,
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1",
-        max_history_pages: 1
+        max_history_pages: 1,
+        max_history_steps: 1
       )
 
       {:ok, _user} =
@@ -1526,40 +1537,42 @@ defmodule Maraithon.Connectors.GmailTest do
       Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1000"})
 
       # Page 1 always claims another page exists, so with a cap of 1 the
-      # implementation must give up rather than loop forever or advance the
-      # cursor past unseen pages.
+      # implementation must stop, ingest what it read, and resume from record
+      # 1004 rather than loop forever or jump to the head (1010) past unseen
+      # pages.
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "history" => [%{"messagesAdded" => [%{"message" => %{"id" => "m1"}}]}],
+            "history" => [
+              %{"id" => "1004", "messagesAdded" => [%{"message" => %{"id" => "m1"}}]}
+            ],
             "nextPageToken" => "more",
             "historyId" => "1010"
           })
         )
       end)
 
-      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/m1", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{"resultSizeEstimate" => 0}))
-      end)
-
-      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/profile", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{"historyId" => "9000", "emailAddress" => "x"}))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(gmail_message("m1", "gmail_capped_user@example.com"))
+        )
       end)
 
       {:ok, result} = Gmail.sync_history("gmail_capped_user@example.com", account)
 
-      assert result.mode == :full_resync
-      assert result.history_id == "9000"
+      assert result.mode == :incremental
+      assert result.count == 1
+      assert result.history_id == "1004"
+      refute result.complete?
 
       cursor = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
-      assert cursor.value == "9000"
+      assert cursor.value == "1004"
     end
   end
 
