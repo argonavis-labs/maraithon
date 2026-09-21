@@ -37,12 +37,23 @@ defmodule Maraithon.HTTP.AdmissionTest do
 
     assert_receive :request_started
 
+    # Expectation updated 2026-09-21: a busy lane used to be rejected on sight
+    # as provider_busy, which surfaced as rate_limited and cost the Chief of
+    # Staff its Slack workspace (and Gmail deltas) whenever two jobs read the
+    # same source at the same moment. A waiter now polls until the lane frees,
+    # bounded by half its request timeout, and is rejected only at the deadline.
     assert {:error, {:rate_limited, 1, :provider_busy}} =
-             run(ctx.key, fn -> flunk("overlapping mailbox request") end)
+             run(ctx.key, 300, fn -> flunk("overlapping mailbox request") end)
+
+    waiter =
+      Task.Supervisor.async_nolink(ctx.supervisor, fn ->
+        run(ctx.key, fn -> {:ok, :waited} end)
+      end)
 
     assert {:ok, :other_mailbox} = run(ctx.key <> ":other", fn -> {:ok, :other_mailbox} end)
     send(holder.pid, :finish)
     assert {:ok, :finished} = Task.await(holder)
+    assert {:ok, :waited} = Task.await(waiter)
     assert {:ok, :next} = run(ctx.key, fn -> {:ok, :next} end)
   end
 
@@ -139,8 +150,10 @@ defmodule Maraithon.HTTP.AdmissionTest do
 
     assert_receive :channel_held
 
+    # Bounded wait (see the first test): a short request timeout makes the
+    # occupied channel lane reject at its deadline instead of waiting.
     assert {:error, {:rate_limited, 1, :provider_busy}} =
-             run([first, second], fn -> flunk("entered occupied channel") end)
+             run([first, second], 300, fn -> flunk("entered occupied channel") end)
 
     assert {:ok, :free} = run([first], fn -> {:ok, :free} end)
     send(holder.pid, :finish)
@@ -164,11 +177,14 @@ defmodule Maraithon.HTTP.AdmissionTest do
     end
   end
 
-  defp run(lanes, request) when is_list(lanes) do
-    Sandbox.unboxed_run(Repo, fn -> Admission.run(lanes, 5_000, request) end)
+  defp run(lanes, request) when is_list(lanes), do: run(lanes, 5_000, request)
+  defp run(key, request), do: run(key, 5_000, request)
+
+  defp run(lanes, timeout, request) when is_list(lanes) do
+    Sandbox.unboxed_run(Repo, fn -> Admission.run(lanes, timeout, request) end)
   end
 
-  defp run(key, request) do
-    Sandbox.unboxed_run(Repo, fn -> Admission.run({"gmail", key}, 5_000, request) end)
+  defp run(key, timeout, request) do
+    Sandbox.unboxed_run(Repo, fn -> Admission.run({"gmail", key}, timeout, request) end)
   end
 end

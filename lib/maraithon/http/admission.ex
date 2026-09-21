@@ -13,6 +13,12 @@ defmodule Maraithon.HTTP.Admission do
 
   def local_deferral(_), do: nil
 
+  # How long a request may wait for a busy lane before it is rejected. Polls
+  # sleep without a database connection, so waiting costs the pool nothing;
+  # only the admitted request holds a connection, for its own duration.
+  @lane_poll_interval_ms 100
+  @max_lane_wait_ms 5_000
+
   # Runs inside the bounded HTTP worker, so its database lock and request have
   # the same lifetime. No provider work runs in an OTP coordination callback.
   # Reuse the existing cooldown table; request lanes cannot collide with jobs.
@@ -31,7 +37,37 @@ defmodule Maraithon.HTTP.Admission do
 
     queues = Enum.map(lanes, fn {provider, _, _} -> "http_" <> provider end)
     keys = Enum.map(lanes, &elem(&1, 1))
+    deadline = System.monotonic_time(:millisecond) + lane_wait_ms(timeout)
 
+    admit(lanes, queues, keys, timeout, request, deadline)
+  end
+
+  # A busy lane is a request in flight for the same provider scope, typically
+  # a sibling job or skill reading the same workspace or mailbox at the same
+  # moment. Wait for it to finish rather than reject on sight: an instant
+  # rejection surfaced as `rate_limited` and lost the whole source for that
+  # cycle (every Slack acquisition cycle that overlapped the reconciliation
+  # plan, and Gmail deltas during a mailbox drain). Only a lane still busy at
+  # the deadline is reported as `:provider_busy`, a closed local rejection
+  # proving the request never entered the provider.
+  defp admit(lanes, queues, keys, timeout, request, deadline) do
+    case attempt(lanes, queues, keys, timeout, request) do
+      :lane_busy ->
+        remaining = deadline - System.monotonic_time(:millisecond)
+
+        if remaining > 0 do
+          Process.sleep(min(@lane_poll_interval_ms + :rand.uniform(50), remaining))
+          admit(lanes, queues, keys, timeout, request, deadline)
+        else
+          {:error, {:rate_limited, 1, :provider_busy}}
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp attempt(lanes, queues, keys, timeout, request) do
     Repo.transaction(
       fn ->
         Enum.each(Enum.zip(queues, keys), fn {queue, key} ->
@@ -42,7 +78,7 @@ defmodule Maraithon.HTTP.Admission do
               log: false
             ).rows
 
-          unless acquired, do: Repo.rollback({:rate_limited, 1, :provider_busy})
+          unless acquired, do: Repo.rollback(:lane_busy)
         end)
 
         [[seconds]] =
@@ -74,10 +110,15 @@ defmodule Maraithon.HTTP.Admission do
     )
     |> case do
       {:ok, result} -> result
-      {:error, {:rate_limited, _, _} = reason} -> {:error, reason}
+      {:error, :lane_busy} -> :lane_busy
       {:error, _} -> {:error, {:http_error, "request_admission_unavailable"}}
     end
   end
+
+  defp lane_wait_ms(timeout) when is_integer(timeout) and timeout > 0,
+    do: min(@max_lane_wait_ms, div(timeout, 2))
+
+  defp lane_wait_ms(_timeout), do: 0
 
   defp retry_seconds({:error, {:rate_limited, seconds, _}})
        when is_integer(seconds) and seconds >= 0,
