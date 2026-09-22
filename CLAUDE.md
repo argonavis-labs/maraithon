@@ -12,6 +12,11 @@ todos, closes them when evidence arrives, and briefs the user. Prioritize
 changes that make the todo list more accurate, timelier, or easier to act on.
 Connector and runtime pages are operational surfaces: quiet, row-oriented.
 
+The Mac app is the native Swift companion in `apps/companion`. There is no
+Electron desktop app: the Electron experiment on branch `codex/runner-desktop`
+was retired on 2026-09-21 and must not be revived. Keep Mac work in the Swift
+app.
+
 ## Runtime and deploys
 
 - The single-user test app runs on GCP Cloud Run (project `maraithon`, region `us-central1`, Cloud SQL `maraithon-db`). Every server-relevant push to `main` uses the fast path (`make deploy` → cached Cloud Build → migrations only when migration files changed → one combined-service deploy → one health probe). `make deploy-hardened` retains the exact staged rollout for explicit use.
