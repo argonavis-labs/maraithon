@@ -165,22 +165,30 @@ extension PushCoordinator: UNUserNotificationCenterDelegate {
     /// collapse/thread ids server-side, not by suppressing everything.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
+    ) {
+        Task { @MainActor in
+            completionHandler([.banner, .list, .sound])
+        }
     }
 
+    /// UIKit may update its launch snapshot inside the completion handler.
+    /// Keep both routing and completion on the main actor; the async delegate
+    /// bridge can otherwise invoke that handler on a concurrency worker.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
         let userInfo = response.notification.request.content.userInfo
+        let url = (userInfo["deeplink"] as? String).flatMap(URL.init(string:))
 
-        guard let deeplink = userInfo["deeplink"] as? String,
-              let url = URL(string: deeplink) else { return }
-
-        await MainActor.run {
-            PushCoordinator.shared.routeDeepLink(url)
+        Task { @MainActor in
+            defer { completionHandler() }
+            if let url {
+                PushCoordinator.shared.routeDeepLink(url)
+            }
         }
     }
 }
