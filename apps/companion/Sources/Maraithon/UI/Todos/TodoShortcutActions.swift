@@ -3,6 +3,7 @@ import SwiftUI
 /// Focused action bridge that makes unmodified Gmail-style commands active
 /// only while the Todo surface owns the scene.
 struct TodoShortcutActions {
+    var isTriage = false
     let perform: (TodoShortcut) -> Void
 
     struct Key: FocusedValueKey {

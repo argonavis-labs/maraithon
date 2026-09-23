@@ -42,6 +42,7 @@ enum TodoPriority: String, Codable, CaseIterable, Identifiable {
 }
 
 enum TodoStatus: String, Codable, CaseIterable, Identifiable {
+    case triage
     case open
     case snoozed
     case done
@@ -51,6 +52,7 @@ enum TodoStatus: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .triage: "Triage"
         case .open: "Open"
         case .snoozed: "Snoozed"
         case .done: "Done"

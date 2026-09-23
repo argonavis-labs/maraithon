@@ -4,15 +4,22 @@ import AssistantProgressKit
 struct TodoRow: View {
     let todo: TodoItem
     let onToggle: () -> Void
+    let isWorking: Bool
+    let isCompleting: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var showsCompleted: Bool { todo.isCompleted || isCompleting }
 
     /// Built once per row construction; the body reads it several times and
     /// each construction runs the copy-cleaning pipeline over ~8 fields.
     private let decisionContext: TodoDecisionContext
     private let badges: [TodoBadge]
 
-    init(todo: TodoItem, onToggle: @escaping () -> Void) {
+    init(todo: TodoItem, isWorking: Bool = false, isCompleting: Bool = false, onToggle: @escaping () -> Void) {
         self.todo = todo
         self.onToggle = onToggle
+        self.isWorking = isWorking
+        self.isCompleting = isCompleting
         self.decisionContext = TodoDecisionContext(todo: todo)
         self.badges = TodoBadges.badges(for: todo)
     }
@@ -20,16 +27,23 @@ struct TodoRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: Runner.Spacing.snug) {
             RunnerCheckbox(
-                isOn: todo.isCompleted,
+                isOn: showsCompleted,
                 label: todo.isCompleted ? "Mark incomplete" : "Mark complete",
-                action: onToggle
+                action: onToggle,
+                tint: showsCompleted ? Runner.Palette.success : Runner.Palette.accent
             )
+            .disabled(isWorking)
+            .overlay {
+                if isWorking && !isCompleting {
+                    ProgressView().controlSize(.mini).accessibilityLabel("Saving task")
+                }
+            }
 
             VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
                 Text(todo.title)
                     .font(Runner.Typography.bodyMedium)
-                    .strikethrough(todo.isCompleted)
-                    .foregroundStyle(todo.isCompleted ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
+                    .strikethrough(showsCompleted)
+                    .foregroundStyle(showsCompleted ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if !badges.isEmpty {
@@ -84,6 +98,7 @@ struct TodoRow: View {
             .padding(.top, Runner.Spacing.snug)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .animation(reduceMotion ? nil : .default, value: isCompleting)
     }
 
     private var sourceLabel: String? {
@@ -129,6 +144,8 @@ enum TodoBadges {
         switch todo.status {
         case .open:
             break
+        case .triage:
+            badges.append(TodoBadge(id: "status", text: "Triage", tone: .zinc))
         case .snoozed:
             badges.append(TodoBadge(id: "status", text: todo.status.title, tone: .amber))
         case .done:

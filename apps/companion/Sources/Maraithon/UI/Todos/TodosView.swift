@@ -1,10 +1,13 @@
 import SwiftUI
+import AssistantProgressKit
 
 /// Account-backed work list for the paired Mac. Mirrors the web Tasks page
 /// (header, view tabs, search, table) and keeps its Gmail-style keyboard
 /// workflow while all account data stays in the main-actor store.
 struct TodosView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var completion = TodoCompletionFeedback()
 
     var initialTodoID: String? = nil
     /// Set by the sidebar's "Find a task" row; consumed by focusing search.
@@ -41,8 +44,9 @@ struct TodosView: View {
                         createTodo: { newTodoShown = true }
                     )
                     TodosTabsView(store: store)
+                    if store.filter == .triage { TodosQuickEntry(store: store) }
                     TodosFilterView(store: store, searchFocused: $searchFocused)
-                    resultLine(store: store)
+                    TodosResultLine(store: store)
                     content(store: store)
                 }
                 .frame(maxWidth: Tokens.Layout.pageMaxWidth, alignment: .leading)
@@ -75,13 +79,14 @@ struct TodosView: View {
                 Task { await store.load() }
             }
         }
+        .modifier(TodosAutoRefresh(store: store, isEnabled: !workspaceShown && !newTodoShown))
         .task {
-            if store.phase == .idle || store.phase == .loading || initialTodoID != nil { await store.load() }
+            if initialTodoID != nil { await store.load() }
             if let initialTodoID, let todo = store.todos.first(where: { $0.id == initialTodoID }) { openTodo(todo, via: "initial_todo_id") }
             reconcileSelection(store.todos)
         }
-        .onChange(of: store.todos.map(\.id)) { _, _ in
-            reconcileSelection(store.todos)
+        .onChange(of: store.todos.map(\.id)) { previousIDs, _ in
+            reconcileSelection(store.todos, previousIDs: previousIDs)
         }
         .task(id: searchRequestToken) {
             guard searchRequestToken > 0 else { return }
@@ -89,20 +94,6 @@ struct TodosView: View {
             searchFocused = true
             searchRequestToken = 0
         }
-    }
-
-    private func resultLine(store: TodosStore) -> some View {
-        HStack {
-            Text(TodosCopy.showingLine(count: store.todos.count, isLoading: store.isLoading))
-                .font(Tokens.Typography.caption)
-                .foregroundStyle(Tokens.Palette.mutedForeground)
-                .contentTransition(.numericText())
-            Spacer()
-            Text(store.filter.title)
-                .font(Tokens.Typography.micro)
-                .foregroundStyle(Tokens.Palette.mutedForeground)
-        }
-        .padding(.bottom, Tokens.Spacing.snug)
     }
 
     private func openTodo(_ todo: CompanionTodo, via: String = "unknown") {
@@ -159,21 +150,17 @@ struct TodosView: View {
                             isActive: activeTodoID == todo.id,
                             isMarked: markedTodoIDs.contains(todo.id),
                             isWorking: store.pendingActionIDs.contains(todo.id),
+                            isCompleting: completion.confirmedIDs.contains(todo.id),
                             select: {
                                 activeTodoID = todo.id
                                 listFocused = true
                             },
-                            toggleMark: { toggleMark(todo.id) },
                             openAction: { openTodo(todo, via: "row") },
-                            action: {
-                                Task {
-                                    await store.performPrimaryAction(on: todo)
-                                    markedTodoIDs.remove(todo.id)
-                                    reconcileSelection(store.todos)
-                                }
-                            }
+                            action: { perform(todo.isInTriage ? .accept : (todo.canReopen ? .reopen : .done), on: todo, store: store) },
+                            ignore: { perform(.ignore, on: todo, store: store) }
                         )
                         .id(todo.id)
+                        .transition(.opacity)
                     }
                 }
                 .focusable()
@@ -196,11 +183,12 @@ struct TodosView: View {
                 }
             }
         }
+        .animation(reduceMotion ? nil : .default, value: store.todos.map(\.id))
     }
 
     private func focusedShortcutActions(store: TodosStore) -> TodoShortcutActions? {
-        guard !searchFocused, !shortcutHelpShown else { return nil }
-        return TodoShortcutActions { shortcut in
+        guard !searchFocused, !store.quickEntryFocused, !shortcutHelpShown else { return nil }
+        return TodoShortcutActions(isTriage: store.filter == .triage) { shortcut in
             handle(shortcut, store: store)
         }
     }
@@ -218,9 +206,9 @@ struct TodosView: View {
         case .select:
             toggleActiveTodoMark()
         case .complete:
-            perform(.done, store: store)
+            perform(store.filter == .triage ? .accept : .done, store: store)
         case .dismiss:
-            perform(.dismiss, store: store)
+            perform(store.filter == .triage ? .ignore : .dismiss, store: store)
         case .search:
             searchFocused = true
         case .help:
@@ -282,50 +270,30 @@ struct TodosView: View {
         guard action != .done || todo.canMarkDone else { return }
         guard action != .dismiss || todo.canDismiss else { return }
 
+        perform(action, on: todo, store: store)
+    }
+
+    private func perform(_ action: CompanionTodoAction, on todo: CompanionTodo, store: TodosStore) {
+        guard completion.begin(todo.id) else { return }
+        let previousIDs = store.todos.map(\.id)
         Task {
-            await store.perform(action, on: todo)
+            defer { completion.finish(todo.id) }
+            await store.perform(action, on: todo) {
+                await completion.confirm(todo.id, reduceMotion: reduceMotion)
+            }
             markedTodoIDs.remove(todo.id)
-            reconcileSelection(store.todos)
+            reconcileSelection(store.todos, previousIDs: previousIDs)
         }
     }
 
-    private func reconcileSelection(_ todos: [CompanionTodo]) {
+    private func reconcileSelection(_ todos: [CompanionTodo], previousIDs: [String] = []) {
         let visibleIDs = Set(todos.map(\.id))
         markedTodoIDs.formIntersection(visibleIDs)
-
         if let activeTodoID, visibleIDs.contains(activeTodoID) {
             return
         }
-
-        activeTodoID = todos.first?.id
-        if activeTodoID == nil {
-            workspaceShown = false
-        }
-    }
-}
-
-/// Inline warning above the table when a refresh failed but the previous
-/// list is still worth showing.
-private struct TodosNoticeRow: View {
-    let message: String
-    let retry: () -> Void
-
-    var body: some View {
-        HStack(spacing: Tokens.Spacing.small) {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(Tokens.Palette.cautionText)
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Tokens.Typography.small)
-                .foregroundStyle(Tokens.Palette.cautionText)
-                .lineLimit(2)
-            Spacer()
-            Button("Retry", action: retry)
-                .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
-        }
-        .padding(.horizontal, Tokens.Spacing.tight)
-        .padding(.vertical, Tokens.Spacing.small)
-        .padding(.bottom, Tokens.Spacing.small)
-        .accessibilityElement(children: .combine)
+        let index = activeTodoID.flatMap { previousIDs.firstIndex(of: $0) } ?? 0
+        activeTodoID = todos.isEmpty ? nil : todos[min(index, todos.count - 1)].id
+        if activeTodoID == nil { workspaceShown = false }
     }
 }

@@ -15,7 +15,7 @@ struct TodosHeaderView: View {
                     .foregroundStyle(Tokens.Palette.mutedForeground)
                     .padding(.bottom, Tokens.Spacing.small + 1)
                 HStack(alignment: .center, spacing: Tokens.Spacing.tight) {
-                    Text("Tasks")
+                    Text(store.filter == .triage ? "Triage" : "Todos")
                         .font(Tokens.Typography.pageTitle)
                         .tracking(Tokens.Typography.pageTitleTracking)
                         .foregroundStyle(Tokens.Palette.foreground)
@@ -33,7 +33,7 @@ struct TodosHeaderView: View {
                         .contentTransition(.numericText())
                         .accessibilityLabel(TodosCopy.resultCount(store.todos.count, filter: store.filter))
                 }
-                Text(store.filter == .tracking
+                Text(store.filter == .triage ? "Choose what belongs on your list." : store.filter == .tracking
                     ? "Work that matters to you, owned by someone else."
                     : "A clear next step for everything on your plate.")
                     .font(Tokens.Typography.body)

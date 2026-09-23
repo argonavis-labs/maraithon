@@ -8,6 +8,8 @@ struct TodoWorkspaceView: View {
     @Bindable var store: TodoConversationStore
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var completion = TodoCompletionFeedback()
     @State private var showsWorkflow = false
     @State private var showsDetails = false
     @State private var reconnectID = UUID()
@@ -18,8 +20,10 @@ struct TodoWorkspaceView: View {
             TodoWorkspaceHeader(
                 store: store,
                 isChangingStatus: isChangingStatus,
+                isCompleting: completion.confirmedIDs.contains(store.todo.id),
                 back: { dismiss() },
                 changeStatus: { Task { await changeStatus() } },
+                ignore: { Task { await ignoreTodo() } },
                 showDetails: { showsDetails = true },
                 editWorkflow: { showsWorkflow = true }
             )
@@ -86,10 +90,23 @@ struct TodoWorkspaceView: View {
     }
 
     private func changeStatus() async {
+        guard !isChangingStatus else { return }
+        isChangingStatus = true
+        let id = store.todo.id
+        defer { isChangingStatus = false; completion.finish(id) }
+        await env.todos.performPrimaryAction(on: store.todo) {
+            await completion.confirm(id, reduceMotion: reduceMotion)
+        }
+        await store.refreshTodo()
+    }
+
+    private func ignoreTodo() async {
+        guard !isChangingStatus else { return }
         isChangingStatus = true
         defer { isChangingStatus = false }
-        await env.todos.performPrimaryAction(on: store.todo)
+        await env.todos.perform(.ignore, on: store.todo)
         await store.refreshTodo()
+        if store.todo.status == "dismissed" { dismiss() }
     }
 
     private func dismissTodo() async {

@@ -6,13 +6,19 @@ struct TodoWorkspaceHeader: View {
     let summary: String
     let actionsDisabled: Bool
     let isUpdating: Bool
+    var isCompleting: Bool = false
     let send: (String) -> Void
     let complete: () -> Void
+    let accept: () -> Void
+    let ignore: () -> Void
     let reopen: () -> Void
     let showPeople: () -> Void
     let showWorkflow: () -> Void
     let sourceSend: (String, String?) async throws -> Void
     @State private var showsFullSummary = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var showsCompleted: Bool { todo.isCompleted || isCompleting }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Runner.Spacing.medium) {
@@ -20,15 +26,23 @@ struct TodoWorkspaceHeader: View {
             titleBlock
             summarySection
 
-            if todo.isActive && todo.delegation == nil {
-                activeActions
-            } else if todo.isCompleted {
+            if todo.isInTriage {
+                HStack {
+                    Button(action: ignore) { Label("Ignore", systemImage: "hand.thumbsdown") }
+                        .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+                    Button(action: accept) { Label("Add to Todos", systemImage: "plus") }
+                        .buttonStyle(RunnerButtonStyle(.primary, compact: true))
+                }
+                .disabled(actionsDisabled || isUpdating)
+            } else if showsCompleted {
                 completedActions
+            } else if todo.isActive && todo.delegation == nil {
+                activeActions
             }
 
             DisclosureGroup("Task details") {
                 VStack(alignment: .leading, spacing: Runner.Spacing.medium) {
-                    if let workflow = todo.workflow {
+                    if let workflow = todo.workflow, !todo.isInTriage {
                         TodoLabeledLine(label: "Outcome:", text: workflow.outcome)
                         if let next = workflow.nextAction {
                             TodoLabeledLine(label: "Next:", text: next, textColor: Runner.Palette.foreground)
@@ -64,6 +78,7 @@ struct TodoWorkspaceHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Runner.Spacing.xsmall)
         .padding(.top, Runner.Spacing.small)
+        .animation(reduceMotion ? nil : .default, value: showsCompleted)
     }
 
     private var sourceRow: some View {
@@ -87,7 +102,8 @@ struct TodoWorkspaceHeader: View {
             Text(todo.title)
                 .font(Runner.Typography.pageTitle)
                 .tracking(Runner.Typography.pageTitleTracking)
-                .foregroundStyle(Runner.Palette.foreground)
+                .foregroundStyle(showsCompleted ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
+                .strikethrough(showsCompleted)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .accessibilityAddTraits(.isHeader)
@@ -148,10 +164,13 @@ struct TodoWorkspaceHeader: View {
             Label("Done", systemImage: "checkmark.circle.fill")
                 .font(Runner.Typography.smallMedium)
                 .foregroundStyle(Runner.Palette.successText)
-            Button("Reopen", action: reopen)
-                .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
-                .disabled(isUpdating)
+            if !isCompleting {
+                Button("Reopen", action: reopen)
+                    .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+                    .disabled(isUpdating)
+            }
         }
+        .transition(.opacity)
     }
 
     @ViewBuilder

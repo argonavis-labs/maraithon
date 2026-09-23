@@ -23,7 +23,7 @@ final class TodosStore {
     private(set) var loadingDetailIDs: Set<String> = []
     private(set) var detailErrors: [String: String] = [:]
 
-    var filter: TodoListFilter = .active {
+    var filter: TodoListFilter = .triage {
         didSet {
             guard filter != oldValue else { return }
             loadGeneration += 1
@@ -39,12 +39,15 @@ final class TodosStore {
             phase = .idle
         }
     }
+    var quickEntryFocused = false
     var query: String = ""
 
     private let client: MaraithonClient
     private let eventLog: EventLog
     private let unauthorizedHandler: UnauthorizedHandler
     private var loadGeneration = 0
+    private var loadingGeneration: Int?
+    private var submittedQuery: String?
     private var accountGeneration = 0
     private var detailRequestTokens: [String: UUID] = [:]
 
@@ -59,20 +62,23 @@ final class TodosStore {
     }
 
     var isLoading: Bool {
-        phase == .loading
+        loadingGeneration != nil
     }
 
-    func create(_ draft: CompanionTodoDraft) async throws -> CompanionTodo {
+    func create(_ draft: CompanionTodoDraft, stayInTriage: Bool = false) async throws -> CompanionTodo {
         let generation = accountGeneration
         eventLog.debug("todos.create_started", source: .cloud)
         do {
             let response = try await client.createTodo(draft)
             guard generation == accountGeneration else { throw CancellationError() }
             loadGeneration += 1
-            if filter != .active || normalizedQuery != nil { todos = [] }
-            filter = .active
-            category = .all
-            query = ""
+            if !stayInTriage {
+                if filter != .active || normalizedQuery != nil { todos = [] }
+                filter = .active
+                category = .all
+                query = ""
+                submittedQuery = nil
+            }
             apply(response.todo)
             phase = .loaded
             eventLog.info("todos.create_finished", source: .cloud, payload: ["todo_id": response.todo.id])
@@ -86,14 +92,20 @@ final class TodosStore {
         }
     }
 
-    func load() async {
+    func load(automatically: Bool = false) async {
         guard !Task.isCancelled else { return }
+        if automatically {
+            guard !isLoading, pendingActionIDs.isEmpty, loadingDetailIDs.isEmpty,
+                  normalizedQuery == submittedQuery else { return }
+        }
         loadGeneration += 1
         let generation = loadGeneration
+        loadingGeneration = generation
+        defer { if loadingGeneration == generation { loadingGeneration = nil } }
         let requestedFilter = filter
         let requestedQuery = normalizedQuery
-
-        phase = .loading
+        submittedQuery = requestedQuery
+        if !automatically || phase == .idle { phase = .loading }
         eventLog.debug(
             "todos.load_started",
             source: .cloud,
@@ -106,6 +118,7 @@ final class TodosStore {
                 query: requestedQuery,
                 category: category.rawValue
             )
+            try Task.checkCancellation()
             guard generation == loadGeneration else { return }
 
             todos = response.todos
@@ -126,7 +139,7 @@ final class TodosStore {
         } catch {
             guard generation == loadGeneration else { return }
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
-                phase = todos.isEmpty ? .idle : .loaded
+                if !automatically || phase == .loading { phase = todos.isEmpty ? .idle : .loaded }
                 eventLog.debug("todos.load_cancelled", source: .cloud)
                 return
             }
@@ -198,27 +211,24 @@ final class TodosStore {
         }
     }
 
-    func performPrimaryAction(on todo: CompanionTodo) async {
-        let action: CompanionTodoAction
-        if todo.canMarkDone {
-            action = .done
-        } else if todo.canReopen {
-            action = .reopen
-        } else {
-            return
-        }
-
-        await perform(action, on: todo)
+    func performPrimaryAction(on todo: CompanionTodo, onCompleted: (() async -> Void)? = nil) async {
+        guard todo.isInTriage || todo.canMarkDone || todo.canReopen else { return }
+        let action: CompanionTodoAction = todo.isInTriage ? .accept : (todo.canMarkDone ? .done : .reopen)
+        await perform(action, on: todo, onCompleted: onCompleted)
     }
 
-    func perform(_ action: CompanionTodoAction, on todo: CompanionTodo) async {
+    func perform(_ action: CompanionTodoAction, on todo: CompanionTodo, onCompleted: (() async -> Void)? = nil) async {
         guard !pendingActionIDs.contains(todo.id) else { return }
-
+        let generation = accountGeneration
         pendingActionIDs.insert(todo.id)
-        defer { pendingActionIDs.remove(todo.id) }
+        defer { if generation == accountGeneration { pendingActionIDs.remove(todo.id) } }
 
         do {
             let response = try await client.updateTodo(id: todo.id, action: action)
+            guard generation == accountGeneration else { return }
+            loadGeneration += 1
+            if action == .done, response.todo.status == "done" { await onCompleted?() }
+            guard generation == accountGeneration else { return }
             apply(response.todo)
             phase = .loaded
             eventLog.info(
@@ -227,8 +237,9 @@ final class TodosStore {
                 payload: ["action": action.rawValue, "todo_id": todo.id]
             )
         } catch MaraithonClientError.unauthorized {
-            rejectToken()
+            if generation == accountGeneration { rejectToken() }
         } catch {
+            guard generation == accountGeneration else { return }
             phase = .failed(message: CompanionErrorCopy.message(for: error))
             eventLog.warning(
                 "todos.action_failed",
@@ -245,6 +256,8 @@ final class TodosStore {
     func clear() {
         accountGeneration += 1
         loadGeneration += 1
+        loadingGeneration = nil
+        submittedQuery = nil
         todos = []
         pendingActionIDs = []
         loadingDetailIDs = []
@@ -252,7 +265,7 @@ final class TodosStore {
         detailRequestTokens = [:]
         lastUpdatedAt = nil
         phase = .idle
-        filter = .active
+        filter = .triage
         category = .all
         query = ""
     }
@@ -263,6 +276,9 @@ final class TodosStore {
     }
 
     private func apply(_ todo: CompanionTodo) {
+        // An older list response must never undo a completed action.
+        loadGeneration += 1
+        if phase == .loading { phase = .loaded }
         if filter.includes(todo) && category.includes(todo.accountCategory) {
             if let index = todos.firstIndex(where: { $0.id == todo.id }) {
                 todos[index] = todo
@@ -274,7 +290,6 @@ final class TodosStore {
         }
         lastUpdatedAt = Date()
     }
-
     private func rejectToken() {
         clear()
         eventLog.warning("todos.unauthorized", source: .auth)

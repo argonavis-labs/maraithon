@@ -5,6 +5,7 @@ import AssistantProgressKit
 struct TodoDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(SessionStore.self) private var sessionStore
     let todo: TodoItem
 
@@ -17,6 +18,7 @@ struct TodoDetailView: View {
     @State private var isEditingTodo = false
     @State private var isPerformingAction = false
     @State private var actionErrorMessage: String?
+    @State private var completion = TodoCompletionFeedback()
 
     private let chatSyncService = ChatSyncService()
 
@@ -53,6 +55,7 @@ struct TodoDetailView: View {
             }
         }
         .runnerPage()
+        .sensoryFeedback(.success, trigger: completion.successCount)
         .sheet(isPresented: $showsWorkflow) {
             if let workflow = todo.workflow {
                 TodoWorkflowEditor(workflow: workflow, people: workflowPeople, save: saveWorkflow)
@@ -158,7 +161,10 @@ struct TodoDetailView: View {
             TodoWorkspaceHeader(
                 todo: todo, summary: summaryText,
                 actionsDisabled: disabled, isUpdating: isPerformingAction,
+                isCompleting: completion.confirmedIDs.contains(todo.id.uuidString),
                 send: send, complete: { Task { await performAction("done") } },
+                accept: { Task { await performAction("accept") } },
+                ignore: { Task { await performAction("see_less") } },
                 reopen: { Task { await reopenTodo() } },
                 showPeople: { showsContext = true },
                 showWorkflow: { showsWorkflow = true }, sourceSend: sendReply
@@ -367,6 +373,7 @@ struct TodoDetailView: View {
     /// dismissed neutral.
     private var statusTint: Color {
         switch todo.status {
+        case .triage: .secondary
         case .open: todo.attentionMode == .monitor ? .teal : .blue
         case .snoozed: .orange
         case .done: .blue
@@ -443,7 +450,7 @@ struct TodoDetailView: View {
         }
 
         isPerformingAction = true
-        defer { isPerformingAction = false }
+        defer { isPerformingAction = false; completion.finish(todo.id.uuidString) }
 
         do {
             let remote = try await MobileAPIClient().performTodoAction(
@@ -452,8 +459,15 @@ struct TodoDetailView: View {
                 action: action,
                 snoozedUntil: snoozedUntil
             )
-            ProductionDataSync.apply(remote, to: todo)
-            try modelContext.save()
+            guard sessionStore.user?.sessionToken == sessionToken, todo.modelContext != nil else { return }
+            if action == "done", remote.status == "done" {
+                await completion.confirm(todo.id.uuidString, reduceMotion: reduceMotion)
+            }
+            guard sessionStore.user?.sessionToken == sessionToken, todo.modelContext != nil else { return }
+            try withAnimation(reduceMotion ? nil : .default) {
+                ProductionDataSync.apply(remote, to: todo)
+                try modelContext.save()
+            }
             actionErrorMessage = nil
         } catch {
             modelContext.rollback()

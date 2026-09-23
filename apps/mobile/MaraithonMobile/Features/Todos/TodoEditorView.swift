@@ -213,7 +213,7 @@ struct TodoEditorView: View {
             existingNotes: todo?.notes,
             existingNextAction: todo?.nextAction
         )
-        let payload = ProductionDataSync.todoPayload(
+        var payload = ProductionDataSync.todoPayload(
             title: trimmedTitle,
             notes: trimmedNotes,
             priority: priority,
@@ -222,6 +222,8 @@ struct TodoEditorView: View {
             nextAction: nextAction,
             relatedPersonID: selectedContactID
         )
+
+        if todo?.isInTriage == true { payload["status"] = .string("triage") }
 
         do {
             if let sessionToken = sessionStore.user?.sessionToken {

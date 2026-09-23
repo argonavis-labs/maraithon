@@ -5,6 +5,7 @@ enum TodosCopy {
     static func resultCount(_ count: Int, filter: TodoListFilter) -> String {
         let noun = count == 1 ? "work item" : "work items"
         switch filter {
+        case .triage: return "\(count) to review"
         case .active: return "\(count) active \(noun)"
         case .tracking: return "\(count) tracked \(noun)"
         case .snoozed: return "\(count) snoozed \(noun)"
@@ -24,7 +25,8 @@ enum TodosCopy {
             return "No matching tasks"
         }
         switch filter {
-        case .active: return "Your open work list is clear"
+        case .triage: return "Triage is clear"
+        case .active: return "Your todo list is clear"
         case .tracking: return "No work is being tracked"
         case .snoozed: return "Nothing is snoozed"
         case .done: return "No completed work yet"
@@ -37,7 +39,8 @@ enum TodosCopy {
             return "Try another title, next action, or source."
         }
         switch filter {
-        case .active: return "Maraithon will surface commitments when the next move is clear."
+        case .triage: return "New suggestions will appear here for review."
+        case .active: return "Accept suggestions in Triage or add a todo."
         case .tracking: return "Work owned by someone else will appear here so you can follow its progress."
         case .snoozed: return "Snoozed tasks return here until their review date."
         case .done: return "Completed work will appear here and can be reopened."

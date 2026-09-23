@@ -1,14 +1,16 @@
 import SwiftData
 import SwiftUI
+import UIKit
 import AssistantProgressKit
 
 struct TodosView: View {
     @Environment(AppNavigation.self) private var appNavigation
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
-    @State private var filter: TodoFilter = .open
+    @State private var filter: TodoFilter = .triage
     @State private var category: TaskCategory = .all
     @State private var searchText = ""
     @State private var isAddingTodo = false
@@ -19,6 +21,7 @@ struct TodosView: View {
     @State private var isRefreshing = false
     @State private var refreshTask: Task<Void, Never>?
     @State private var workLists: TodoWorkLists?
+    @State private var completion = TodoCompletionFeedback()
 
     private static let rowInsets = EdgeInsets(
         top: Runner.Spacing.tight,
@@ -80,9 +83,9 @@ struct TodosView: View {
 
                 RunnerPageHeader(
                     eyebrow: "Your workspace",
-                    title: "Tasks",
+                    title: filter == .triage ? "Triage" : "Todos",
                     count: lists.filtered.count,
-                    subtitle: filter == .tracking
+                    subtitle: filter == .triage ? "Choose what belongs on your list." : filter == .tracking
                         ? "Work that matters to you, owned by someone else."
                         : "A clear next step for everything on your plate."
                 ) {
@@ -101,6 +104,11 @@ struct TodosView: View {
                 .padding(.top, Runner.Spacing.small)
 
                 RunnerTabs(items: filterTabs(counts: lists.counts), selection: $filter)
+                if filter == .triage {
+                    TodoQuickEntry(create: quickAdd)
+                        .padding(.horizontal, Runner.Layout.pageInset)
+                        .padding(.vertical, Runner.Spacing.small)
+                }
 
                 Picker("Personal or work", selection: $category) {
                     ForEach(TaskCategory.allCases) { Text($0.title).tag($0) }
@@ -114,13 +122,13 @@ struct TodosView: View {
                     .padding(.vertical, Runner.Spacing.tight)
 
                 List {
-                    if filter != .open {
+                    if filter != .open && filter != .triage {
                         HStack {
                             Text(filter.title)
                                 .font(Runner.Typography.small)
                                 .foregroundStyle(Runner.Palette.mutedForeground)
                             Spacer()
-                            Button("Show active") { filter = .open }
+                            Button("Show Todos") { filter = .open }
                                 .buttonStyle(RunnerButtonStyle(.plain, compact: true))
                         }
                         .listRowSeparator(.hidden)
@@ -144,16 +152,30 @@ struct TodosView: View {
                         .listRowInsets(EdgeInsets())
                     } else {
                         ForEach(lists.filtered) { todo in
+                            if todo.isInTriage {
+                                TriageTodoRow(todo: todo,
+                                    isWorking: completion.pendingIDs.contains(todo.id.uuidString),
+                                    open: { linkedTodo = todo },
+                                    accept: { decideTriage(todo, action: "accept") },
+                                    ignore: { decideTriage(todo, action: "see_less") })
+                                    .listRowInsets(Self.rowInsets)
+                                    .listRowBackground(Runner.Palette.background)
+                                    .listRowSeparatorTint(Runner.Palette.border)
+                            } else {
                             NavigationLink {
                                 TodoDetailView(todo: todo)
                             } label: {
-                                TodoRow(todo: todo) {
+                                TodoRow(todo: todo,
+                                    isWorking: completion.pendingIDs.contains(todo.id.uuidString),
+                                    isCompleting: completion.confirmedIDs.contains(todo.id.uuidString)) {
                                     toggle(todo)
                                 }
                             }
                             .listRowInsets(Self.rowInsets)
-                            .listRowBackground(Runner.Palette.background)
+                            .listRowBackground(completion.confirmedIDs.contains(todo.id.uuidString)
+                                ? Runner.Palette.success.opacity(0.08) : Runner.Palette.background)
                             .listRowSeparatorTint(Runner.Palette.border)
+                            .transition(.opacity)
                             .swipeActions(edge: .leading) {
                                 Button {
                                     toggle(todo)
@@ -175,12 +197,22 @@ struct TodosView: View {
                                 }
                             }
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    delete(todo)
-                                } label: {
-                                    Label(TodosViewCopy.dismissActionLabel, systemImage: "trash")
+                                if todo.isActive {
+                                    Button {
+                                        ignore(todo)
+                                    } label: {
+                                        Label("Ignore", systemImage: "hand.thumbsdown")
+                                    }
+                                    .tint(Runner.Palette.caution)
+                                    .accessibilityHint("Teaches Maraithon to show fewer todos like this")
+                                } else {
+                                    Button(role: .destructive) {
+                                        delete(todo)
+                                    } label: {
+                                        Label(TodosViewCopy.dismissActionLabel, systemImage: "trash")
+                                    }
+                                    .tint(Runner.Palette.destructive)
                                 }
-                                .tint(Runner.Palette.destructive)
 
                                 Button {
                                     editingTodo = todo
@@ -198,11 +230,14 @@ struct TodosView: View {
                                     .tint(Runner.Palette.caution)
                                 }
                             }
+                            .disabled(completion.pendingIDs.contains(todo.id.uuidString))
+                            }
                         }
                         .onDelete(perform: deleteTodos)
                     }
                 }
                 .listStyle(.plain)
+                .animation(reduceMotion ? nil : .default, value: lists.filtered.map(\.id))
             }
             .runnerPage()
             .toolbar(.hidden, for: .navigationBar)
@@ -243,10 +278,11 @@ struct TodosView: View {
             rebuildWorkLists()
             await refreshLatestWork()
         }
+        .sensoryFeedback(.success, trigger: completion.successCount)
     }
 
     private func filterTabs(counts: TodoFilterCounts) -> [RunnerTabs<TodoFilter>.Item] {
-        ([TodoFilter.open] + TodoFilter.allCases).map { option in
+        ([TodoFilter.triage, .open] + TodoFilter.allCases).map { option in
             RunnerTabs<TodoFilter>.Item(id: option, title: option.title, count: counts.value(for: option))
         }
     }
@@ -293,15 +329,22 @@ struct TodosView: View {
     }
 
     private func toggle(_ todo: TodoItem) {
+        let id = todo.id.uuidString
+        guard completion.begin(id) else { return }
         let completed = !todo.isCompleted
         actionErrorMessage = nil
-        todo.setCompleted(completed)
-        guard saveLocalWorkChange(failureMessage: TodosViewCopy.localUpdateFailedMessage) else {
+
+        guard let sessionToken = sessionStore.user?.sessionToken else {
+            withAnimation(reduceMotion ? nil : .default) {
+                todo.setCompleted(completed)
+                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.localUpdateFailedMessage)
+                rebuildWorkLists()
+            }
+            completion.finish(id)
             return
         }
-
-        guard let sessionToken = sessionStore.user?.sessionToken else { return }
         Task { @MainActor in
+            defer { completion.finish(id) }
             do {
                 let remote = if completed {
                     try await MobileAPIClient().performTodoAction(
@@ -316,13 +359,19 @@ struct TodosView: View {
                         payload: ["status": .string("open")]
                     )
                 }
-                ProductionDataSync.apply(remote, to: todo)
-                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
-            } catch {
-                todo.setCompleted(!completed)
-                if saveLocalWorkChange(failureMessage: TodosViewCopy.restoreFailedMessage) {
-                    actionErrorMessage = todoActionMessage("Could not update work item.", error: error)
+                guard sessionStore.user?.sessionToken == sessionToken, todo.modelContext != nil else { return }
+                if completed, remote.status == "done" {
+                    await completion.confirm(id, reduceMotion: reduceMotion)
                 }
+                guard sessionStore.user?.sessionToken == sessionToken, todo.modelContext != nil else { return }
+                withAnimation(reduceMotion ? nil : .default) {
+                    ProductionDataSync.apply(remote, to: todo)
+                    _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
+                    rebuildWorkLists()
+                }
+            } catch {
+                guard sessionStore.user?.sessionToken == sessionToken else { return }
+                actionErrorMessage = todoActionMessage("Could not update work item.", error: error)
             }
         }
     }
@@ -333,6 +382,89 @@ struct TodosView: View {
             filtered.indices.contains(index) ? filtered[index] : nil
         }
         todosToDelete.forEach(delete)
+    }
+
+    private func quickAdd(title: String, requestID: UUID) async throws {
+        guard let token = sessionStore.user?.sessionToken else { throw MobileAPIError.invalidResponse }
+        let remote = try await MobileAPIClient().createTodo(sessionToken: token, payload: [
+            "title": .string(title), "summary": .string(title), "next_action": .string(title),
+            "source": .string("mobile"), "status": .string("open"),
+            "dedupe_key": .string("mobile:quick-add:\(requestID.uuidString.lowercased())")
+        ])
+        guard sessionStore.user?.sessionToken == token, let id = UUID(uuidString: remote.id) else {
+            throw CancellationError()
+        }
+        if let existing = todos.first(where: { $0.id == id }) {
+            ProductionDataSync.apply(remote, to: existing)
+        } else {
+            modelContext.insert(ProductionDataSync.todo(from: remote, id: id))
+        }
+        do { try modelContext.save() } catch {
+            modelContext.rollback()
+            throw error
+        }
+        rebuildWorkLists()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    private func decideTriage(_ todo: TodoItem, action: String) {
+        let id = todo.id.uuidString
+        guard todo.isInTriage, completion.begin(id) else { return }
+        guard let token = sessionStore.user?.sessionToken else {
+            actionErrorMessage = "Sign in to save your Triage decisions."
+            completion.finish(id)
+            return
+        }
+        actionErrorMessage = nil
+        Task { @MainActor in
+            defer { completion.finish(id) }
+            do {
+                let remote = try await MobileAPIClient().performTodoAction(
+                    sessionToken: token, id: todo.id, action: action)
+                guard sessionStore.user?.sessionToken == token, todo.modelContext != nil else { return }
+                ProductionDataSync.apply(remote, to: todo)
+                try modelContext.save()
+                rebuildWorkLists()
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                guard sessionStore.user?.sessionToken == token else { return }
+                modelContext.rollback()
+                actionErrorMessage = todoActionMessage("Could not save your Triage decision.", error: error)
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
+    private func ignore(_ todo: TodoItem) {
+        let id = todo.id.uuidString
+        guard todo.isActive, completion.begin(id) else { return }
+        actionErrorMessage = nil
+
+        guard let sessionToken = sessionStore.user?.sessionToken else {
+            actionErrorMessage = "Sign in to save your Ignore feedback."
+            completion.finish(id)
+            return
+        }
+
+        Task { @MainActor in
+            defer { completion.finish(id) }
+            do {
+                let remote = try await MobileAPIClient().performTodoAction(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    action: "see_less"
+                )
+                guard sessionStore.user?.sessionToken == sessionToken, todo.modelContext != nil else { return }
+                withAnimation(reduceMotion ? nil : .default) {
+                    ProductionDataSync.apply(remote, to: todo)
+                    _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
+                    rebuildWorkLists()
+                }
+            } catch {
+                guard sessionStore.user?.sessionToken == sessionToken else { return }
+                actionErrorMessage = todoActionMessage("Could not save Ignore feedback.", error: error)
+            }
+        }
     }
 
     private func delete(_ todo: TodoItem) {

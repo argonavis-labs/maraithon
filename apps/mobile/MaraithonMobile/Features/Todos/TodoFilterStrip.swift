@@ -23,6 +23,7 @@ struct TodoFilterStrip: View {
 
     private func tint(for filter: TodoFilter) -> Color {
         switch filter {
+        case .triage: .accentColor
         case .all: .accentColor
         case .open: .blue
         case .tracking: .secondary

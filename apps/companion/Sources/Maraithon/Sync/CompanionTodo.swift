@@ -4,6 +4,7 @@ import AssistantProgressKit
 /// Task views use the paired-device API's status filters, with ownership
 /// filtering applied locally after all pages have loaded.
 enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
+    case triage
     case active
     case tracking
     case snoozed
@@ -14,7 +15,8 @@ enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .active: return "Active"
+        case .triage: return "Triage"
+        case .active: return "Todos"
         case .tracking: return "Tracking"
         case .snoozed: return "Snoozed"
         case .done: return "Completed"
@@ -27,17 +29,18 @@ enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
     /// Open work sorts by rank; history sorts by recency.
     var sortParameter: String {
         switch self {
-        case .active, .tracking, .snoozed: return "rank"
+        case .triage, .active, .tracking, .snoozed: return "rank"
         case .done, .all: return "updated"
         }
     }
 
     func includes(status: String) -> Bool {
         switch self {
+        case .triage: return status == "triage"
         case .active, .tracking: return status == "open" || status == "snoozed"
         case .snoozed: return status == "snoozed"
         case .done: return status == "done"
-        case .all: return true
+        case .all: return status != "triage"
         }
     }
 
@@ -130,9 +133,11 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     var isTracking: Bool { canMarkDone && isOwnedBySomeoneElse }
     var needsDecision: Bool { decision == true && !isOwnedBySomeoneElse }
 
+    var isInTriage: Bool { status == "triage" }
+
     var canMarkDone: Bool { status == "open" || status == "snoozed" }
     var canReopen: Bool { status == "done" }
-    var canDismiss: Bool { status == "open" || status == "snoozed" }
+    var canDismiss: Bool { isInTriage || status == "open" || status == "snoozed" }
 
     private static func nonblank(_ value: String?) -> String? {
         guard let value else { return nil }
@@ -226,8 +231,10 @@ struct CompanionTodoPagination: Codable, Sendable {
 }
 
 enum CompanionTodoAction: String, Sendable {
+    case accept
     case done
     case dismiss
+    case ignore = "see_less"
     case reopen
 }
 

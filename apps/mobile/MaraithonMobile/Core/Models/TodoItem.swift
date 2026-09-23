@@ -93,6 +93,8 @@ final class TodoItem {
         set { attentionModeRawValue = newValue.rawValue }
     }
 
+    var isInTriage: Bool { status == .triage }
+
     var isActive: Bool {
         status == .open || status == .snoozed
     }

@@ -6,12 +6,17 @@ import SwiftUI
 struct TodoWorkspaceHeader: View {
     let store: TodoConversationStore
     let isChangingStatus: Bool
+    var isCompleting: Bool = false
     let back: () -> Void
     let changeStatus: () -> Void
+    let ignore: () -> Void
     let showDetails: () -> Void
     let editWorkflow: () -> Void
 
     private var todo: CompanionTodo { store.todo }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var showsCompleted: Bool { isCompleting || todo.status == "done" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
@@ -25,7 +30,8 @@ struct TodoWorkspaceHeader: View {
                 Text(todo.title)
                     .font(Tokens.Typography.pageTitle)
                     .tracking(Tokens.Typography.pageTitleTracking)
-                    .foregroundStyle(Tokens.Palette.foreground)
+                    .foregroundStyle(showsCompleted ? Tokens.Palette.mutedForeground : Tokens.Palette.foreground)
+                    .strikethrough(showsCompleted)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
@@ -33,10 +39,22 @@ struct TodoWorkspaceHeader: View {
                 HStack(spacing: Tokens.Spacing.small) {
                     Button("Details", action: showDetails)
                         .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
-                    Button(todo.canReopen ? "Reopen" : "Done", action: changeStatus)
-                        .buttonStyle(RunnerButtonStyle(.primary, compact: true))
-                        .disabled(isChangingStatus || (!todo.canMarkDone && !todo.canReopen))
-                        .help(todo.canReopen ? "Reopen this task" : "Mark this task done")
+                    if showsCompleted {
+                        Label("Done", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(Tokens.Palette.success)
+                            .transition(.opacity)
+                    }
+                    if todo.isInTriage {
+                        Button("Ignore", action: ignore)
+                            .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+                            .disabled(isChangingStatus)
+                    }
+                    if !isCompleting {
+                        Button(todo.isInTriage ? "Add to Todos" : (todo.canReopen ? "Reopen" : "Done"), action: changeStatus)
+                            .buttonStyle(RunnerButtonStyle(.primary, compact: true))
+                            .disabled(isChangingStatus || (!todo.isInTriage && !todo.canMarkDone && !todo.canReopen))
+                            .help(todo.isInTriage ? "Add to Todos" : (todo.canReopen ? "Reopen this task" : "Mark this task done"))
+                    }
                 }
                 .padding(.top, Tokens.Spacing.xsmall)
             }
@@ -56,7 +74,7 @@ struct TodoWorkspaceHeader: View {
             .font(Tokens.Typography.small)
             .foregroundStyle(Tokens.Palette.mutedForeground)
 
-            if let workflow = todo.workflow {
+            if let workflow = todo.workflow, !todo.isInTriage {
                 HStack(spacing: Tokens.Spacing.compact) {
                     Image(systemName: "person.2")
                         .font(Tokens.Typography.caption)
@@ -78,5 +96,6 @@ struct TodoWorkspaceHeader: View {
         .padding(.top, Tokens.Spacing.roomy)
         .padding(.bottom, Tokens.Spacing.medium)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(reduceMotion ? nil : .default, value: showsCompleted)
     }
 }

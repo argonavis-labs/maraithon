@@ -6,24 +6,27 @@ struct RunnerCheckbox: View {
     let isOn: Bool
     let label: String
     let action: () -> Void
+    var tint: Color = Tokens.Palette.accent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: Tokens.CornerRadius.checkbox)
-                    .fill(isOn ? Tokens.Palette.accent : Tokens.Palette.background)
+                    .fill(isOn ? tint : Tokens.Palette.background)
                 RoundedRectangle(cornerRadius: Tokens.CornerRadius.checkbox)
-                    .stroke(isOn ? Tokens.Palette.accent : Tokens.Palette.ring, lineWidth: Tokens.Stroke.control)
-                if isOn {
-                    Image(systemName: "checkmark")
-                        .font(Tokens.Typography.checkmark)
-                        .foregroundStyle(.white)
-                }
+                    .stroke(isOn ? tint : Tokens.Palette.ring, lineWidth: Tokens.Stroke.control)
+                Image(systemName: "checkmark")
+                    .font(Tokens.Typography.checkmark)
+                    .foregroundStyle(.white)
+                    .opacity(isOn ? 1 : 0)
+                    .scaleEffect(isOn || reduceMotion ? 1 : 0.5)
             }
             .frame(width: Tokens.Layout.checkboxSize, height: Tokens.Layout.checkboxSize)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .animation(reduceMotion ? nil : .default, value: isOn)
         .accessibilityLabel(label)
         .accessibilityValue(isOn ? "Selected" : "Not selected")
         .accessibilityAddTraits(isOn ? .isSelected : [])

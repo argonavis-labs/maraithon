@@ -1,6 +1,7 @@
 import Foundation
 
 enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
+    case triage
     case all
     case open
     case tracking
@@ -21,8 +22,9 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
 
     var title: String {
         switch self {
+        case .triage: "Triage"
         case .all: "All tasks"
-        case .open: "Active"
+        case .open: "Todos"
         case .tracking: "Tracking"
         case .needsAction: "Act now"
         case .watching: "Watching"
@@ -37,6 +39,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
 
     var navigationTitle: String {
         switch self {
+        case .triage: "Triage"
         case .all: "All Work"
         case .open: "Active Work"
         case .tracking: "Tracking"
@@ -53,6 +56,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
 
     var searchPrompt: String {
         switch self {
+        case .triage: "Search suggestions"
         case .all: "Search work"
         case .open: "Search active work"
         case .tracking: "Search tracked work"
@@ -78,6 +82,11 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
             )
         }
 
+        if self == .triage {
+            return TodoEmptyState(title: "Triage is clear", systemImage: "tray",
+                description: "New suggestions will appear here for review.")
+        }
+
         if !hasAnyWork {
             return TodoEmptyState(
                 title: "No work yet",
@@ -87,6 +96,8 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         }
 
         switch self {
+        case .triage:
+            return TodoEmptyState(title: "Triage is clear", systemImage: "tray", description: "New suggestions will appear here for review.")
         case .all:
             return TodoEmptyState(
                 title: "No work matches this filter",
@@ -158,6 +169,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
 
     private var searchScopeLabel: String {
         switch self {
+        case .triage: "suggestions"
         case .all: "work"
         case .open: "active work"
         case .tracking: "tracked work"
@@ -180,6 +192,7 @@ struct TodoEmptyState: Equatable {
 }
 
 struct TodoFilterCounts: Equatable {
+    var triage: Int = 0
     let all: Int
     let open: Int
     var tracking: Int = 0
@@ -194,6 +207,7 @@ struct TodoFilterCounts: Equatable {
 
     func value(for filter: TodoFilter) -> Int {
         switch filter {
+        case .triage: triage
         case .all: all
         case .open: open
         case .tracking: tracking
@@ -219,6 +233,7 @@ enum TodoFiltering {
         calendar: Calendar = .current
     ) -> TodoFilterCounts {
         let query = normalizedQuery(searchText)
+        var triage = 0
         var all = 0
         var open = 0
         var tracking = 0
@@ -234,6 +249,7 @@ enum TodoFiltering {
         for todo in todos {
             guard matchesSearch(todo, query: query) else { continue }
 
+            if todo.isInTriage { triage += 1; continue }
             all += 1
 
             if todo.status == .done {
@@ -275,7 +291,7 @@ enum TodoFiltering {
             }
         }
 
-        return TodoFilterCounts(
+        return TodoFilterCounts(triage: triage,
             all: all,
             open: open,
             tracking: tracking,
@@ -303,8 +319,10 @@ enum TodoFiltering {
             guard matchesSearch(todo, query: query) else { return false }
 
             switch filter {
+            case .triage:
+                return todo.isInTriage
             case .all:
-                return true
+                return !todo.isInTriage
             case .open:
                 return todo.isActive
             case .tracking:
