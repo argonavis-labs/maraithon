@@ -1,6 +1,7 @@
 # Restore the Sep 11 server work
 
-The restoration is in progress. The [approved scope](superpowers/specs/2026-09-22-restore-branch-server-work-design.md)
+The restoration is blocked on slice 1's required production observation.
+The [approved scope](superpowers/specs/2026-09-22-restore-branch-server-work-design.md)
 has three slices, each deployed and verified before the next starts. The
 Electron app and the three out-of-scope server features stay outside this work.
 
@@ -65,6 +66,14 @@ deployment and a Cloud Run `eval` execution for new `briefs` rows with
 Confirm delivery through the brief's status and delivery timestamp. Keep
 database access inside Cloud Run with `POOL_SIZE=2`; do not query production
 PostgreSQL from the laptop.
+
+At `2026-09-23T04:00:58Z`, read-only execution
+`maraithon-todo-validation-7f8rp` confirmed zero check-ins created or sent
+since deployment. The configured workday is 09:00 to 18:00 in
+`America/Toronto`; the check ran at local hour 00, outside that window.
+The next eligible workday begins September 23 at 09:00 Toronto time
+(`13:00Z`). A check-in still depends on a calendar opening and useful work.
+Resume production verification in that window before starting slice 2.
 
 ## Remaining slices
 
