@@ -384,7 +384,12 @@ defmodule Maraithon.Todos.TrainingDataset do
       version: @version,
       kind: kind,
       as_of: as_of,
-      records: Enum.map(rows, &export_record(&1, as_of)),
+      records:
+        rows
+        |> Enum.filter(&Maraithon.Todos.TrainingEligibility.eligible?/1)
+        |> Enum.map(&export_record(&1, as_of)),
+      excluded_records:
+        Enum.count(rows, &(not Maraithon.Todos.TrainingEligibility.eligible?(&1))),
       next_cursor: if(length(rows) == limit, do: encode_cursor(List.last(rows)))
     }
   end
@@ -456,6 +461,7 @@ defmodule Maraithon.Todos.TrainingDataset do
 
     %{
       version: @version,
+      label_counts_include_excluded_history: true,
       runs: counts(TrainingRun, user_id, :status, nil),
       decisions: counts(TrainingExample, user_id, :action, nil),
       human_labels: counts(TrainingFeedback, user_id, :label, "user"),

@@ -49,9 +49,11 @@ defmodule Maraithon.Todos.TrainingBackfill do
       Repo.all(from a in ConnectedAccount, where: a.user_id == ^user_id) |> Map.new(&{&1.id, &1})
 
     counts =
-      Enum.reduce(rows, %{}, fn job, acc ->
-        result = import_job(job, accounts)
-        Map.update(acc, result, 1, &(&1 + 1))
+      rows
+      |> Task.async_stream(&import_job(&1, accounts), max_concurrency: 2, timeout: :infinity)
+      |> Enum.reduce(%{}, fn
+        {:ok, result}, acc -> Map.update(acc, result, 1, &(&1 + 1))
+        {:exit, _reason}, _acc -> raise "training backfill worker failed; retry this page"
       end)
 
     %{
@@ -248,7 +250,10 @@ defmodule Maraithon.Todos.TrainingBackfill do
             payload: payload,
             payload_hash: TrainingDataset.digest(payload),
             completed_at: now
-          }, on_conflict: :nothing, conflict_target: [:user_id, :source_key])
+          },
+          on_conflict: :nothing,
+          conflict_target: [:user_id, :source_key]
+        )
 
         # Use insert_all to keep a source batch to one encrypted write roundtrip.
         rows =
@@ -427,7 +432,10 @@ defmodule Maraithon.Todos.TrainingBackfill do
         payload: payload,
         payload_hash: TrainingDataset.digest(payload),
         inserted_at: DateTime.utc_now()
-      }, on_conflict: :nothing, conflict_target: [:user_id, :dedupe_key])
+      },
+      on_conflict: :nothing,
+      conflict_target: [:user_id, :dedupe_key]
+    )
   end
 
   defp learning_snapshot(event),

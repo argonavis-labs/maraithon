@@ -165,3 +165,12 @@ only retained explicit feedback can establish that label. Failed jobs aren't
 treated as completed decisions. Repeated source jobs remain separate historical
 observations; use their source evidence hashes and group keys to deduplicate
 training examples and prevent frequently rescanned sources from dominating.
+
+Personal training exports exclude examples and feedback with explicit
+evaluation markers, such as `[Maraithon eval]`, `production_validation`, or an
+evaluation request ID. The original records remain in the history for audit.
+Each export page reports `excluded_records`; always follow `next_cursor`, even
+when a page contains no eligible records. Raw health counts include excluded
+history. Shared run context is retained because a batch can contain genuine
+and fixture candidates together. Unmarked records aren't guessed to be tests
+merely because their titles sound generic.
