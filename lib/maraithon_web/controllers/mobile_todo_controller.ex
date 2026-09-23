@@ -292,6 +292,9 @@ defmodule MaraithonWeb.MobileTodoController do
     note_opts = Keyword.put(actor_opts, :note, note)
 
     case normalize_action(action) do
+      "accept" ->
+        Todos.accept_from_triage(user_id, todo_id, Keyword.put(actor_opts, :source, "mobile"))
+
       "done" ->
         Todos.mark_done(user_id, todo_id, note_opts)
 

@@ -9,7 +9,7 @@ defmodule Maraithon.Todos.Todo do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(open done dismissed snoozed)
+  @statuses ~w(triage open done dismissed snoozed)
   @attention_modes ~w(act_now monitor)
   @kinds ~w(general gmail_triage)
   @directions ~w(owed_by_me owed_to_me fyi)

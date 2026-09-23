@@ -37,6 +37,7 @@ pretend to have its original decision prompt.
 
 | Action | Meaning for training |
 | --- | --- |
+| Add to Todos from Triage | Explicit positive relevance, not completion |
 | Ignore, Not helpful | Explicit negative relevance |
 | Helpful | Explicit positive relevance |
 | Completed by the user | Implicit positive, weaker than a relevance review |
@@ -130,6 +131,16 @@ This capture boundary covers the shared todo intelligence admission pipeline,
 including direct account discovery and Chief of Staff candidates. It doesn't
 invent evidence for source items that were never acquired or candidates
 filtered before reaching that pipeline.
+
+## Triage
+
+New AI suggestions begin with status `triage`. Human-created todos begin open.
+Existing active todos keep their status. Discovery can refresh pending evidence
+but cannot accept it. Add to Todos uses the authenticated `accept` action; Ignore
+uses `see_less`. Acceptance and its explicit positive label commit together with
+a durable preference-learning event. Retries do not create duplicate labels.
+Pending suggestions are excluded from active work, daily todo lists, and automatic
+completion. Original model decisions remain separate from the user decision.
 
 ## Historical backfill
 

@@ -417,6 +417,53 @@ defmodule Maraithon.Todos do
 
   def ingest_many(_user_id, _attrs_list, _opts), do: {:error, :invalid_todo_candidates}
 
+  @doc "Accept a suggestion into Todos and durably learn explicit relevance."
+  def accept_from_triage(user_id, todo_id, opts \\ []) do
+    opts = Keyword.put(opts, :relevance_feedback, :accepted)
+
+    Repo.transaction(fn ->
+      unless Keyword.get(opts, :actor_type) in [:user, "user"],
+        do: Repo.rollback(:user_acceptance_required)
+
+      case get_todo_for_update(user_id, todo_id) do
+        %Todo{status: "triage"} = todo ->
+          with {:ok, updated} <-
+                 todo
+                 |> Todo.changeset(%{
+                   status: "open",
+                   closed_at: nil,
+                   snoozed_until: nil,
+                   metadata:
+                     put_feedback(todo.metadata || %{}, "helpful", Keyword.get(opts, :source))
+                 })
+                 |> Repo.update(),
+               {:ok, _} <- maybe_record_status_activity(todo, updated, updated.status, opts),
+               {:ok, _} <- OutcomeLearning.maybe_enqueue(todo, updated, opts) do
+            updated
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        %Todo{status: status} = todo when status in ["open", "snoozed", "done"] ->
+          todo
+
+        %Todo{} ->
+          Repo.rollback(:todo_no_longer_in_triage)
+
+        nil ->
+          Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, todo} ->
+        enqueue_brief(todo)
+        {:ok, polish_todo_copy(todo)}
+
+      error ->
+        error
+    end
+  end
+
   def mark_done(user_id, todo_id, opts \\ [])
 
   def mark_done(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
@@ -509,6 +556,7 @@ defmodule Maraithon.Todos do
 
     Repo.transaction(fn ->
       with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
+           :ok <- validate_triage_change(todo, "snoozed"),
            {:ok, updated} <-
              todo
              |> Todo.changeset(%{
@@ -625,6 +673,9 @@ defmodule Maraithon.Todos do
           stored = todo.workflow || %{}
 
           cond do
+            todo.status == "triage" ->
+              Repo.rollback(:accept_todo_first)
+
             is_binary(request_id) and stored["request_id"] == request_id and
                 stored["request_hash"] == request_hash ->
               todo
@@ -758,7 +809,8 @@ defmodule Maraithon.Todos do
         if changes == %{} do
           Repo.rollback(:empty_update)
         else
-          with {:ok, updated} <- todo |> Todo.changeset(changes) |> Repo.update(),
+          with :ok <- validate_triage_change(todo, Map.get(changes, "status", todo.status)),
+               {:ok, updated} <- todo |> Todo.changeset(changes) |> Repo.update(),
                {:ok, _insight} <- sync_linked_insight(updated),
                {:ok, _event} <- maybe_record_status_activity(todo, updated, updated.status, opts),
                {:ok, _learning_event} <- OutcomeLearning.maybe_enqueue(todo, updated, opts) do
@@ -1458,7 +1510,8 @@ defmodule Maraithon.Todos do
     Todo
     |> where(
       [todo],
-      todo.user_id == ^user_id and todo.id in ^ids and todo.status in ^@open_statuses
+      todo.user_id == ^user_id and todo.id in ^ids and
+        todo.status in ["triage", "open", "snoozed"]
     )
     |> Repo.all()
     |> Enum.sort_by(&Map.get(similarity_by_id, &1.id, 0.0), :desc)
@@ -1679,6 +1732,12 @@ defmodule Maraithon.Todos do
   end
 
   defp insert_upserted_todo(normalized_attrs, opts) do
+    normalized_attrs =
+      if Keyword.get(opts, :actor_type) not in [:user, "user"] and
+           normalized_attrs["status"] in ["open", "snoozed"],
+         do: Map.put(normalized_attrs, "status", "triage") |> Map.put("closed_at", nil),
+         else: normalized_attrs
+
     Repo.transaction(fn ->
       with {:ok, inserted} <- %Todo{} |> Todo.changeset(normalized_attrs) |> Repo.insert(),
            {:ok, _event} <- record_activity_event(inserted, "created", opts) do
@@ -1746,7 +1805,8 @@ defmodule Maraithon.Todos do
 
     case Repo.get_by(Todo, user_id: insight.user_id, dedupe_key: attrs.dedupe_key) do
       %Todo{} = todo ->
-        if Workflow.outcome_tracked?(todo) or preserve_closed_synced_todo?(todo, attrs) do
+        if todo.status == "triage" or Workflow.outcome_tracked?(todo) or
+             preserve_closed_synced_todo?(todo, attrs) do
           {:ok, todo}
         else
           todo
@@ -1757,7 +1817,15 @@ defmodule Maraithon.Todos do
 
       nil ->
         Repo.transaction(fn ->
-          with {:ok, inserted} <- %Todo{} |> Todo.changeset(attrs) |> Repo.insert(),
+          with {:ok, inserted} <-
+                 %Todo{}
+                 |> Todo.changeset(
+                   if(attrs.status in ["open", "snoozed"],
+                     do: Map.merge(attrs, %{status: "triage", closed_at: nil}),
+                     else: attrs
+                   )
+                 )
+                 |> Repo.insert(),
                {:ok, _event} <- record_activity_event(inserted, "created", []) do
             inserted
           else
@@ -1780,6 +1848,7 @@ defmodule Maraithon.Todos do
 
     Repo.transaction(fn ->
       with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
+           :ok <- validate_triage_change(todo, status),
            :ok <- validate_status_snapshot(todo, Keyword.get(opts, :expected_todo)),
            {:ok, updated} <-
              todo
@@ -1808,6 +1877,11 @@ defmodule Maraithon.Todos do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp validate_triage_change(%Todo{status: "triage"}, status)
+       when status not in ["triage", "dismissed"], do: {:error, :accept_todo_first}
+
+  defp validate_triage_change(_, _), do: :ok
 
   defp validate_status_snapshot(_todo, nil), do: :ok
 
@@ -1996,7 +2070,7 @@ defmodule Maraithon.Todos do
     incoming_status = Map.get(attrs, "status", "open")
 
     status =
-      if Workflow.outcome_tracked?(existing),
+      if existing.status == "triage" or Workflow.outcome_tracked?(existing),
         do: existing.status,
         else: merge_status(existing.status, incoming_status)
 
@@ -2320,9 +2394,9 @@ defmodule Maraithon.Todos do
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
         case status do
-          "open" ->
+          status when status in ["open", "triage"] ->
             changes
-            |> Map.put("status", "open")
+            |> Map.put("status", status)
             |> Map.put("closed_at", nil)
             |> Map.put("snoozed_until", nil)
 
@@ -3295,7 +3369,7 @@ defmodule Maraithon.Todos do
   defp normalize_attention_mode(value) when value in ~w(act_now monitor), do: value
   defp normalize_attention_mode(_value), do: "act_now"
 
-  defp normalize_status(value) when value in ~w(open done dismissed snoozed), do: value
+  defp normalize_status(value) when value in ~w(triage open done dismissed snoozed), do: value
   defp normalize_status(_value), do: "open"
 
   defp normalize_direction(value) when value in @directions, do: value

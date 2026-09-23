@@ -185,7 +185,7 @@ defmodule Maraithon.Todos.TrainingDataset do
       if user?(opts) do
         record!(todo, todo, "opened", Keyword.put(opts, :observation_day, Date.utc_today()))
 
-        if todo.status in ["open", "snoozed"] and is_nil(todo.first_user_opened_at) do
+        if todo.status in ["triage", "open", "snoozed"] and is_nil(todo.first_user_opened_at) do
           todo
           |> Ecto.Changeset.change(first_user_opened_at: DateTime.utc_now())
           |> Repo.update!()
@@ -265,6 +265,9 @@ defmodule Maraithon.Todos.TrainingDataset do
 
   defp change_event(previous, updated, opts) do
     cond do
+      previous.status == "triage" and updated.status == "open" ->
+        "accepted"
+
       previous.status != updated.status and Keyword.get(opts, :relevance_feedback) == :see_less ->
         "ignored"
 
@@ -293,7 +296,7 @@ defmodule Maraithon.Todos.TrainingDataset do
   defp label(event, "user") when event in ["ignored", "not_helpful", "review_negative"],
     do: {"negative", "explicit"}
 
-  defp label(event, "user") when event in ["helpful", "review_positive"],
+  defp label(event, "user") when event in ["accepted", "helpful", "review_positive"],
     do: {"positive", "explicit"}
 
   defp label("completed", "user"), do: {"positive", "implicit"}

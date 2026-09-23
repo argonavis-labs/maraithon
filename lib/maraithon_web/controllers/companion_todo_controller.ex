@@ -45,6 +45,11 @@ defmodule MaraithonWeb.CompanionTodoController do
 
   def create(conn, _params), do: respond(conn, {:error, :invalid_todo_attrs}, "create")
 
+  def accept(conn, %{"id" => todo_id}) do
+    user_id = conn.assigns.current_user_id
+    respond(conn, Todos.accept_from_triage(user_id, todo_id, actor_opts(user_id)), "accept")
+  end
+
   def done(conn, %{"id" => todo_id}) do
     user_id = conn.assigns.current_user_id
 

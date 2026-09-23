@@ -322,6 +322,7 @@ defmodule MaraithonWeb.Router do
     post "/todos", CompanionTodoController, :create
     get "/people/network", PeopleNetworkController, :index
     get "/people/network/:node_id", PeopleNetworkController, :show
+    post "/todos/:id/actions/accept", CompanionTodoController, :accept
     post "/todos/:id/actions/done", CompanionTodoController, :done
     post "/todos/:id/actions/dismiss", CompanionTodoController, :dismiss
     post "/todos/:id/actions/see_less", CompanionTodoController, :see_less

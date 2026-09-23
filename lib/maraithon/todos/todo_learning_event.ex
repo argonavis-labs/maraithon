@@ -11,7 +11,7 @@ defmodule Maraithon.Todos.TodoLearningEvent do
   @foreign_key_type :binary_id
 
   @outcomes ~w(bad weak_bad ok great)
-  @resolution_statuses ~w(done dismissed)
+  @resolution_statuses ~w(accepted done dismissed)
   @statuses ~w(pending processing processed failed)
 
   schema "todo_learning_events" do

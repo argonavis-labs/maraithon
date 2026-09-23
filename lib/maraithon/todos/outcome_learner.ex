@@ -87,7 +87,9 @@ defmodule Maraithon.Todos.OutcomeLearner do
     This is model-level semantic learning, not keyword or sender heuristics.
 
     Outcome meaning:
-    - great: the user opened the detail and then completed it. Strong positive evidence.
+    - great: resolution_status accepted means the user explicitly added a Triage suggestion
+      to Todos. This is strong positive relevance, not completion. Otherwise the user
+      opened the detail and then completed it. Strong positive evidence.
     - ok: the user completed it from a list without opening detail. Moderate positive evidence.
     - weak_bad: the user opened the detail and then dismissed it. Moderate negative evidence.
     - bad: the user explicitly chose Ignore / see less, or dismissed it without

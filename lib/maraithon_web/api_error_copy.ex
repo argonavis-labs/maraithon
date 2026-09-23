@@ -31,6 +31,17 @@ defmodule MaraithonWeb.ApiErrorCopy do
     }
   end
 
+  def mobile(:accept_todo_first) do
+    %{error: "accept_todo_first", message: "Add this suggestion to Todos before working on it."}
+  end
+
+  def mobile(:todo_no_longer_in_triage) do
+    %{
+      error: "todo_no_longer_in_triage",
+      message: "This suggestion has already been reviewed. Refresh Triage."
+    }
+  end
+
   def mobile(:unsupported_todo_action) do
     %{
       error: "unsupported_todo_action",

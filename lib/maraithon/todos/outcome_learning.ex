@@ -15,7 +15,7 @@ defmodule Maraithon.Todos.OutcomeLearning do
   @job_type "runtime_partition:todo_outcome_learning"
   @queue "runtime_model_user"
   @terminal_statuses ~w(done dismissed)
-  @open_statuses ~w(open snoozed)
+  @open_statuses ~w(triage open snoozed)
   @max_recovery_attempts 25
 
   def job_type, do: @job_type
@@ -46,7 +46,11 @@ defmodule Maraithon.Todos.OutcomeLearning do
         todo_id: updated.id,
         outcome: outcome,
         signal_strength: strength,
-        resolution_status: updated.status,
+        resolution_status:
+          if(Keyword.get(opts, :relevance_feedback) == :accepted,
+            do: "accepted",
+            else: updated.status
+          ),
         opened_before_resolution: not is_nil(previous.first_user_opened_at),
         surface: surface,
         status: "pending"
@@ -112,10 +116,14 @@ defmodule Maraithon.Todos.OutcomeLearning do
   defp eligible_transition?(%Todo{} = previous, %Todo{} = updated, opts) do
     # Implicit outcomes train only on model suggestions. Explicit Ignore can
     # teach a preference even when an older todo lacks model provenance.
-    previous.status in @open_statuses and updated.status in @terminal_statuses and
+    accepted? =
+      previous.status == "triage" and updated.status == "open" and
+        Keyword.get(opts, :relevance_feedback) == :accepted
+
+    previous.status in @open_statuses and (updated.status in @terminal_statuses or accepted?) and
       user_actor?(opts) and
       (not is_nil(previous.model_selected_at) or
-         Keyword.get(opts, :relevance_feedback) == :see_less) and
+         Keyword.get(opts, :relevance_feedback) in [:see_less, :accepted]) and
       Keyword.get(opts, :skip_outcome_learning?, false) != true
   end
 
@@ -124,6 +132,7 @@ defmodule Maraithon.Todos.OutcomeLearning do
   end
 
   # Explicit rejection remains strong even when the user inspected the task.
+  defp classify("open", _opened?, :accepted), do: {"great", 1.0}
   defp classify("dismissed", _opened?, :see_less), do: {"bad", -1.0}
   defp classify("dismissed", false, _feedback), do: {"bad", -1.0}
   defp classify("dismissed", true, _feedback), do: {"weak_bad", -0.5}
