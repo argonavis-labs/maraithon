@@ -130,3 +130,38 @@ This capture boundary covers the shared todo intelligence admission pipeline,
 including direct account discovery and Chief of Staff candidates. It doesn't
 invent evidence for source items that were never acquired or candidates
 filtered before reaching that pipeline.
+
+## Historical backfill
+
+`Maraithon.Todos.TrainingBackfill` imports retained completed discovery handoffs,
+saved todos, and activity history without calling a model or changing a todo.
+Run it for one authenticated user's ID through a maintenance Cloud Run job.
+Use an explicit cutoff before live capture began. `history/2` imports todos
+and feedback; `jobs/3` imports a bounded page of historical jobs. Follow its
+`next_cursor` until `complete` is true. Deterministic IDs and source keys let
+an interrupted import resume without duplicating labels.
+
+Every imported row has `origin: "backfill"`. `occurred_at` is the original
+event time; `inserted_at` is when we imported it. Existing live rows without
+an explicit event time export their insertion time. Backfills never become
+the latest live suggestion or trigger the current preference learner.
+
+Historical handoffs preserve their recorded source bundle and decision
+manifest. Candidate projections use the current projection code, so they are
+marked `historical_source_handoff` and carry a projection version. The original
+prompt, model identity, and preference context are unavailable when they were
+not recorded. Missing per-candidate decisions stay `unresolved`.
+
+A `historical_todo_snapshot` captures the todo as it exists at import time.
+Its title, notes, status, or evidence may have changed since the original
+decision. Never use that snapshot as proof of what the classifier knew then.
+Activity records preserve the title and source recorded at the time of the
+action, even when the original todo no longer exists. Their missing context
+is explicit in the payload.
+
+Completion activity and its learning event are joined into one label rather
+than counted twice. An old `bad` learning outcome isn't enough to infer Ignore;
+only retained explicit feedback can establish that label. Failed jobs aren't
+treated as completed decisions. Repeated source jobs remain separate historical
+observations; use their source evidence hashes and group keys to deduplicate
+training examples and prevent frequently rescanned sources from dominating.

@@ -33,6 +33,7 @@ defmodule Maraithon.Todos.TrainingDataset do
     run =
       Repo.insert!(%TrainingRun{
         user_id: user_id,
+        occurred_at: DateTime.utc_now(),
         candidate_count: length(candidates),
         payload: payload,
         payload_hash: digest(payload)
@@ -86,6 +87,7 @@ defmodule Maraithon.Todos.TrainingDataset do
 
       Repo.insert!(%TrainingExample{
         user_id: run.user_id,
+        occurred_at: now,
         run_id: run.id,
         todo_id: todo && todo.id,
         candidate_index: index,
@@ -234,6 +236,7 @@ defmodule Maraithon.Todos.TrainingDataset do
     Repo.insert!(
       %TrainingFeedback{
         user_id: todo.user_id,
+        occurred_at: DateTime.utc_now(),
         todo_id: todo.id,
         example_id: example && example.id,
         learning_event_id: Keyword.get(opts, :learning_event_id),
@@ -254,7 +257,7 @@ defmodule Maraithon.Todos.TrainingDataset do
   defp latest_example(user_id, todo_id) do
     Repo.one(
       from e in TrainingExample,
-        where: e.user_id == ^user_id and e.todo_id == ^todo_id,
+        where: e.user_id == ^user_id and e.todo_id == ^todo_id and e.origin == "live",
         order_by: [desc: e.inserted_at, desc: e.id],
         limit: 1
     )
@@ -318,6 +321,7 @@ defmodule Maraithon.Todos.TrainingDataset do
 
       row = %TrainingFeedback{
         user_id: user_id,
+        occurred_at: DateTime.utc_now(),
         example_id: example.id,
         todo_id: example.todo_id,
         event: "review_#{verdict}",
@@ -427,7 +431,10 @@ defmodule Maraithon.Todos.TrainingDataset do
       |> Map.drop([:__meta__, :payload_hash, :result_hash, :payload, :result])
       |> json_value()
 
-    base = Map.put(base, "payload", payload)
+    base =
+      base
+      |> Map.put("payload", payload)
+      |> Map.put("occurred_at", row.occurred_at || row.inserted_at)
 
     case row do
       %TrainingRun{result: result, result_hash: hash} when not is_nil(result) ->
@@ -541,7 +548,8 @@ defmodule Maraithon.Todos.TrainingDataset do
 
   def snapshot(todo), do: todo |> Map.take(@snapshot_fields) |> json_value()
 
-  defp group_key(user_id, candidate) do
+  @doc false
+  def group_key(user_id, candidate) do
     metadata = Map.get(candidate, "metadata") || %{}
     source_record = Map.get(metadata, "source_record") || %{}
     # Prefer conversation identity over individual messages. Export consumers
@@ -563,7 +571,8 @@ defmodule Maraithon.Todos.TrainingDataset do
     ])
   end
 
-  defp pack(value) do
+  @doc false
+  def pack(value) do
     value = json_value(value)
     encoded = Jason.encode!(value)
 
@@ -576,7 +585,8 @@ defmodule Maraithon.Todos.TrainingDataset do
       }
   end
 
-  defp digest(value),
+  @doc false
+  def digest(value),
     do:
       :crypto.hash(:sha256, Maraithon.AssistantHarness.PromptStability.encode!(json_value(value)))
       |> Base.encode16(case: :lower)

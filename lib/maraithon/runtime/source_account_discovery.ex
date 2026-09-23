@@ -693,6 +693,16 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
+  @doc "Projects retained source inputs for historical export without rerunning the model."
+  def historical_candidates(%ConnectedAccount{} = account, payload) when is_map(payload) do
+    with :ok <- validate_ownership(account, nil),
+         :ok <- validate_payload_identity(account, nil, Map.delete(payload, "agent_id")),
+         {:ok, bundle} <- fetch_map(payload, "source_bundle"),
+         {:ok, bundle} <- restore_partition_bundle(bundle) do
+      {:ok, todo_candidates(account, bundle)}
+    end
+  end
+
   defp maybe_put_llm_complete(intelligence_opts, opts) do
     case Keyword.get(opts, :llm_complete) do
       fun when is_function(fun, 1) -> Keyword.put(intelligence_opts, :llm_complete, fun)
@@ -2021,7 +2031,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp validate_ownership(%ConnectedAccount{user_id: user_id} = account, %Agent{user_id: user_id}),
-    do: validate_user_account(account)
+       do: validate_user_account(account)
 
   defp validate_ownership(%ConnectedAccount{} = account, nil), do: validate_user_account(account)
   defp validate_ownership(_account, _agent), do: {:error, :source_discovery_user_mismatch}

@@ -4,6 +4,8 @@ defmodule Maraithon.Todos.TrainingFeedback do
   @primary_key {:id, :binary_id, autogenerate: true}
   schema "todo_training_feedback" do
     field :user_id, :string
+    field :origin, :string, default: "live"
+    field :occurred_at, :utc_datetime_usec
     field :todo_id, :binary_id
     field :example_id, :binary_id
     field :learning_event_id, :binary_id
@@ -12,7 +14,7 @@ defmodule Maraithon.Todos.TrainingFeedback do
     field :label, :string
     field :strength, :string
     field :dedupe_key, :string
-    field :payload, Maraithon.Encrypted.Map
+    field :payload, Maraithon.Encrypted.Map, redact: true
     field :payload_hash, :string
     field :inserted_at, :utc_datetime_usec
   end
