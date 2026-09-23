@@ -4,8 +4,8 @@ defmodule MaraithonWeb.CompanionTodoController do
 
   Reads are served by `MobileTodoController` so the Mac and iPhone share one
   stable JSON contract. This controller exposes manual creation, completion,
-  dismissal, and reopening. The authenticated device determines the user;
-  request data can never select an account.
+  dismissal, relevance feedback, and reopening. The authenticated device determines
+  the user; request data can never select an account.
   """
 
   use MaraithonWeb, :controller
@@ -87,6 +87,18 @@ defmodule MaraithonWeb.CompanionTodoController do
       end
 
     respond(conn, result, "dismiss")
+  end
+
+  def see_less(conn, %{"id" => todo_id}) do
+    user_id = conn.assigns.current_user_id
+
+    result =
+      case Todos.see_less_like(user_id, todo_id, actor_opts(user_id)) do
+        {:ok, %{todo: todo}} -> {:ok, todo}
+        {:error, reason} -> {:error, reason}
+      end
+
+    respond(conn, result, "see_less")
   end
 
   defp respond(conn, {:ok, todo}, action) do

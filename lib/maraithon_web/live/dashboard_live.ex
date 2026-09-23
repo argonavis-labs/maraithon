@@ -617,7 +617,11 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_event("review_mark_important", %{"id" => todo_id}, socket) do
-    case Todos.mark_important(current_user_id(socket), todo_id, source: "dashboard_review") do
+    case Todos.mark_important(current_user_id(socket), todo_id,
+           source: "dashboard_review",
+           actor_type: "user",
+           actor_id: current_user_id(socket)
+         ) do
       {:ok, _todo} ->
         {:noreply,
          socket

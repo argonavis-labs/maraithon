@@ -379,7 +379,14 @@ defmodule Maraithon.Todos do
           end)
 
         Maraithon.Todos.Consolidation.apply!(user_id, Keyword.get(opts, :consolidations, []))
-        Enum.map(todos, &(Repo.reload!(&1) |> Maraithon.Todos.Consolidation.canonical()))
+        todos = Enum.map(todos, &(Repo.reload!(&1) |> Maraithon.Todos.Consolidation.canonical()))
+
+        Maraithon.Todos.TrainingDataset.capture_decisions!(
+          Keyword.get(opts, :training_capture),
+          todos
+        )
+
+        todos
       end
     )
     |> case do
@@ -535,13 +542,14 @@ defmodule Maraithon.Todos do
     source = Keyword.get(opts, :source)
 
     Repo.transaction(fn ->
-      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+      with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
            {:ok, updated} <-
              todo
              |> Todo.changeset(%{
                metadata: put_feedback(todo.metadata || %{}, feedback, source)
              })
              |> Repo.update() do
+        Maraithon.Todos.TrainingDataset.record_feedback!(todo, updated, feedback, opts)
         updated
       else
         nil -> Repo.rollback(:not_found)
@@ -575,7 +583,7 @@ defmodule Maraithon.Todos do
            "dismissed",
            see_less_resolution_note(source),
            put_see_less_queued_feedback(%{}, source),
-           Keyword.put(opts, :source, source)
+           opts |> Keyword.put(:source, source) |> Keyword.put(:relevance_feedback, :see_less)
          ) do
       {:ok, dismissed} ->
         {:ok, %{todo: dismissed, memory: nil, training: %{"queued" => true}}}
@@ -1626,7 +1634,7 @@ defmodule Maraithon.Todos do
 
     case existing_todo_for_upsert(user_id, normalized_attrs) do
       {%Todo{} = todo, matched_attrs} ->
-        update_upserted_todo(todo, matched_attrs, attrs)
+        update_upserted_todo(todo, matched_attrs, attrs, opts)
 
       nil ->
         case insert_upserted_todo(normalized_attrs, opts) do
@@ -1638,7 +1646,7 @@ defmodule Maraithon.Todos do
             if dedupe_key_conflict?(changeset) do
               case existing_todo_for_upsert(user_id, normalized_attrs) do
                 {%Todo{} = todo, matched_attrs} ->
-                  update_upserted_todo(todo, matched_attrs, attrs)
+                  update_upserted_todo(todo, matched_attrs, attrs, opts)
 
                 nil ->
                   error
@@ -1662,10 +1670,12 @@ defmodule Maraithon.Todos do
     end
   end
 
-  defp update_upserted_todo(%Todo{} = todo, matched_attrs, attrs) do
-    todo
-    |> Todo.changeset(merge_upsert_attrs(todo, matched_attrs, attrs))
-    |> Repo.update()
+  defp update_upserted_todo(%Todo{} = todo, matched_attrs, attrs, opts) do
+    with {:ok, updated} <-
+           todo |> Todo.changeset(merge_upsert_attrs(todo, matched_attrs, attrs)) |> Repo.update() do
+      Maraithon.Todos.TrainingDataset.record_change!(todo, updated, opts)
+      {:ok, updated}
+    end
   end
 
   defp insert_upserted_todo(normalized_attrs, opts) do
@@ -1820,6 +1830,8 @@ defmodule Maraithon.Todos do
   end
 
   defp maybe_record_status_activity(previous, %Todo{} = updated, status, opts) do
+    Maraithon.Todos.TrainingDataset.record_change!(previous, updated, opts)
+
     with {:ok, _} <- maybe_record_workflow_activity(previous, updated, opts) do
       if previous.status == status do
         {:ok, nil}
@@ -1851,6 +1863,7 @@ defmodule Maraithon.Todos do
   defp activity_event_type_for_status(_status), do: nil
 
   defp record_activity_event(%Todo{} = todo, event_type, opts) do
+    if event_type == "created", do: Maraithon.Todos.TrainingDataset.record_created!(todo, opts)
     actor = activity_actor_attrs(opts)
 
     attrs =

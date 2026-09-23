@@ -11,13 +11,14 @@ defmodule Maraithon.Todos.OutcomeLearner do
 
   alias Maraithon.{LLM, Memory, Repo}
   alias Maraithon.Memory.Item
-  alias Maraithon.Todos.{Todo, TodoLearningEvent}
+  alias Maraithon.Todos.{RelevanceMemory, Todo, TodoLearningEvent}
 
   @sentinel "TODO_OUTCOME_LEARNING_JSON_V1"
   @production_validation_surface "production_validation"
   @production_validation_prefix "todo-outcome-validation-"
   @production_validation_suffix "@validation.maraithon.invalid"
   @default_max_tokens 4_000
+  @max_retry_tokens 32_000
   @default_timeout_ms 120_000
   @memory_limit 24
   @valid_actions ~w(upsert retire noop)
@@ -37,8 +38,8 @@ defmodule Maraithon.Todos.OutcomeLearner do
   def learn(event, opts \\ [])
 
   def learn(%TodoLearningEvent{} = event, opts) do
-    with %Todo{} = todo <- Repo.get_by(Todo, id: event.todo_id, user_id: event.user_id),
-         memories <- learning_memories(event.user_id),
+    with %Todo{} = todo <- Maraithon.Todos.TrainingDataset.learning_todo(event),
+         memories <- learning_memories(event.user_id, todo),
          prompt <- build_prompt(event, todo, memories),
          llm_complete when is_function(llm_complete, 1) <- llm_complete(event, todo, opts),
          {:ok, response} <- llm_complete.(prompt),
@@ -55,13 +56,13 @@ defmodule Maraithon.Todos.OutcomeLearner do
 
   def learn(_event, _opts), do: {:error, :invalid_todo_learning_event}
 
-  defp learning_memories(user_id) do
-    Memory.list_items(user_id,
-      kind: "relevance_feedback",
-      tag: "todo_relevance",
-      status: "active",
-      limit: @memory_limit
-    )
+  defp learning_memories(user_id, todo) do
+    query =
+      [todo.title, todo.summary, todo.next_action, todo.notes]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.join(" ")
+
+    RelevanceMemory.recall(user_id, query, limit: @memory_limit)
   end
 
   defp build_prompt(event, todo, memories) do
@@ -89,7 +90,9 @@ defmodule Maraithon.Todos.OutcomeLearner do
     - great: the user opened the detail and then completed it. Strong positive evidence.
     - ok: the user completed it from a list without opening detail. Moderate positive evidence.
     - weak_bad: the user opened the detail and then dismissed it. Moderate negative evidence.
-    - bad: the user dismissed it without opening detail. Strong negative evidence.
+    - bad: the user explicitly chose Ignore / see less, or dismissed it without
+      opening detail. Strong negative evidence. Opening detail does not weaken
+      an explicit request to see fewer similar todos.
 
     Compare the todo with every active pattern. Use action `upsert` to create,
     strengthen, weaken, or merge a semantic pattern. Use `retire` when evidence
@@ -146,8 +149,16 @@ defmodule Maraithon.Todos.OutcomeLearner do
     if production_validation_source?(event, todo) do
       &production_validation_complete/1
     else
+      # A truncated response needs more output room on the next durable attempt,
+      # not another identical request. Keep one model call per queue attempt.
+      opts = Keyword.put_new(opts, :max_tokens, attempt_token_budget(event.attempts))
       Keyword.get(opts, :llm_complete) || configured_llm_complete(opts)
     end
+  end
+
+  defp attempt_token_budget(attempts) do
+    exponent = attempts |> max(1) |> min(4) |> Kernel.-(1)
+    min(@default_max_tokens * Integer.pow(2, exponent), @max_retry_tokens)
   end
 
   defp production_validation_source?(event, todo) do

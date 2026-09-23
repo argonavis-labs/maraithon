@@ -286,7 +286,12 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     |> case do
       :apply_feedback ->
         with {:ok, updated} <-
-               Todos.record_feedback(todo.user_id, todo.id, feedback, source: "telegram") do
+               Todos.record_feedback(
+                 todo.user_id,
+                 todo.id,
+                 feedback,
+                 Keyword.put(todo_actor_opts(todo.user_id), :source, "telegram")
+               ) do
           {:ok, {:todo_updated, updated}}
         end
 
@@ -324,15 +329,23 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       |> DateTime.truncate(:second)
 
     with {:ok, todo} <-
-           Todos.snooze(user_id, todo_id, snoozed_until,
-             note: "Snoozed from Telegram work item message."
+           Todos.snooze(
+             user_id,
+             todo_id,
+             snoozed_until,
+             todo_action_opts(user_id, "Snoozed from Telegram work item message.")
            ) do
       {:ok, {:todo_updated, todo}}
     end
   end
 
   defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "important") do
-    with {:ok, todo} <- Todos.mark_important(user_id, todo_id, source: "telegram") do
+    with {:ok, todo} <-
+           Todos.mark_important(
+             user_id,
+             todo_id,
+             Keyword.put(todo_actor_opts(user_id), :source, "telegram")
+           ) do
       {:ok, {:todo_updated, todo}}
     end
   end

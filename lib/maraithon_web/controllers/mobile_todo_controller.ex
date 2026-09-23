@@ -24,7 +24,10 @@ defmodule MaraithonWeb.MobileTodoController do
     # 304 never runs it.
     account_categories = Maraithon.AccountCategories.index(user_id)
     delegation_version = Maraithon.Delegations.collection_version(user_id)
-    prefix = "todos-#{Maraithon.Delegations.Scope.hash({account_categories, params, delegation_version, Maraithon.Delegations.Gates.enabled?(user_id), Application.get_env(:maraithon, :delegation_sends_enabled, %{})})}"
+
+    prefix =
+      "todos-#{Maraithon.Delegations.Scope.hash({account_categories, params, delegation_version, Maraithon.Delegations.Gates.enabled?(user_id), Application.get_env(:maraithon, :delegation_sends_enabled, %{})})}"
+
     etag = MobileConditional.collection_etag(prefix, Todos.collection_version(user_id))
 
     MobileConditional.with_collection_etag(conn, etag, fn conn ->
@@ -58,7 +61,10 @@ defmodule MaraithonWeb.MobileTodoController do
         |> Keyword.put(:account_categories, account_categories)
         |> Keyword.put(:open_cards_only, truthy?(Map.get(params, "open_cards_only")))
         |> Keyword.put(:related_people_by_todo_id, related_people_by_todo_id)
-        |> Keyword.put(:delegations_by_todo_id, Maraithon.Delegations.for_todos(user_id, Enum.map(todos, & &1.id)))
+        |> Keyword.put(
+          :delegations_by_todo_id,
+          Maraithon.Delegations.for_todos(user_id, Enum.map(todos, & &1.id))
+        )
 
       json(conn, %{
         todos: Enum.map(todos, &MobileJSON.todo(&1, json_opts)),
@@ -293,13 +299,18 @@ defmodule MaraithonWeb.MobileTodoController do
         Todos.dismiss(user_id, todo_id, note_opts)
 
       "important" ->
-        Todos.mark_important(user_id, todo_id, source: "mobile")
+        Todos.mark_important(user_id, todo_id, Keyword.put(actor_opts, :source, "mobile"))
 
       feedback when feedback in ~w(helpful not_helpful) ->
-        Todos.record_feedback(user_id, todo_id, feedback, source: "mobile")
+        Todos.record_feedback(
+          user_id,
+          todo_id,
+          feedback,
+          Keyword.put(actor_opts, :source, "mobile")
+        )
 
       "snooze" ->
-        Todos.snooze(user_id, todo_id, snooze_until(params), note: note)
+        Todos.snooze(user_id, todo_id, snooze_until(params), note_opts)
 
       "see_less" ->
         case Todos.see_less_like(user_id, todo_id, Keyword.put(actor_opts, :source, "mobile")) do

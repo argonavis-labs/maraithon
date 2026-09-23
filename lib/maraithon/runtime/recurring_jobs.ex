@@ -112,6 +112,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
         :staleness_triage_sweep_initial_delay_ms
       ),
       wall_clock_spec("dogfood_digest"),
+      interval_spec("todo_training_health", :timer.hours(24), :timer.minutes(2)),
       interval_spec(
         "todo_outcome_learning_recovery",
         Config.positive_integer(:todo_outcome_learning_recovery_interval_ms, :timer.minutes(5)),
@@ -367,6 +368,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
   defp run_cycle("assistant_run_recovery"), do: RunRecovery.run_once()
   defp run_cycle("telegram_run_reaper"), do: RunReaper.run_once()
   defp run_cycle("todo_outcome_learning_recovery"), do: OutcomeLearning.recover_pending()
+  defp run_cycle("todo_training_health"), do: Maraithon.Todos.TrainingDataset.daily_health()
   defp run_cycle("privacy_erasure_discovery"), do: PrivacyErasure.discover_missing_jobs(50)
   defp run_cycle("privacy_retention"), do: PrivacyRetention.run_cycle()
   defp run_cycle("people_network_discovery"), do: Maraithon.PeopleNetwork.discover()

@@ -167,6 +167,9 @@ defmodule MaraithonWeb.Router do
   scope "/api", MaraithonWeb do
     pipe_through [:web_api, :require_authenticated_user]
 
+    get "/todo-training/health", TodoTrainingController, :health
+    get "/todo-training/export/:kind", TodoTrainingController, :export
+    post "/todo-training/examples/:id/review", TodoTrainingController, :review
     post "/account-erasure", MobileAccountErasureController, :create
     get "/account-erasure", MobileAccountErasureController, :show
   end
@@ -321,6 +324,7 @@ defmodule MaraithonWeb.Router do
     get "/people/network/:node_id", PeopleNetworkController, :show
     post "/todos/:id/actions/done", CompanionTodoController, :done
     post "/todos/:id/actions/dismiss", CompanionTodoController, :dismiss
+    post "/todos/:id/actions/see_less", CompanionTodoController, :see_less
     post "/todos/:id/actions/reopen", CompanionTodoController, :reopen
     post "/todos/:id/opened", MobileTodoController, :opened
     post "/todos/:id/reply", MobileTodoController, :reply

@@ -211,7 +211,12 @@ defmodule Maraithon.AssistantChat.DirectIntent do
       ) do
     attrs = todo_attrs(conversation, run, user_turn, title)
 
-    with {:ok, [todo]} <- Todos.upsert_many(conversation.user_id, [attrs]),
+    with {:ok, [todo]} <-
+           Todos.upsert_many(conversation.user_id, [attrs],
+             actor_type: "user",
+             actor_id: conversation.user_id,
+             source: "chat_direct_intent"
+           ),
          {:ok, _conversation, _turn, _delivery} <-
            MobileDelivery.deliver_turn(
              conversation,

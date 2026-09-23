@@ -16,8 +16,10 @@ defmodule Maraithon.Todos.Intelligence do
     Consolidation,
     IntakeSnapshot,
     PersonalInvolvement,
+    RelevanceMemory,
     SignalGate,
     SurfaceQuality,
+    TrainingDataset,
     UserFacingCopy
   }
 
@@ -118,16 +120,17 @@ defmodule Maraithon.Todos.Intelligence do
            {:ok, prompt, admitted_existing} <-
              build_prompt(user_id, candidates, existing, opts, shared_seed, required_ids),
            llm_complete when is_function(llm_complete, 1) <- llm_complete(opts),
-           {:ok, decisions, summary, usage, model_calls} <-
-             complete_decisions(
+           {:ok, result} <-
+             capture_and_apply(
+               user_id,
                llm_complete,
                prompt,
                candidates,
                admitted_existing,
-               opts
-             ),
-           {:ok, result} <- apply_decisions(user_id, decisions, summary, snapshot) do
-        {:ok, result |> Map.put(:usage, usage) |> Map.put(:model_calls, model_calls)}
+               opts,
+               snapshot
+             ) do
+        {:ok, result}
       else
         {:error, :todo_intelligence_existing_work_did_not_fit} when length(candidates) > 1 ->
           ingest_smaller_batches(user_id, candidates, opts)
@@ -359,7 +362,7 @@ defmodule Maraithon.Todos.Intelligence do
         "existing_people" =>
           Crm.summarize_for_prompt(user_id, Keyword.get(opts, :people_limit, 24)),
         "memory_context" => safe_memory_context(user_id, candidates, opts),
-        "todo_relevance_memories" => todo_relevance_memories(user_id, opts),
+        "todo_relevance_memories" => todo_relevance_memories(user_id, candidates, opts),
         "candidate_todos" => candidates
       })
 
@@ -1251,20 +1254,7 @@ defmodule Maraithon.Todos.Intelligence do
   defp put_bounded_prompt_field(acc, _source, _key, _field_max_bytes, _max_bytes), do: acc
 
   defp safe_memory_context(user_id, candidates, opts) do
-    query =
-      Keyword.get(opts, :memory_query) ||
-        candidates
-        |> Enum.flat_map(fn candidate ->
-          [
-            read_string(candidate, "title", nil),
-            read_string(candidate, "summary", nil),
-            read_string(candidate, "notes", nil),
-            candidate |> read_map("metadata") |> read_string("body_excerpt", nil)
-          ]
-        end)
-        |> Enum.reject(&is_nil/1)
-        |> Enum.take(12)
-        |> Enum.join(" ")
+    query = memory_query(candidates, opts)
 
     Memory.prompt_context(user_id, query: query, limit: Keyword.get(opts, :memory_limit, 8))
   rescue
@@ -1273,14 +1263,25 @@ defmodule Maraithon.Todos.Intelligence do
     _kind, _reason -> %{}
   end
 
-  defp todo_relevance_memories(user_id, opts) do
-    limit = Keyword.get(opts, :todo_relevance_memory_limit, 12)
+  defp memory_query(candidates, opts) do
+    Keyword.get(opts, :memory_query) ||
+      candidates
+      |> Enum.flat_map(fn candidate ->
+        [
+          read_string(candidate, "title", nil),
+          read_string(candidate, "summary", nil),
+          read_string(candidate, "notes", nil),
+          candidate |> read_map("metadata") |> read_string("body_excerpt", nil)
+        ]
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.take(12)
+      |> Enum.join(" ")
+  end
 
-    Memory.list_items(user_id,
-      kind: "relevance_feedback",
-      tag: "todo_relevance",
-      status: "active",
-      limit: limit
+  defp todo_relevance_memories(user_id, candidates, opts) do
+    RelevanceMemory.recall(user_id, memory_query(candidates, opts),
+      limit: Keyword.get(opts, :todo_relevance_memory_limit, 24)
     )
     |> Enum.filter(&(&1.polarity in ["positive", "negative", "neutral"]))
     |> Enum.map(&Memory.serialize_item/1)
@@ -1338,6 +1339,22 @@ defmodule Maraithon.Todos.Intelligence do
     )
   end
 
+  defp capture_and_apply(user_id, llm, prompt, candidates, existing, opts, snapshot) do
+    TrainingDataset.with_run(user_id, prompt, candidates, request_params(prompt, opts), fn run ->
+      with {:ok, decisions, summary, usage, model_calls, provenance} <-
+             complete_decisions(llm, prompt, candidates, existing, opts),
+           capture = %{
+             run: run,
+             candidates: candidates,
+             decisions: decisions,
+             provenance: provenance
+           },
+           {:ok, result} <- apply_decisions(user_id, decisions, summary, snapshot, capture) do
+        {:ok, result |> Map.put(:usage, usage) |> Map.put(:model_calls, model_calls)}
+      end
+    end)
+  end
+
   defp do_complete_decisions(
          llm_complete,
          prompt,
@@ -1350,7 +1367,19 @@ defmodule Maraithon.Todos.Intelligence do
     with {:ok, response} <- llm_complete.(prompt),
          {:ok, decoded} <- decode_response(response),
          {:ok, decisions, summary} <- normalize_response(decoded, candidates, existing, opts) do
-      {:ok, decisions, summary, response_usage(response), attempt}
+      provenance = %{
+        prompt: prompt,
+        raw_decisions: decoded,
+        usage: response_usage(response),
+        attempts: attempt,
+        response_metadata:
+          if(is_map(response),
+            do: Map.take(response, [:model, :provider, :id, "model", "provider", "id"]),
+            else: %{}
+          )
+      }
+
+      {:ok, decisions, summary, response_usage(response), attempt, provenance}
     else
       {:error, reason} = error ->
         if exact_decision_repairable?(reason, opts) and attempt < attempt_limit do
@@ -1966,7 +1995,7 @@ defmodule Maraithon.Todos.Intelligence do
     end
   end
 
-  defp apply_decisions(user_id, decisions, summary, snapshot) do
+  defp apply_decisions(user_id, decisions, summary, snapshot, capture) do
     attrs_list =
       decisions
       |> Enum.filter(&(&1.action in @persist_actions))
@@ -1992,6 +2021,7 @@ defmodule Maraithon.Todos.Intelligence do
     persisted_result =
       Todos.upsert_many(user_id, attrs_list,
         model_selected?: true,
+        training_capture: capture,
         expected_intake_snapshot: snapshot,
         consolidations: consolidations
       )

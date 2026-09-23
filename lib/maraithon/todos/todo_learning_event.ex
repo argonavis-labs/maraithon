@@ -1,6 +1,7 @@
 defmodule Maraithon.Todos.TodoLearningEvent do
   @moduledoc """
-  Durable outbox record for one human resolution of a model-selected todo.
+  Durable outbox record for explicit relevance feedback or a human resolution
+  of a model-selected todo.
   """
 
   use Ecto.Schema

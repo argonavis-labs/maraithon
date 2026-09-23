@@ -7,8 +7,54 @@ defmodule Maraithon.VaultCiphertextRegistry do
   """
 
   @extra [
-    %{module: Maraithon.TodoBrowser.Command, table: "todo_browser_commands", field: :payload, column: "payload", type: :map, max_bytes: 65_536},
-    %{module: Maraithon.TodoBrowser.Command, table: "todo_browser_commands", field: :result, column: "result", type: :map, max_bytes: 131_072},
+    %{
+      module: Maraithon.Todos.TrainingRun,
+      table: "todo_training_runs",
+      field: :payload,
+      column: "payload",
+      type: :map,
+      max_bytes: 2_000_000
+    },
+    %{
+      module: Maraithon.Todos.TrainingRun,
+      table: "todo_training_runs",
+      field: :result,
+      column: "result",
+      type: :map,
+      max_bytes: 2_000_000
+    },
+    %{
+      module: Maraithon.Todos.TrainingExample,
+      table: "todo_training_examples",
+      field: :payload,
+      column: "payload",
+      type: :map,
+      max_bytes: 2_000_000
+    },
+    %{
+      module: Maraithon.Todos.TrainingFeedback,
+      table: "todo_training_feedback",
+      field: :payload,
+      column: "payload",
+      type: :map,
+      max_bytes: 2_000_000
+    },
+    %{
+      module: Maraithon.TodoBrowser.Command,
+      table: "todo_browser_commands",
+      field: :payload,
+      column: "payload",
+      type: :map,
+      max_bytes: 65_536
+    },
+    %{
+      module: Maraithon.TodoBrowser.Command,
+      table: "todo_browser_commands",
+      field: :result,
+      column: "result",
+      type: :map,
+      max_bytes: 131_072
+    },
     %{
       module: Maraithon.Accounts.ConnectedAccount,
       table: "connected_accounts",

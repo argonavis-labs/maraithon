@@ -24,26 +24,7 @@ defmodule Maraithon.Todos.OutcomeLearning do
 
   def record_user_opened(user_id, todo_id, opts)
       when is_binary(user_id) and is_binary(todo_id) and is_list(opts) do
-    if user_actor?(opts) do
-      now = Keyword.get(opts, :now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
-
-      Todo
-      |> where([todo], todo.id == ^todo_id and todo.user_id == ^user_id)
-      |> where([todo], todo.status in ^@open_statuses and is_nil(todo.first_user_opened_at))
-      |> Repo.update_all(set: [first_user_opened_at: now])
-      |> case do
-        {1, _rows} ->
-          :ok
-
-        {0, _rows} ->
-          if(Repo.get_by(Todo, id: todo_id, user_id: user_id),
-            do: :ok,
-            else: {:error, :not_found}
-          )
-      end
-    else
-      :ok
-    end
+    Maraithon.Todos.TrainingDataset.record_opened(user_id, todo_id, opts)
   end
 
   def record_user_opened(_user_id, _todo_id, _opts), do: {:error, :not_found}
@@ -51,7 +32,13 @@ defmodule Maraithon.Todos.OutcomeLearning do
   @doc false
   def maybe_enqueue(%Todo{} = previous, %Todo{} = updated, opts) when is_list(opts) do
     if eligible_transition?(previous, updated, opts) do
-      {outcome, strength} = classify(updated.status, not is_nil(previous.first_user_opened_at))
+      {outcome, strength} =
+        classify(
+          updated.status,
+          not is_nil(previous.first_user_opened_at),
+          Keyword.get(opts, :relevance_feedback)
+        )
+
       surface = normalize_surface(Keyword.get(opts, :source) || Keyword.get(opts, :surface))
 
       attrs = %{
@@ -68,6 +55,7 @@ defmodule Maraithon.Todos.OutcomeLearning do
       with {:ok, event} <-
              %TodoLearningEvent{} |> TodoLearningEvent.changeset(attrs) |> Repo.insert(),
            {:ok, _job} <- enqueue_event(event) do
+        Maraithon.Todos.TrainingDataset.freeze_learning_input!(event, previous, updated, opts)
         {:ok, event}
       end
     else
@@ -122,8 +110,12 @@ defmodule Maraithon.Todos.OutcomeLearning do
   def recover_pending(_limit), do: {:error, :invalid_todo_learning_recovery_limit}
 
   defp eligible_transition?(%Todo{} = previous, %Todo{} = updated, opts) do
+    # Implicit outcomes train only on model suggestions. Explicit Ignore can
+    # teach a preference even when an older todo lacks model provenance.
     previous.status in @open_statuses and updated.status in @terminal_statuses and
-      user_actor?(opts) and not is_nil(previous.model_selected_at) and
+      user_actor?(opts) and
+      (not is_nil(previous.model_selected_at) or
+         Keyword.get(opts, :relevance_feedback) == :see_less) and
       Keyword.get(opts, :skip_outcome_learning?, false) != true
   end
 
@@ -131,10 +123,12 @@ defmodule Maraithon.Todos.OutcomeLearning do
     Keyword.get(opts, :actor_type) in [:user, "user"]
   end
 
-  defp classify("dismissed", false), do: {"bad", -1.0}
-  defp classify("dismissed", true), do: {"weak_bad", -0.5}
-  defp classify("done", false), do: {"ok", 0.45}
-  defp classify("done", true), do: {"great", 1.0}
+  # Explicit rejection remains strong even when the user inspected the task.
+  defp classify("dismissed", _opened?, :see_less), do: {"bad", -1.0}
+  defp classify("dismissed", false, _feedback), do: {"bad", -1.0}
+  defp classify("dismissed", true, _feedback), do: {"weak_bad", -0.5}
+  defp classify("done", false, _feedback), do: {"ok", 0.45}
+  defp classify("done", true, _feedback), do: {"great", 1.0}
 
   defp enqueue_event(%TodoLearningEvent{} = event) do
     BackgroundJobs.enqueue(@job_type, %{
