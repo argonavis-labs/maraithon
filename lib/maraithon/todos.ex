@@ -515,6 +515,23 @@ defmodule Maraithon.Todos do
 
   def dismiss(_user_id, _todo_id, _opts), do: {:error, :not_found}
 
+  @doc "Removes obsolete generated work without claiming completion or recording human feedback."
+  def dismiss_if_current(%Todo{} = todo, provenance, opts \\ []) when is_map(provenance) do
+    provenance = Map.put(provenance, "recorded_at", DateTime.to_iso8601(DateTime.utc_now()))
+
+    update_status(
+      todo.user_id,
+      todo.id,
+      "dismissed",
+      Keyword.get(opts, :note),
+      %{"automatic_dismissal" => provenance},
+      opts
+      |> Keyword.put(:expected_todo, todo)
+      |> Keyword.put(:actor_type, "agent")
+      |> Keyword.put(:skip_outcome_learning?, true)
+    )
+  end
+
   def mark_important(user_id, todo_id, opts \\ [])
 
   def mark_important(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
@@ -1677,6 +1694,15 @@ defmodule Maraithon.Todos do
   defp brief_datetime_to_iso(value), do: to_string(value)
 
   defp upsert_one(user_id, attrs, opts) when is_binary(user_id) and is_map(attrs) do
+    if Keyword.get(opts, :actor_type) not in [:user, "user"] and
+         Maraithon.Todos.MeetingRelevance.reason(attrs, opts) != nil do
+      {:error, :ineligible_meeting_todo}
+    else
+      upsert_relevant_todo(user_id, attrs, opts)
+    end
+  end
+
+  defp upsert_relevant_todo(user_id, attrs, opts) do
     normalized_attrs =
       user_id
       |> normalize_attrs(attrs)
@@ -1886,7 +1912,7 @@ defmodule Maraithon.Todos do
   defp validate_status_snapshot(_todo, nil), do: :ok
 
   defp validate_status_snapshot(%Todo{status: status}, %Todo{})
-       when status not in ["open", "snoozed"],
+       when status not in ["triage", "open", "snoozed"],
        do: {:error, :todo_no_longer_open}
 
   defp validate_status_snapshot(%Todo{} = current, %Todo{} = expected),

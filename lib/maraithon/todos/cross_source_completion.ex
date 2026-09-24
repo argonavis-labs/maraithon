@@ -2343,8 +2343,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp render_prompt(todos_json, evidence_json, now, exhaustive?) do
     """
     Evaluate progress toward the workflow outcome, not just the latest next_action.
-    A proposed time, a sent availability reply, a calendar booking, or the clock
-    passing a meeting's end does not prove that a meeting actually happened.
+    For a genuine deliverable or follow-up, a proposed time, a sent availability
+    reply, a calendar booking, or the clock passing a meeting's end does not
+    prove that work was done. Calendar-only attendance reminders are different:
+    they do not belong in Todos and must not be kept alive to prove attendance.
+    Never manufacture a replacement follow-up for an expired invitation.
     When an outcome is achieved, include outcome_confirmed:true alongside the
     completed:true decision and quote the source evidence that proves it.
     When fresh evidence moves the work forward without completing it, return

@@ -59,6 +59,17 @@ defmodule Maraithon.Todos.UserBatch do
     open_todo_user_ids_from_query(base_query(), opts)
   end
 
+  def reviewable_todo_user_ids(opts \\ []) when is_list(opts) do
+    query =
+      from t in Todo,
+        where: t.status in ["triage", "open", "snoozed"],
+        select: t.user_id,
+        distinct: true,
+        order_by: [asc: t.user_id]
+
+    open_todo_user_ids_from_query(query, opts)
+  end
+
   def open_todo_user_ids_without_source_account(opts \\ []) when is_list(opts) do
     query = where(base_query(), [todo], is_nil(todo.source_account_id))
     open_todo_user_ids_from_query(query, opts)

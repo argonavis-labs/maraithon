@@ -1118,6 +1118,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        Skill: #{skill.name}
        Skill path: #{@skill_path}
 
+       #{Maraithon.Todos.MeetingRelevance.prompt_rules()}
+
        Response contract:
        Return only valid JSON with this shape. Return at most 12 todo objects,
        chosen as the highest-stakes source-backed open obligations. Never spend

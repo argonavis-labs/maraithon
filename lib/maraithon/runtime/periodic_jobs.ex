@@ -75,6 +75,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @todo_account_closure_finalize_job "runtime_partition:source_account_closure_finalize"
   @nudge_job "runtime_partition:nudge"
   @critical_todo_push_job "runtime_partition:critical_todo_push"
+  @meeting_relevance_job "runtime_partition:meeting_relevance"
   @staleness_job "runtime_partition:staleness_triage"
   @todo_outcome_job "runtime_partition:todo_outcome_learning"
 
@@ -215,6 +216,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   def schedule("todo_completion_sweep"), do: schedule_todo_completion_partitions()
   def schedule("nudge_sweep"), do: schedule_nudge_users()
   def schedule("critical_todo_push"), do: schedule_critical_todo_pushes()
+  def schedule("meeting_relevance_sweep"), do: schedule_meeting_relevance()
   def schedule("staleness_triage_sweep"), do: schedule_open_todo_users("staleness_triage_sweep")
   def schedule(name), do: {:error, {:unknown_periodic_schedule, name}}
 
@@ -1250,6 +1252,26 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     |> record_cursor_after(cursor_key, users)
   end
 
+  defp schedule_meeting_relevance do
+    cursor_key = "durable_meeting_relevance"
+    users = UserBatch.reviewable_todo_user_ids(after_user_id: UserBatch.load_cursor(cursor_key))
+    now = database_now!()
+
+    enqueue_many(users, fn user_id ->
+      BackgroundJobs.enqueue(@meeting_relevance_job, %{
+        user_id: user_id,
+        queue: @provider_queue,
+        dedupe_key: "meeting-relevance:#{user_id}",
+        partition_key: provider_partition(user_id, "todo_relevance"),
+        max_attempts: 3,
+        scheduled_at: now,
+        payload: %{"user_id" => user_id}
+      })
+    end)
+    |> schedule_summary("meeting_relevance_sweep", length(users))
+    |> record_cursor_after(cursor_key, users)
+  end
+
   defp schedule_critical_todo_pushes do
     if CriticalTodoPush.enabled?() do
       cursor_key = "durable_critical_todo_push"
@@ -1588,6 +1610,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     |> select([job], job.user_id)
     |> limit(1_000)
     |> Repo.all()
+  end
+
+  defp execute_provider(%BackgroundJob{job_type: @meeting_relevance_job, user_id: user_id}) do
+    Maraithon.Todos.MeetingRelevanceSweep.run_for_user(user_id)
   end
 
   defp execute_provider(%BackgroundJob{job_type: @token_job} = job) do

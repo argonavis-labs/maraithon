@@ -509,6 +509,7 @@ defmodule Maraithon.Todos.Intelligence do
          not merely repeat a fact already visible in email, chat, or calendar.
          Never manufacture work by converting "be aware", "monitor", "track",
          "consider", "read", "check out", or "use this code" into a next action.
+       #{Maraithon.Todos.MeetingRelevance.prompt_rules()}
        - Default to skip for routine transactional records and completed states:
          successful payments, receipts, statements, confirmations, renewals,
          shipped/delivered orders, tracking updates, accepted invitations, event
@@ -1617,7 +1618,10 @@ defmodule Maraithon.Todos.Intelligence do
 
     signal_gate_skip_reason =
       if is_map(candidate) and is_map(proposed_todo_attrs) do
-        SignalGate.skip_reason(candidate, proposed_todo_attrs, personal_involvement: involvement)
+        SignalGate.skip_reason(candidate, proposed_todo_attrs,
+          personal_involvement: involvement,
+          now: Keyword.get(opts, :now)
+        )
       end
 
     cond do

@@ -9,7 +9,7 @@ defmodule Maraithon.Todos.SignalGate do
 
   alias Maraithon.Insights.Insight
 
-  @closed_insight_statuses ~w(acknowledged dismissed snoozed)
+  @closed_insight_statuses ~w(acknowledged dismissed)
   @closed_completion_statuses ~w(
     already_done canceled cancelled closed completed declined done hired no_action no_longer_needed
     not_needed rejected replied resolved sent completed_or_closed
@@ -352,6 +352,10 @@ defmodule Maraithon.Todos.SignalGate do
     source_attrs = stringify_keys(candidate)
     attrs = deep_merge(source_attrs, stringify_keys(proposed_attrs))
 
+    meeting_reason =
+      Maraithon.Todos.MeetingRelevance.reason(source_attrs, opts) ||
+        Maraithon.Todos.MeetingRelevance.reason(attrs, opts)
+
     personal_obligation? =
       case Keyword.get(opts, :personal_involvement) do
         {:ok, %{"kind" => kind}} when kind in ["direct", "implicit"] -> true
@@ -359,6 +363,9 @@ defmodule Maraithon.Todos.SignalGate do
       end
 
     cond do
+      meeting_reason != nil ->
+        {:skip, Maraithon.Todos.MeetingRelevance.note(meeting_reason)}
+
       completed_or_closed?(source_attrs) ->
         {:skip,
          "Skipped by executive signal gate: source reconciliation says this loop is already done or closed."}

@@ -103,6 +103,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
         :nudge_sweep_initial_delay_ms
       ),
       interval_spec("critical_todo_push", :timer.minutes(5), :timer.seconds(15)),
+      interval_spec("meeting_relevance_sweep", :timer.minutes(5), :timer.seconds(20)),
       interval_spec("delegation_due_sweep", :timer.minutes(5), :timer.seconds(30)),
       interval_spec("people_network_discovery", :timer.minutes(10), :timer.seconds(30)),
       configured_interval_spec(
