@@ -59,6 +59,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   @evidence_window_days 7
   @min_todo_age_minutes 30
   @min_confidence 0.8
+  # Evidence selection is part of a successful review's semantic input. Revisit
+  # prior negative decisions when the booking-selection policy changes.
+  @review_policy_version 4
   @max_excerpt 280
   @default_max_tokens 2_048
   @default_timeout_ms 60_000
@@ -251,7 +254,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
             |> Enum.sort()
             |> review_hash()
 
-          {todo.id, review_hash({3, prompt_todo(todo), shared_hash, linked_hash})}
+          {todo.id,
+           review_hash({@review_policy_version, prompt_todo(todo), shared_hash, linked_hash})}
         end)
 
       last_checks = last_model_checks(user_id, Enum.map(open_todos, & &1.id))
