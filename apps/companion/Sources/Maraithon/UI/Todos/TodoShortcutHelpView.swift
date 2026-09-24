@@ -17,7 +17,7 @@ struct TodoShortcutHelpView: View {
 
                 Section("Process") {
                     shortcut("Select active Todo", keys: "X")
-                    shortcut("Mark done", keys: "E")
+                    shortcut("Mark done", keys: "E  Space")
                     shortcut("Dismiss", keys: "#")
                 }
 

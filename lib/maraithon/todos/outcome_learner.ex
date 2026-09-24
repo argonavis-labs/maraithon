@@ -88,8 +88,9 @@ defmodule Maraithon.Todos.OutcomeLearner do
 
     Outcome meaning:
     - great: resolution_status accepted means the user explicitly added a Triage suggestion
-      to Todos. This is strong positive relevance, not completion. Otherwise the user
-      opened the detail and then completed it. Strong positive evidence.
+      to Todos. This is strong positive relevance, not completion. With resolution_status
+      done, the user completed a Triage suggestion directly or completed a todo after
+      opening its detail. Both are strong positive evidence.
     - ok: the user completed it from a list without opening detail. Moderate positive evidence.
     - weak_bad: the user opened the detail and then dismissed it. Moderate negative evidence.
     - bad: the user explicitly chose Ignore / see less, or dismissed it without

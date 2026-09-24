@@ -156,7 +156,8 @@ struct TodosView: View {
                                 listFocused = true
                             },
                             openAction: { openTodo(todo, via: "row") },
-                            action: { perform(todo.isInTriage ? .accept : (todo.canReopen ? .reopen : .done), on: todo, store: store) },
+                            action: { perform(todo.canReopen ? .reopen : .done, on: todo, store: store) },
+                            accept: { perform(.accept, on: todo, store: store) },
                             ignore: { perform(.ignore, on: todo, store: store) }
                         )
                         .id(todo.id)
@@ -167,7 +168,16 @@ struct TodosView: View {
                 .focusEffectDisabled()
                 .focused($listFocused)
                 .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
-                    handleArrowKey(press, store: store)
+                    guard !searchFocused, press.modifiers.isEmpty else { return .ignored }
+                    let offset = [.leftArrow, .upArrow].contains(press.key) ? -1 : 1
+                    moveActiveTodo(by: offset, in: store.todos)
+                    return .handled
+                }
+                .onKeyPress(.space, phases: .down) { press in
+                    guard !searchFocused, !store.quickEntryFocused, press.modifiers.isEmpty,
+                          activeTodo != nil else { return .ignored }
+                    handle(.complete, store: store)
+                    return .handled
                 }
                 .onKeyPress(.return) {
                     guard !searchFocused else { return .ignored }
@@ -206,7 +216,7 @@ struct TodosView: View {
         case .select:
             toggleActiveTodoMark()
         case .complete:
-            perform(store.filter == .triage ? .accept : .done, store: store)
+            perform(.done, store: store)
         case .dismiss:
             perform(store.filter == .triage ? .ignore : .dismiss, store: store)
         case .search:
@@ -214,19 +224,6 @@ struct TodosView: View {
         case .help:
             shortcutHelpShown = true
         }
-    }
-
-    private func handleArrowKey(_ press: KeyPress, store: TodosStore) -> KeyPress.Result {
-        guard !searchFocused else { return .ignored }
-        switch press.key {
-        case .rightArrow, .downArrow:
-            moveActiveTodo(by: 1, in: store.todos)
-        case .leftArrow, .upArrow:
-            moveActiveTodo(by: -1, in: store.todos)
-        default:
-            return .ignored
-        }
-        return .handled
     }
 
     private func moveActiveTodo(by offset: Int, in todos: [CompanionTodo]) {
@@ -267,7 +264,7 @@ struct TodosView: View {
 
     private func perform(_ action: CompanionTodoAction, store: TodosStore) {
         guard let todo = activeTodo else { return }
-        guard action != .done || todo.canMarkDone else { return }
+        guard action != .done || todo.isInTriage || todo.canMarkDone else { return }
         guard action != .dismiss || todo.canDismiss else { return }
 
         perform(action, on: todo, store: store)

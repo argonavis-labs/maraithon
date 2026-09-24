@@ -29,7 +29,7 @@ struct TodoCommands: Commands {
 
             Divider()
 
-            Button(actions?.isTriage == true ? "Add to Todos" : "Mark Active Todo Done") { perform(.complete) }
+            Button("Mark Active Todo Done") { perform(.complete) }
                 .keyboardShortcut("e", modifiers: [])
                 .disabled(actions == nil)
             Button(actions?.isTriage == true ? "Ignore Suggestion" : "Dismiss Active Todo") { perform(.dismiss) }

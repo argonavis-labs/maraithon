@@ -96,7 +96,7 @@ defmodule MaraithonWeb.TodosLive do
     {"Process",
      [
        %{keys: ["x"], label: "Select active todo"},
-       %{keys: ["e"], label: "Mark done"},
+       %{keys: ["e", "Space"], label: "Mark done"},
        %{keys: ["#"], label: "Dismiss"}
      ]},
     {"Find",
@@ -418,7 +418,7 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("todo_shortcut", %{"key" => "e"} = params, socket) do
     case shortcut_target_todo(socket, Map.get(params, "id")) do
-      %Todo{id: todo_id, status: status} when status in ["open", "snoozed"] ->
+      %Todo{id: todo_id, status: status} when status in ["triage", "open", "snoozed"] ->
         handle_event("complete_todo", %{"id" => todo_id}, socket)
 
       _todo ->
@@ -454,7 +454,7 @@ defmodule MaraithonWeb.TodosLive do
       when action in ["complete", "dismiss"] and is_binary(todo_id) do
     result =
       case shortcut_target_todo(socket, todo_id) do
-        %Todo{status: status} when status in ["open", "snoozed"] ->
+        %Todo{status: status} when status in ["triage", "open", "snoozed"] ->
           case action do
             "complete" -> resolve_todo(socket, todo_id, :complete)
             "dismiss" -> resolve_todo(socket, todo_id, :dismiss)
@@ -1409,6 +1409,7 @@ defmodule MaraithonWeb.TodosLive do
                 }
 
                 if (["e", "#"].includes(normalizedKey) && todoId) {
+                  if (event.repeat) return
                   const action = normalizedKey === "e" ? "complete" : "dismiss"
                   this.optimisticallyResolveTodo(todoId, action)
                   return
@@ -1435,6 +1436,7 @@ defmodule MaraithonWeb.TodosLive do
               document.documentElement.classList.remove("overflow-hidden")
             },
             normalizeKey(key) {
+              if (key === " ") return "e"
               if (key === "ArrowDown" || key === "ArrowRight") return "j"
               if (key === "ArrowUp" || key === "ArrowLeft") return "k"
               return key

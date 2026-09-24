@@ -3,7 +3,7 @@ import AssistantProgressKit
 
 /// One task table row: completion checkbox, title with badges and ownership, source
 /// with the assistant's offer, compact due date, and a quiet Done action.
-/// The checkbox and Done action share the same persisted status change.
+/// Checking a suggestion completes it; Add and swiping accept it into Todos.
 /// Single click selects, double click or the title opens the workspace.
 struct TodoRow: View {
     let todo: CompanionTodo
@@ -14,6 +14,7 @@ struct TodoRow: View {
     let select: () -> Void
     let openAction: () -> Void
     let action: () -> Void
+    let accept: () -> Void
     let ignore: () -> Void
 
     @State private var hovering = false
@@ -25,7 +26,7 @@ struct TodoRow: View {
     var body: some View {
         if todo.isInTriage {
             TriageSwipeRow(isWorking: isWorking, background: Tokens.Palette.background,
-                accept: action, ignore: ignore) { row }
+                accept: accept, ignore: ignore) { row }
         } else { row }
     }
 
@@ -33,12 +34,12 @@ struct TodoRow: View {
         HStack(alignment: .top, spacing: 0) {
             RunnerCheckbox(
                 isOn: todo.canReopen || isCompleting,
-                label: todo.isInTriage ? "Add \(todo.title) to Todos" : (todo.canReopen ? "Reopen \(todo.title)" : "Mark \(todo.title) done"),
+                label: todo.canReopen ? "Reopen \(todo.title)" : "Mark \(todo.title) done",
                 action: action,
                 tint: showsCompleted ? Tokens.Palette.success : Tokens.Palette.accent
             )
                 .disabled(isWorking || (!todo.isInTriage && !todo.canMarkDone && !todo.canReopen))
-                .help(todo.isInTriage ? "Add to Todos" : (todo.canReopen ? "Reopen this task" : "Mark this task done"))
+                .help(todo.canReopen ? "Reopen this task" : "Mark this task done")
                 .accessibilityValue(isCompleting ? "Done" : TodosCopy.statusLabel(todo.status))
                 .padding(.leading, Tokens.Spacing.tight)
                 .padding(.top, Tokens.Spacing.roomy + Tokens.Spacing.xxsmall)
@@ -84,9 +85,13 @@ struct TodoRow: View {
         }
         .contentShape(Rectangle())
         .contextMenu {
+            if todo.isInTriage {
+                Button(action: accept) { Label("Add to Todos", systemImage: "plus") }
+                    .disabled(isWorking)
+            }
             if todo.isInTriage || todo.canMarkDone || todo.canReopen {
                 Button(action: action) {
-                    Label(todo.isInTriage ? "Add to Todos" : (todo.canReopen ? "Reopen" : "Done"), systemImage: todo.canReopen ? "arrow.uturn.backward" : "checkmark")
+                    Label(todo.canReopen ? "Reopen" : "Done", systemImage: todo.canReopen ? "arrow.uturn.backward" : "checkmark")
                 }
                 .disabled(isWorking)
             }
@@ -211,7 +216,7 @@ struct TodoRow: View {
                     .accessibilityLabel("Working")
             }
             if !isCompleting {
-                Button(todo.isInTriage ? "Add" : (todo.canReopen ? "Reopen" : "Done"), action: action)
+                Button(todo.isInTriage ? "Add" : (todo.canReopen ? "Reopen" : "Done"), action: todo.isInTriage ? accept : action)
                     .buttonStyle(RunnerButtonStyle(.plain))
                     .disabled(isWorking || (!todo.isInTriage && !todo.canMarkDone && !todo.canReopen))
                     .help(todo.isInTriage ? "Add to Todos" : (todo.canReopen ? "Reopen this task" : "Mark this task done"))

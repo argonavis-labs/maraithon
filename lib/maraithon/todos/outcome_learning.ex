@@ -34,6 +34,7 @@ defmodule Maraithon.Todos.OutcomeLearning do
     if eligible_transition?(previous, updated, opts) do
       {outcome, strength} =
         classify(
+          previous.status,
           updated.status,
           not is_nil(previous.first_user_opened_at),
           Keyword.get(opts, :relevance_feedback)
@@ -114,8 +115,8 @@ defmodule Maraithon.Todos.OutcomeLearning do
   def recover_pending(_limit), do: {:error, :invalid_todo_learning_recovery_limit}
 
   defp eligible_transition?(%Todo{} = previous, %Todo{} = updated, opts) do
-    # Implicit outcomes train only on model suggestions. Explicit Ignore can
-    # teach a preference even when an older todo lacks model provenance.
+    # Reviewing Triage and explicit feedback also teach a preference when an
+    # older suggestion lacks model provenance.
     accepted? =
       previous.status == "triage" and updated.status == "open" and
         Keyword.get(opts, :relevance_feedback) == :accepted
@@ -123,6 +124,7 @@ defmodule Maraithon.Todos.OutcomeLearning do
     previous.status in @open_statuses and (updated.status in @terminal_statuses or accepted?) and
       user_actor?(opts) and
       (not is_nil(previous.model_selected_at) or
+         (previous.status == "triage" and updated.status == "done") or
          Keyword.get(opts, :relevance_feedback) in [:see_less, :accepted]) and
       Keyword.get(opts, :skip_outcome_learning?, false) != true
   end
@@ -131,13 +133,15 @@ defmodule Maraithon.Todos.OutcomeLearning do
     Keyword.get(opts, :actor_type) in [:user, "user"]
   end
 
-  # Explicit rejection remains strong even when the user inspected the task.
-  defp classify("open", _opened?, :accepted), do: {"great", 1.0}
-  defp classify("dismissed", _opened?, :see_less), do: {"bad", -1.0}
-  defp classify("dismissed", false, _feedback), do: {"bad", -1.0}
-  defp classify("dismissed", true, _feedback), do: {"weak_bad", -0.5}
-  defp classify("done", false, _feedback), do: {"ok", 0.45}
-  defp classify("done", true, _feedback), do: {"great", 1.0}
+  # Completing a Triage suggestion is a strong positive review, whether or not
+  # the user opened its detail. Keep its resolution as done, not accepted.
+  defp classify("triage", "done", _opened?, _feedback), do: {"great", 1.0}
+  defp classify(_previous, "open", _opened?, :accepted), do: {"great", 1.0}
+  defp classify(_previous, "dismissed", _opened?, :see_less), do: {"bad", -1.0}
+  defp classify(_previous, "dismissed", false, _feedback), do: {"bad", -1.0}
+  defp classify(_previous, "dismissed", true, _feedback), do: {"weak_bad", -0.5}
+  defp classify(_previous, "done", false, _feedback), do: {"ok", 0.45}
+  defp classify(_previous, "done", true, _feedback), do: {"great", 1.0}
 
   defp enqueue_event(%TodoLearningEvent{} = event) do
     BackgroundJobs.enqueue(@job_type, %{
