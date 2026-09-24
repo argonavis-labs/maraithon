@@ -1229,6 +1229,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          user-facing work-item copy. Never write that a raw phone number or
          handle "wants", "needs", or "is asking" when the supplied context
          identifies the person.
+       - For Slack, use the source's verified `user_display_name`, `from`, and
+         `mentioned_users` names in titles, summaries, and next actions. Do not
+         replace a known person's name with "your teammate", "a colleague", or
+         "the sender". Preserve the exact workspace, channel, and source message
+         timestamp so the background Slack API lookup can resolve missing names.
+         A name from another message or a different workspace is not evidence.
        - `user_identity` states who the operator is, including their own
          phone numbers and emails. Messages from those handles (or with
          is_from_me true) are the operator speaking. In group conversations,

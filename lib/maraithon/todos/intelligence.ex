@@ -584,6 +584,10 @@ defmodule Maraithon.Todos.Intelligence do
          with source, title, summary, next_action, and dedupe_key.
        - Preserve useful source metadata such as Slack channel/thread, Gmail
          message/thread/account, calendar account/event, or Chief-of-Staff skill.
+       - Use verified Slack sender and mentioned-user names already present in
+         source context or metadata. Never turn a known name into "your teammate"
+         or "the sender". Keep the original Slack workspace, channel, and exact
+         source message ID so unresolved authors can be looked up with Slack's API.
        - Set `agent_actionability` explicitly: `needs_you` for a human decision
          or hands-on step, `can_prepare` for drafting/research, and `can_execute`
          only when an available provider tool can perform the exact operation

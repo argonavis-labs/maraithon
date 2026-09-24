@@ -1616,6 +1616,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     Maraithon.Todos.MeetingRelevanceSweep.run_for_user(user_id)
   end
 
+  defp execute_provider(%BackgroundJob{job_type: "runtime_partition:slack_todo_names"} = job) do
+    Maraithon.Todos.SlackNameRepair.run(job.user_id, job.payload["todo_id"])
+  end
+
   defp execute_provider(%BackgroundJob{job_type: @token_job} = job) do
     with {:ok, token_id} <- payload_integer(job, "token_id") do
       TokenRefresher.run_token(token_id,

@@ -308,6 +308,17 @@ defmodule Maraithon.Todos do
   defp polish_todo_copy(other), do: other
 
   defp enqueue_brief(%Todo{} = todo) do
+    case Maraithon.Todos.SlackNameRepair.enqueue(todo) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Slack todo name repair enqueue failed",
+          todo_id: todo.id,
+          reason: inspect(reason)
+        )
+    end
+
     case Brief.enqueue_generation(todo) do
       {:ok, _job} ->
         :ok
