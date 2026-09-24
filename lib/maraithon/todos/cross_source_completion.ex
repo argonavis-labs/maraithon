@@ -1127,6 +1127,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     text =
       [
         "Status: " <> read_string(event, "status", "unknown"),
+        "Your response: " <> read_string(event, "self_response", "unknown"),
         calendar_time_text(event, "start", "Starts"),
         calendar_time_text(event, "end", "Ends"),
         event |> read_list("attendees") |> attendee_summary(),

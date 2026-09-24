@@ -4923,6 +4923,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "notes" => truncate_string(event.notes, 2_000),
       "start" => timestamp(event.start_at),
       "end" => timestamp(event.end_at),
+      "status" => (event.source_state || %{})["event_status"],
+      "self_response" => (event.source_state || %{})["self_response"],
       "updated" => timestamp(event.modified_at),
       "created" => timestamp(event.created_at),
       "location" => event.location,
