@@ -6,10 +6,12 @@ defmodule Maraithon.Todos.MeetingRelevance do
 
   @version 1
   @manual_sources ~w(manual mobile user)
-  @meeting ~r/\b(meeting|call|appointment|session|deep[ -]dive|stand[ -]?up|sync|interview|demo|webinar|conference|workshop)\b/i
-  @attendance ~r/^(?:(?:please|you should|you need to|remember to)\s+)?(?:join|attend|go to|participate in|show up for|dial into|dial in to|log into|be at)\b/i
-  @preparation ~r/^(?:prep(?:are)?\s+(?:for|to attend)\b|rsvp\b|(?:accept|decline|respond to)\b.*\b(?:invite|invitation)\b|confirm\b.*\battendance\b)/i
-  @separate_action ~r/\b(?:and|then|to)\s+(?:send|deliver|submit|write|prepare|review|decide|approve|resolve|fix|pay)\b/i
+  @meeting ~r/\b(meeting|call|appointment|session|deep[ -]dive|stand[ -]?up|sync|interview|demo|webinar|conference|workshop|game|practice|concert|ceremony|wedding|lecture|event)\b/i
+  @attendance ~r/^(?:(?:please|you should|you need to|remember to)\s+)?(?:join|attend(?!\s+to\b)|go to|participate in|show up for|dial into|dial in to|log into|be at)\b/i
+  @preparation ~r/^(?:prep(?:are)?\s+(?:for|to attend)\b|rsvp\b|(?:accept|decline|respond to|reply)\b.*\b(?:rsvp|invite|invitation)\b|confirm\b.*\b(?:attendance|meeting|call|appointment|session)\b)/i
+  @separate_action ~r/\b(?:and|then|to)\s+(?:send|deliver|submit|write|prepare|review|decide|approve|resolve|fix|pay|get|obtain|secure)\b/i
+  @written_date ~r/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(20\d{2}))?/i
+  @months ~w(jan feb mar apr may jun jul aug sep oct nov dec)
 
   def version, do: @version
 
@@ -53,7 +55,8 @@ defmodule Maraithon.Todos.MeetingRelevance do
 
     event_action? =
       kind in ["preparation", "rsvp"] or
-        (Regex.match?(@meeting, context) and Regex.match?(@preparation, title))
+        (Regex.match?(@meeting, context) and Regex.match?(@preparation, title) and
+           not Regex.match?(@separate_action, title))
 
     cond do
       manual?(attrs, metadata) ->
@@ -115,9 +118,43 @@ defmodule Maraithon.Todos.MeetingRelevance do
       )
     ]
 
-    case Enum.find_value(candidates, &instant/1) do
+    case Enum.find_value(candidates, &instant/1) || corroborated_legacy_time(attrs) do
       %DateTime{} = start -> DateTime.compare(start, now) != :gt
       _ -> false
+    end
+  end
+
+  # Legacy suggestions predate calendar_action. Use their due instant only when
+  # the meeting copy independently names that same date. Never use message age
+  # or an ordinary overdue deadline as an event date.
+  defp corroborated_legacy_time(attrs) do
+    case instant(field(attrs, :due_at)) do
+      %DateTime{} = due ->
+        date = DateTime.to_date(due)
+        copy = text(field(attrs, :title)) <> " " <> text(field(attrs, :summary))
+        dates = Regex.scan(@written_date, copy, capture: :all_but_first)
+
+        if Enum.any?(dates, fn parts ->
+             [month, day | rest] = parts
+
+             month =
+               Enum.find_index(@months, &(&1 == String.downcase(String.slice(month, 0, 3)))) + 1
+
+             year =
+               case rest do
+                 [year] when year != "" -> String.to_integer(year)
+                 _ -> date.year
+               end
+
+             case Date.new(year, month, String.to_integer(day)) do
+               {:ok, mentioned} -> mentioned == date
+               _ -> false
+             end
+           end),
+           do: due
+
+      _ ->
+        nil
     end
   end
 
