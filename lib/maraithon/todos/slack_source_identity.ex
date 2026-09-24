@@ -166,7 +166,14 @@ defmodule Maraithon.Todos.SlackSourceIdentity do
          {seconds, _} <- Integer.parse(location.timestamp),
          {:ok, at} <- DateTime.from_unix(seconds) do
       day = DateTime.to_date(at)
-      query = "in:#{location.channel} after:#{Date.add(day, -1)} before:#{Date.add(day, 1)}"
+
+      channel_filter =
+        case Slack.get_channel_info(access, location.channel) do
+          {:ok, %{"channel" => %{"name" => name}}} when is_binary(name) and name != "" -> name
+          _ -> "<#" <> location.channel <> ">"
+        end
+
+      query = "in:#{channel_filter} after:#{Date.add(day, -1)} before:#{Date.add(day, 2)}"
 
       Enum.reduce_while(1..2, {:error, :source_message_unavailable}, fn page, _ ->
         case Slack.search_messages(access, query,
