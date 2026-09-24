@@ -537,8 +537,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # ascending with never-checked items first.
   defp select_candidates(user_id, todos, evidence) do
     identifiers = evidence_identifiers(evidence)
+    calendar = Enum.filter(evidence, &calendar_evidence?/1)
 
-    {active, backstop} = Enum.split_with(todos, &evidence_linked?(&1, identifiers))
+    {active, backstop} =
+      Enum.split_with(todos, fn todo ->
+        evidence_linked?(todo, identifiers) or
+          Enum.any?(calendar, &calendar_relevant_to_todo?(todo, &1))
+      end)
 
     active = Enum.sort_by(active, &completion_rotation_sort_key/1)
 
@@ -2154,7 +2159,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     linked =
       Enum.filter(activity, fn {item, _index} ->
-        Enum.any?(todos, &evidence_linked_to_todo?(&1, item))
+        Enum.any?(todos, &prompt_evidence_linked?(&1, item))
       end)
 
     linked_heads =
@@ -2166,6 +2171,20 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         end
       end)
       |> Enum.uniq_by(&elem(&1, 1))
+
+    linked_calendar = Enum.filter(linked, fn {item, _index} -> calendar_evidence?(item) end)
+
+    calendar_heads =
+      todos
+      |> Enum.flat_map(fn todo ->
+        case best_linked_evidence(todo, linked_calendar) do
+          nil -> []
+          item -> [item]
+        end
+      end)
+      |> Enum.uniq_by(&elem(&1, 1))
+
+    linked_heads = Enum.uniq_by(linked_heads ++ calendar_heads, &elem(&1, 1))
 
     linked_head_indexes = indexed_evidence_set(linked_heads)
 
@@ -2226,7 +2245,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp best_linked_evidence(todo, linked) do
     linked
-    |> Enum.filter(fn {item, _index} -> evidence_linked_to_todo?(todo, item) end)
+    |> Enum.filter(fn {item, _index} -> prompt_evidence_linked?(todo, item) end)
     |> Enum.sort_by(
       fn {item, index} ->
         {if(exact_evidence_link?(todo, item), do: 1, else: 0), evidence_sort_key(item), -index}
@@ -2251,6 +2270,24 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp evidence_linked_to_todo?(todo, item) do
     evidence_linked?(todo, evidence_identifiers([item]))
   end
+
+  # Reserve relevant bookings in the prompt even when the request originated
+  # in Slack or email. This is selection only: cross-source closure still needs
+  # the model's explicit relationship anchor, quote, and fresh source timestamp.
+  defp prompt_evidence_linked?(todo, item) do
+    evidence_linked_to_todo?(todo, item) or calendar_relevant_to_todo?(todo, item)
+  end
+
+  defp calendar_relevant_to_todo?(todo, item) do
+    calendar_evidence?(item) and
+      Enum.any?(
+        [todo.counterparty_label | Enum.map(workflow_people(todo), & &1["name"])],
+        &shared_relationship_anchor?(todo, %{"relationship_anchor" => &1}, item)
+      )
+  end
+
+  defp calendar_evidence?(item),
+    do: read_string(item, "channel", nil) in ["google_calendar", "local_calendar"]
 
   defp indexed_evidence_set(indexed) do
     indexed |> Enum.map(&elem(&1, 1)) |> MapSet.new()
