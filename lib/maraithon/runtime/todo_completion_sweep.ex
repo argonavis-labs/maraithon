@@ -17,11 +17,12 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, Todo, UserBatch}
 
   @deterministic_batch_size 20
+  @completion_statuses Todo.completion_statuses()
 
   require Logger
 
   def run_once(opts \\ []) do
-    user_ids = UserBatch.open_todo_user_ids(opts)
+    user_ids = UserBatch.reviewable_todo_user_ids(opts)
     bounded_opts = Keyword.put(opts, :user_ids, user_ids)
 
     bounded_opts
@@ -130,7 +131,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   def open_todo_snapshots_for_account(%ConnectedAccount{} = account, opts)
       when is_list(opts) do
     Todo
-    |> where([todo], todo.user_id == ^account.user_id and todo.status in ["open", "snoozed"])
+    |> where([todo], todo.user_id == ^account.user_id and todo.status in ^@completion_statuses)
     |> maybe_scope_todo_ids(Keyword.delete(opts, :source_account_id))
     |> order_by([todo], asc: todo.id)
     |> select([todo], %{
@@ -171,7 +172,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     superseded_refs =
       rows
       |> Enum.filter(fn {id, status} ->
-        not MapSet.member?(evaluated_set, id) and status not in ["open", "snoozed"]
+        not MapSet.member?(evaluated_set, id) and status not in @completion_statuses
       end)
       |> Enum.map(&elem(&1, 0))
 
@@ -413,7 +414,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   defp open_todo_ids(user_id, opts) do
     Todo
-    |> where([todo], todo.user_id == ^user_id and todo.status in ["open", "snoozed"])
+    |> where([todo], todo.user_id == ^user_id and todo.status in ^@completion_statuses)
     |> maybe_scope_todos(opts)
     |> maybe_scope_todo_ids(opts)
     |> order_by([todo], asc: todo.id)

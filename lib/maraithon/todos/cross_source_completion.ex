@@ -32,7 +32,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   require Logger
 
-  @open_statuses ~w(open snoozed)
+  @open_statuses Todo.completion_statuses()
   # Per-cycle LLM prompt-size cap (SPEC 05 R3). This bounds "how many todos
   # we check this cycle", not "which 40 we permanently limit to":
   # evidence-linked (delta) candidates fill the budget first, and whatever
@@ -95,7 +95,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   Runs the cross-source pass for every user with open todos.
   """
   def run_for_all_users(opts \\ []) do
-    user_ids = UserBatch.open_todo_user_ids(opts)
+    user_ids = UserBatch.reviewable_todo_user_ids(opts)
 
     empty = %{users: length(user_ids), checked: 0, completed: 0, skipped: 0, errors: 0}
 
@@ -1126,27 +1126,40 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     text =
       [
+        "Status: " <> read_string(event, "status", "unknown"),
         calendar_time_text(event, "start", "Starts"),
         calendar_time_text(event, "end", "Ends"),
+        event |> read_list("attendees") |> attendee_summary(),
         read_string(event, "description", nil),
         read_string(event, "notes", nil),
         read_string(event, "location", nil),
-        read_string(event, "html_link", nil),
-        event |> read_list("attendees") |> attendee_summary()
+        read_string(event, "html_link", nil)
       ]
       |> Enum.reject(&blank?/1)
       |> Enum.join("\n")
+      |> bounded_prompt_string(1_600)
 
-    evidence_item(%{
-      "channel" => channel,
-      "kind" => kind,
-      "subject" => summary,
-      "text" => text,
-      "at" => evidence_time(event, ["updated", "updated_at", "created", "created_at"]),
-      "source_item_id" =>
-        read_string(event, "event_id", read_string(event, "id", read_string(event, "guid", nil))),
-      "account" => read_string(event, "account", read_string(event, "google_account_email", nil))
-    })
+    # The generic 280-character excerpt can discard attendees behind a long
+    # description or meeting URL. Keep bounded booking facts and response states
+    # together so the checker can distinguish a confirmed booking from a decline.
+    evidence_item(
+      %{
+        "channel" => channel,
+        "kind" => kind,
+        "subject" => bounded_prompt_string(summary, 180),
+        "text" => text,
+        "at" => evidence_time(event, ["updated", "updated_at", "created", "created_at"]),
+        "source_item_id" =>
+          read_string(
+            event,
+            "event_id",
+            read_string(event, "id", read_string(event, "guid", nil))
+          ),
+        "account" =>
+          read_string(event, "account", read_string(event, "google_account_email", nil))
+      },
+      true
+    )
   end
 
   defp calendar_time_text(event, key, label) do
@@ -2087,6 +2100,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp prompt_todo(todo) do
     %{
       "todo_id" => bounded_prompt_string(todo.id, 64),
+      "status" => todo.status,
       "source_channel" => bounded_prompt_string(todo.source, 64),
       "title" => bounded_prompt_string(todo.title, 240),
       "summary" => bounded_prompt_string(todo.summary, 480),
@@ -2107,7 +2121,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     }
     |> compact_map()
     |> PromptBudget.project_fields(
-      ~w(todo_id source_channel workflow people title summary next_action captured_at direction counterparty_label counterparty_person_id source_item_id source_account_label),
+      ~w(todo_id status source_channel workflow people title summary next_action captured_at direction counterparty_label counterparty_person_id source_item_id source_account_label),
       4_500,
       string_bytes: 2_000,
       list_items: 5,
@@ -2365,6 +2379,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     completion decision. Do not propose a transition without fresh grounded evidence.
 
     Match completion to the scope of this particular outcome:
+    - Booking, scheduling, confirming a time, or locking a sync is complete when
+      a later, non-cancelled calendar event or booking confirmation proves that
+      specific meeting is booked with the intended people at the intended time.
+      The meeting need not have happened yet. Do not expand a scheduling task
+      into attending the meeting, preparing for it, or delivering its follow-up.
+      A proposal, unrelated meeting, cancelled event, or declined invitation
+      does not prove the requested booking.
     - Resolving a balance needs a settled payment or an agreed resolution. Asking
       a question or promising to pay is progress, not a resolved balance.
     - Granting access needs the requested permission to be active. Sending an
@@ -2380,6 +2401,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     - Use waiting with a verified person or the user as owner when an explicit
       date/condition is pending. Include waiting_until only for a grounded review
       date. A review date returns follow-up to the user; it never proves completion.
+
+    Items in triage are unaccepted suggestions. Check them for completion with
+    the same evidence standard. If unfinished, leave them in triage without a
+    workflow_transition; only the user can accept suggested work.
 
     You are the completion checker for a chief-of-staff product. The user has
     saved open work items. Below is current source material from every connected
@@ -2604,6 +2629,16 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # a completion, regardless of what else the resolution claims — stop the
   # old chase cadence but keep the item open, and never notify (an
   # acknowledged-only reply is not a completion event worth a push).
+  defp apply_resolution(
+         _user_id,
+         %Todo{status: "triage"},
+         %{"completed" => false},
+         _evidence,
+         _opts,
+         count
+       ),
+       do: {:ok, count}
+
   defp apply_resolution(
          user_id,
          %Todo{} = todo,
@@ -3073,11 +3108,22 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     |> Enum.take(12)
     |> Enum.map(fn
       attendee when is_map(attendee) ->
-        first_present([
-          read_string(attendee, "display_name", nil),
-          read_string(attendee, "displayName", nil),
-          read_string(attendee, "email", nil)
-        ])
+        identity =
+          [
+            read_string(attendee, "display_name", read_string(attendee, "displayName", nil)),
+            read_string(attendee, "email", nil)
+          ]
+          |> Enum.reject(&blank?/1)
+          |> Enum.uniq()
+          |> Enum.join(" ")
+          |> bounded_prompt_string(180)
+
+        response =
+          read_string(attendee, "response_status", read_string(attendee, "responseStatus", nil))
+
+        if blank?(identity),
+          do: nil,
+          else: Enum.reject([identity, response], &blank?/1) |> Enum.join("; ")
 
       attendee when is_binary(attendee) ->
         attendee

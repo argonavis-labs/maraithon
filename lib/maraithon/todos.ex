@@ -1915,8 +1915,10 @@ defmodule Maraithon.Todos do
     end
   end
 
+  # Resolving work already done does not accept or authorize suggested work.
+  # Starting, snoozing, or handing it off still requires explicit acceptance.
   defp validate_triage_change(%Todo{status: "triage"}, status)
-       when status not in ["triage", "dismissed"], do: {:error, :accept_todo_first}
+       when status not in ["triage", "done", "dismissed"], do: {:error, :accept_todo_first}
 
   defp validate_triage_change(_, _), do: :ok
 

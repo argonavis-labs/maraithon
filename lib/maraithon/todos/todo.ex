@@ -10,6 +10,7 @@ defmodule Maraithon.Todos.Todo do
   @foreign_key_type :binary_id
 
   @statuses ~w(triage open done dismissed snoozed)
+  @completion_statuses ~w(triage open snoozed)
   @attention_modes ~w(act_now monitor)
   @kinds ~w(general gmail_triage)
   @directions ~w(owed_by_me owed_to_me fyi)
@@ -114,6 +115,9 @@ defmodule Maraithon.Todos.Todo do
     :follow_up_channel,
     :last_completion_checked_at
   ]
+
+  @doc "Unfinished work that can be resolved by evidence, including unaccepted suggestions."
+  def completion_statuses, do: @completion_statuses
 
   @doc "The earliest instant after which new evidence may automatically close this todo."
   def completion_evidence_after(%__MODULE__{} = todo) do

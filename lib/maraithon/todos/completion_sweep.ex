@@ -29,7 +29,7 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   require Logger
 
-  @open_statuses ~w(open snoozed)
+  @open_statuses Todo.completion_statuses()
   @default_limit 20
   @max_limit 20
   @max_user_runtime_ms 120_000
@@ -52,7 +52,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
 
     deadline = bounded_deadline(opts)
-    user_ids = UserBatch.open_todo_user_ids(opts)
+    user_ids = UserBatch.reviewable_todo_user_ids(opts)
 
     results =
       Enum.reduce_while(user_ids, [], fn user_id, results ->

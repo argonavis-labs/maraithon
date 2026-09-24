@@ -11,6 +11,7 @@ defmodule Maraithon.Todos.UserBatch do
   @max_users 10
   @max_explicit_scan 1_000
   @open_statuses ~w(open snoozed)
+  @reviewable_statuses Todo.completion_statuses()
 
   @max_cursor_key_bytes 128
 
@@ -62,7 +63,7 @@ defmodule Maraithon.Todos.UserBatch do
   def reviewable_todo_user_ids(opts \\ []) when is_list(opts) do
     query =
       from t in Todo,
-        where: t.status in ["triage", "open", "snoozed"],
+        where: t.status in ^@reviewable_statuses,
         select: t.user_id,
         distinct: true,
         order_by: [asc: t.user_id]

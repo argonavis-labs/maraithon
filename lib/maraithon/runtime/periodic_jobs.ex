@@ -1238,7 +1238,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp user_has_open_todos?(user_id) do
     Todo
     |> where([todo], todo.user_id == ^user_id)
-    |> where([todo], todo.status in ["open", "snoozed"])
+    |> where([todo], todo.status in ^Todo.completion_statuses())
     |> Repo.exists?()
   end
 
@@ -1329,7 +1329,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
     # Account deltas cover Gmail and Slack. Every user also needs calendar and
     # companion evidence, even when they have one of those accounts connected.
-    users = UserBatch.open_todo_user_ids(after_user_id: cursor)
+    users = UserBatch.reviewable_todo_user_ids(after_user_id: cursor)
 
     with {:ok, account_count} <-
            enqueue_many(accounts, fn account ->
@@ -1409,7 +1409,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp todo_completion_accounts(limit, cursor) do
     open_todo_user_ids =
       Todo
-      |> where([todo], todo.status in ["open", "snoozed"])
+      |> where([todo], todo.status in ^Todo.completion_statuses())
       |> distinct([todo], todo.user_id)
       |> select([todo], todo.user_id)
 

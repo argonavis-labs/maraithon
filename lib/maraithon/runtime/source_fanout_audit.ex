@@ -165,7 +165,7 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
 
     open_todo_user_ids =
       Todo
-      |> where([todo], todo.status in ["open", "snoozed"])
+      |> where([todo], todo.status in ^Todo.completion_statuses())
       |> distinct([todo], todo.user_id)
       |> select([todo], todo.user_id)
 

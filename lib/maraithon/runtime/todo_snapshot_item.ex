@@ -8,7 +8,7 @@ defmodule Maraithon.Runtime.TodoSnapshotItem do
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
-  @eligible_statuses ~w(open snoozed)
+  @eligible_statuses Maraithon.Todos.Todo.completion_statuses()
 
   schema "todo_snapshot_items" do
     field :cycle_id, :binary_id

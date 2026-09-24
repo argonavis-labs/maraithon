@@ -15,7 +15,7 @@ defmodule Maraithon.Runtime.TodoWorkflowReview do
   alias Maraithon.Runtime.{BackgroundJob, TodoCompletionSweep}
 
   @calendar_refresh_seconds 30 * 60
-  @calendar_evidence_version 2
+  @calendar_evidence_version 3
 
   def run(%BackgroundJob{user_id: user_id} = job) do
     now = DateTime.utc_now()
