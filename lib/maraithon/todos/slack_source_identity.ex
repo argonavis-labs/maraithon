@@ -131,12 +131,14 @@ defmodule Maraithon.Todos.SlackSourceIdentity do
       else
         counterparty = counterparty(access, location, message, own_ids)
 
-        if counterparty do
-          identity(team, location, counterparty, true)
-          |> Map.put("role", "counterparty")
-          |> Map.put("source_author_id", message["user"])
-        else
-          identity(team, location, message["user"], false)
+        case identity(team, location, counterparty, true) do
+          %{} = person ->
+            person
+            |> Map.put("role", "counterparty")
+            |> Map.put("source_author_id", message["user"])
+
+          _ ->
+            identity(team, location, message["user"], false)
         end
       end
     else
