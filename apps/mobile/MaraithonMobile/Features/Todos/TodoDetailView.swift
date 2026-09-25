@@ -74,7 +74,7 @@ struct TodoDetailView: View {
                         } label: {
                             Label("Reopen", systemImage: "arrow.uturn.backward")
                         }
-                    } else if todo.isActive {
+                    } else if todo.isActive || todo.isInTriage {
                         Button {
                             Task { await performAction("done") }
                         } label: {

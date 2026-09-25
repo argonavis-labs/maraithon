@@ -1,12 +1,14 @@
-/// Review a suggestion without completing it. Buttons and horizontal pulls
-/// share the same server-backed acceptance and relevance feedback actions.
+/// Review or complete a suggestion directly. Completion stays separate from
+/// the Add button and acceptance swipe, with feedback after the server saves.
 import SwiftUI
 import AssistantProgressKit
 
 struct TriageTodoRow: View {
     let todo: TodoItem
     let isWorking: Bool
+    var isCompleting: Bool = false
     let open: () -> Void
+    let complete: () -> Void
     let accept: () -> Void
     let ignore: () -> Void
 
@@ -17,7 +19,8 @@ struct TriageTodoRow: View {
                 Button(action: open) {
                     Text(todo.title)
                         .font(Runner.Typography.bodyMedium)
-                        .foregroundStyle(Runner.Palette.foreground)
+                        .foregroundStyle(isCompleting ? Runner.Palette.mutedForeground : Runner.Palette.foreground)
+                        .strikethrough(isCompleting)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -38,20 +41,26 @@ struct TriageTodoRow: View {
                             .foregroundStyle(Runner.Palette.mutedForeground)
                     }
                     Spacer()
-                    if isWorking { ProgressView().controlSize(.small) }
-                    Button(action: ignore) { Label("Ignore", systemImage: "hand.thumbsdown") }
-                        .buttonStyle(RunnerButtonStyle(.plain, compact: true))
-                    Button(action: accept) { Label("Add", systemImage: "plus") }
-                        .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
-                        .accessibilityLabel("Add to Todos")
+                    if isWorking && !isCompleting {
+                        ProgressView().controlSize(.small).accessibilityLabel("Saving task")
+                    }
+                }
+                if isCompleting {
+                    Label("Done", systemImage: "checkmark.circle.fill")
+                        .font(Runner.Typography.smallMedium)
+                        .foregroundStyle(Runner.Palette.successText)
+                } else {
+                    TriageTodoActions(complete: complete, accept: accept, ignore: ignore)
                 }
             }
             .padding(.vertical, Runner.Spacing.small)
             .disabled(isWorking)
         }
         .contextMenu {
+            Button(action: complete) { Label("Done", systemImage: "checkmark.circle") }
             Button(action: accept) { Label("Add to Todos", systemImage: "plus") }
             Button(action: ignore) { Label("Ignore", systemImage: "hand.thumbsdown") }
         }
+        .disabled(isWorking)
     }
 }

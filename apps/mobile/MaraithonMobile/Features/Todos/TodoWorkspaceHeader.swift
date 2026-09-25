@@ -26,16 +26,11 @@ struct TodoWorkspaceHeader: View {
             titleBlock
             summarySection
 
-            if todo.isInTriage {
-                HStack {
-                    Button(action: ignore) { Label("Ignore", systemImage: "hand.thumbsdown") }
-                        .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
-                    Button(action: accept) { Label("Add to Todos", systemImage: "plus") }
-                        .buttonStyle(RunnerButtonStyle(.primary, compact: true))
-                }
-                .disabled(actionsDisabled || isUpdating)
-            } else if showsCompleted {
+            if showsCompleted {
                 completedActions
+            } else if todo.isInTriage {
+                TriageTodoActions(addTitle: "Add to Todos", complete: complete, accept: accept, ignore: ignore)
+                    .disabled(isUpdating)
             } else if todo.isActive && todo.delegation == nil {
                 activeActions
             }

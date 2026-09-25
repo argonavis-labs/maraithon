@@ -155,12 +155,16 @@ struct TodosView: View {
                             if todo.isInTriage {
                                 TriageTodoRow(todo: todo,
                                     isWorking: completion.pendingIDs.contains(todo.id.uuidString),
+                                    isCompleting: completion.confirmedIDs.contains(todo.id.uuidString),
                                     open: { linkedTodo = todo },
+                                    complete: { decideTriage(todo, action: "done") },
                                     accept: { decideTriage(todo, action: "accept") },
                                     ignore: { decideTriage(todo, action: "see_less") })
                                     .listRowInsets(Self.rowInsets)
-                                    .listRowBackground(Runner.Palette.background)
+                                    .listRowBackground(completion.confirmedIDs.contains(todo.id.uuidString)
+                                        ? Runner.Palette.success.opacity(0.08) : Runner.Palette.background)
                                     .listRowSeparatorTint(Runner.Palette.border)
+                                    .transition(.opacity)
                             } else {
                             NavigationLink {
                                 TodoDetailView(todo: todo)
@@ -422,10 +426,16 @@ struct TodosView: View {
                 let remote = try await MobileAPIClient().performTodoAction(
                     sessionToken: token, id: todo.id, action: action)
                 guard sessionStore.user?.sessionToken == token, todo.modelContext != nil else { return }
-                ProductionDataSync.apply(remote, to: todo)
-                try modelContext.save()
-                rebuildWorkLists()
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                if action == "done", remote.status == "done" {
+                    await completion.confirm(id, reduceMotion: reduceMotion)
+                }
+                guard sessionStore.user?.sessionToken == token, todo.modelContext != nil else { return }
+                try withAnimation(reduceMotion ? nil : .default) {
+                    ProductionDataSync.apply(remote, to: todo)
+                    try modelContext.save()
+                    rebuildWorkLists()
+                }
+                if action != "done" { UINotificationFeedbackGenerator().notificationOccurred(.success) }
             } catch {
                 guard sessionStore.user?.sessionToken == token else { return }
                 modelContext.rollback()
