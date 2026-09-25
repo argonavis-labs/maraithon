@@ -129,12 +129,12 @@ struct TodoWorkColumn: View {
 /// the relationship and context show as help text so the row stays quiet.
 private struct TodoPersonChip: View {
     let person: CompanionTodoWorkspace.Person
-    let ask: () -> Void
+    let openDetails: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
-        Button(action: ask) {
+        Button(action: openDetails) {
             HStack(spacing: Tokens.Spacing.compact) {
                 Image(systemName: "person.crop.circle")
                     .font(Tokens.Typography.caption)
@@ -162,7 +162,7 @@ private struct TodoPersonChip: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .help(person.context ?? "Ask Maraithon about \(person.name)")
-        .accessibilityLabel("Ask Maraithon about \(person.name)")
+        .help(person.context ?? "Review and confirm details for \(person.name)")
+        .accessibilityLabel("Review details for \(person.name)")
     }
 }
