@@ -76,7 +76,7 @@ defmodule MaraithonWeb.PeopleComponents do
         <h3 class="text-xs font-semibold">Shared context with</h3>
         <div class="mt-2 divide-y divide-zinc-950/10"><div :for={connection <- Enum.take(@person["connections"], 6)} class="flex items-center justify-between gap-2 py-1"><.button variant="plain" phx-click="select_person" phx-value-id={connection["node_id"]}><%= connection["name"] %></.button><.button variant="plain" phx-click="select_connection" phx-value-id={Enum.sort([@person["id"], connection["node_id"]]) |> Enum.join(":")}>Evidence</.button></div></div>
       </div>
-      <div :if={@person["person_id"]} class="mt-5 border-t border-zinc-950/10 pt-3"><.button variant="plain" navigate={~p"/operator/people/manage?#{%{person_id: @person["person_id"]}}"}>Edit person</.button></div>
+      <div :if={@person["person_id"]} class="mt-5 border-t border-zinc-950/10 pt-3"><.button variant="plain" navigate={~p"/operator/people/confirm?#{%{person_id: @person["person_id"]}}"}>Confirm details</.button></div>
     </.panel>
     """
   end

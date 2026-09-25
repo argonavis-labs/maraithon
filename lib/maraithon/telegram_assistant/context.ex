@@ -75,6 +75,7 @@ defmodule Maraithon.TelegramAssistant.Context do
     {"operator_memory", 1_500},
     {"user_memory", 1_500},
     {"deep_memory", 2_000},
+    {"life_context", 3_000},
     {"todos", 5_000},
     {"open_loops", 3_000},
     {"calendar", 3_000},
@@ -123,6 +124,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       operator_memory: fetched.operator_memory,
       user_memory: fetched.user_memory,
       deep_memory: fetched.deep_memory,
+      life_context: fetched.life_context,
       open_loops: fetched.open_loops,
       goals: fetched.goals,
       relationships: fetched.relationships,
@@ -306,6 +308,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       {:preference_memory, fn -> PreferenceMemory.prompt_context(user_id) end},
       {:operator_memory, fn -> OperatorMemory.summaries_for_prompt(user_id) end},
       {:user_memory, fn -> UserMemory.prompt_context(user_id) end},
+      {:life_context, fn -> Maraithon.LifeContext.prompt_context(user_id) end},
       # SPEC 07 R1/R3: thread the inbound text as the recall query and route
       # through `Memory.recall/3` (model-selected) instead of the raw
       # `prompt_context` dump. The earlier "skip the LLM filter" note (it
@@ -355,6 +358,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :preference_memory,
       :operator_memory,
       :user_memory,
+      :life_context,
       :open_loops,
       :goals,
       :relationships,
@@ -373,6 +377,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :goals,
       :relationships,
@@ -392,6 +397,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :goals,
       :relationships,
@@ -412,6 +418,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :goals,
       :relationships,
@@ -431,6 +438,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :preference_memory,
       :operator_memory,
       :user_memory,
+      :life_context,
       :open_loops,
       :todos,
       :briefing_schedule,
@@ -444,6 +452,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :goals,
       :relationships,
@@ -461,6 +470,7 @@ defmodule Maraithon.TelegramAssistant.Context do
     # other sources through focused tools only when this request needs them.
     take_fetchers(fetchers, [
       :preference_memory,
+      :life_context,
       :briefing_schedule,
       :connected_accounts,
       :defaults
@@ -591,6 +601,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       operator_memory: [],
       user_memory: %{},
       deep_memory: [],
+      life_context: [],
       open_loops: %{},
       goals: %{"active_goals" => [], "counts" => %{}},
       relationships: [],

@@ -100,7 +100,7 @@ defmodule MaraithonWeb.PeopleLive do
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div id="people-page" phx-hook="PeopleDates" class="space-y-5">
         <.page_header title="People">
-          <:actions><.button navigate={~p"/operator/people/manage"} variant="plain">Manage people</.button></:actions>
+          <:actions><.button navigate={~p"/operator/people/context"} variant="plain">Life & work</.button><.button navigate={~p"/operator/people/manage"} variant="plain">Manage people</.button></:actions>
         </.page_header>
         <.form for={@filters} id="people-network-filters" phx-change="filter" phx-submit="filter" class="flex flex-wrap items-end gap-4">
           <.field label="Find a person" for="people-network-search" class="min-w-48 flex-1">

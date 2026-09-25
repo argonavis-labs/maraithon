@@ -31,7 +31,7 @@ defmodule Maraithon.Todos.Brief.Context do
   @max_thread_messages 12
   @max_slack_messages 30
   @max_slack_name_lookups 8
-  @max_people 12
+  @max_people 24
 
   @type t :: %{
           todo: map(),
@@ -102,6 +102,7 @@ defmodule Maraithon.Todos.Brief.Context do
       card: card_section(card),
       source: source,
       people: people,
+      life_context: safe(fn -> Maraithon.LifeContext.prompt_context(user_id) end, []),
       related: related,
       identity: safe(fn -> UserIdentity.prompt_block(user_id) end, nil),
       operator_identity:
@@ -664,7 +665,10 @@ defmodule Maraithon.Todos.Brief.Context do
 
   defp people(user_id, %Todo{} = todo, source) do
     people =
-      Maraithon.Todos.Workspace.candidate_people(user_id, todo, source) |> Enum.take(@max_people)
+      (Maraithon.Todos.Workspace.candidate_people(user_id, todo, source) ++
+         Maraithon.LifeContext.confirmed_people(user_id))
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.take(@max_people)
 
     user_id
     |> Crm.relationship_contexts(people, link_limit: 6, resource_type: "todo")
@@ -677,6 +681,7 @@ defmodule Maraithon.Todos.Brief.Context do
         "professional_profile" => get_in(person.metadata || %{}, ["fiber", "profile"]),
         "name" => person.display_name || Enum.join([person.first_name, person.last_name], " "),
         "relationship" => person.relationship,
+        "confirmed_by_user" => Map.has_key?(person.metadata || %{}, "confirmed_details"),
         "preferred_channel" => person.preferred_communication_method,
         "communication_frequency" => person.communication_frequency,
         "last_interaction_at" => iso(person.last_interaction_at),

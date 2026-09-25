@@ -384,6 +384,17 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     dispatch_local_embed_job(job, Maraithon.LocalFiles.EmbedJob)
   end
 
+  def execute(
+        %BackgroundJob{job_type: "life_context_preparation", payload: %{"note_id" => id}} = job
+      ) do
+    with {:ok, user_id} <- require_user_id(job) do
+      case Maraithon.LifeContext.Preparation.run(user_id, id) do
+        {:error, reason} -> defer_model_capacity(reason)
+        result -> result
+      end
+    end
+  end
+
   def execute(%BackgroundJob{job_type: "memory_items_embedding_backfill"} = job) do
     with {:ok, user_id} <- require_user_id(job) do
       Maraithon.Memory.EmbeddingBackfill.run_for_user(user_id,

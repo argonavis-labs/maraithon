@@ -159,6 +159,8 @@ defmodule MaraithonWeb.Router do
       live "/chat/:thread_id", ChatLive, :show
       live "/operator/people", PeopleLive, :index
       live "/operator/people/manage", PeopleManageLive, :index
+      live "/operator/people/context", LifeContextLive, :index
+      live "/operator/people/confirm", PersonReviewLive, :index
       live "/operator/memories", MemoriesLive, :index
     end
   end
@@ -220,6 +222,14 @@ defmodule MaraithonWeb.Router do
     delete "/todos/:id", MobileTodoController, :delete
     post "/todos/:id/actions/:action", MobileTodoController, :perform_action
     get "/people", MobilePeopleController, :index
+    get "/life-context", LifeContextController, :index
+    post "/life-context", LifeContextController, :create
+    get "/life-context/:id", LifeContextController, :show
+    post "/life-context/:id/confirm", LifeContextController, :confirm
+    post "/life-context/:id/retry", LifeContextController, :retry
+    post "/life-context/:id/archive", LifeContextController, :archive
+    get "/person-review", LifeContextController, :person
+    post "/person-review", LifeContextController, :confirm_person
     get "/people/network", PeopleNetworkController, :index
     get "/people/network/:node_id", PeopleNetworkController, :show
     get "/people/reconnect", MobilePeopleController, :reconnect
@@ -320,6 +330,14 @@ defmodule MaraithonWeb.Router do
     get "/todos", MobileTodoController, :index
     get "/todos/:id", MobileTodoController, :show
     post "/todos", CompanionTodoController, :create
+    get "/life-context", LifeContextController, :index
+    post "/life-context", LifeContextController, :create
+    get "/life-context/:id", LifeContextController, :show
+    post "/life-context/:id/confirm", LifeContextController, :confirm
+    post "/life-context/:id/retry", LifeContextController, :retry
+    post "/life-context/:id/archive", LifeContextController, :archive
+    get "/person-review", LifeContextController, :person
+    post "/person-review", LifeContextController, :confirm_person
     get "/people/network", PeopleNetworkController, :index
     get "/people/network/:node_id", PeopleNetworkController, :show
     post "/todos/:id/actions/accept", CompanionTodoController, :accept

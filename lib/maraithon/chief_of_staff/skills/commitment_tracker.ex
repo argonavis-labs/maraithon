@@ -703,6 +703,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           |> Enum.map(&todo_for_prompt/1)
       },
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
+      "life_context" => Maraithon.LifeContext.prompt_context(user_id),
       "relationships" => Crm.summarize_for_prompt(user_id, 24),
       "deep_memory" =>
         Memory.prompt_context(user_id,

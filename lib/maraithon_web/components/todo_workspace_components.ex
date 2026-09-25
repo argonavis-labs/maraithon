@@ -132,14 +132,14 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
             <article :for={person <- @people} class="space-y-2 py-4 first:pt-0">
               <div class="flex items-center gap-3">
                 <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-xs font-medium text-zinc-600" aria-hidden="true"><%= initials(person["name"]) %></span>
-                <div class="min-w-0"><h3 class="text-sm/6 font-medium text-zinc-950"><%= person["name"] %></h3>
+                <div class="min-w-0"><h3 class="text-sm/6 font-medium text-zinc-950"><.link navigate={~p"/operator/people/confirm?#{%{todo_id: @todo.id, reference: person["id"]}}"}><%= person["name"] %></.link></h3>
                   <p :if={person["relationship"]} class="text-xs/5 text-zinc-500"><%= person["relationship"] %></p>
                 </div>
               </div>
               <p :if={person["context"]} class="text-sm/6 text-zinc-600"><%= person["context"] %></p>
 
               <div class="flex flex-wrap gap-1">
-                <.button :if={person["verified_profile"] && valid_id?(person["id"])} navigate={~p"/operator/people?#{%{person_id: person["id"]}}"} variant="plain" class="text-xs">View person</.button>
+                <.button navigate={~p"/operator/people/confirm?#{%{todo_id: @todo.id, reference: person["id"]}}"} variant="plain" class="text-xs">Confirm details</.button>
                 <.button variant="plain" class="text-xs" disabled={@state.busy? || @state.loading? || @run != nil || is_nil(@state.thread)}
                   data-workspace-prompt={"Who is #{person["name"]}, how do I know them, and what should I know for this todo? Check our real relationship and source history."}>Ask Maraithon</.button>
               </div>
@@ -306,7 +306,6 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
         "Check before retrying"
       ]
 
-  defp valid_id?(id), do: match?({:ok, _}, Ecto.UUID.cast(id))
   defp safe_link(url) when is_binary(url), do: URI.parse(url).scheme in ["https", "http"]
   defp safe_link(_), do: false
 

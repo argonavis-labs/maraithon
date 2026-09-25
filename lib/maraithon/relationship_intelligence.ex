@@ -122,6 +122,7 @@ defmodule Maraithon.RelationshipIntelligence do
     payload = %{
       "user_id" => user_id,
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
+      "life_context" => Maraithon.LifeContext.prompt_context(user_id),
       "source" => source,
       "generated_at" => normalize_json_value(now),
       "existing_people" => existing_people,

@@ -902,6 +902,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Enum.filter(&(&1.author_type == "user"))
         |> Enum.map(&%{"title" => &1.title, "content" => &1.content}),
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
+      "life_context" => Maraithon.LifeContext.prompt_context(user_id),
       "relationships" =>
         user_id
         |> Crm.summarize_for_prompt(100),

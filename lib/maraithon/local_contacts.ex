@@ -282,7 +282,7 @@ defmodule Maraithon.LocalContacts do
 
     result =
       case existing do
-        %Person{} = person -> Crm.update_person(person, attrs)
+        %Person{} = person -> Crm.update_inferred_person(person, attrs)
         nil -> Crm.upsert_person(user_id, attrs)
       end
 

@@ -222,6 +222,8 @@ defmodule Maraithon.Crm do
   def create_person(user_id, attrs \\ %{})
 
   def create_person(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    attrs = Maraithon.Crm.Confirmations.merge_update_attrs(%Person{}, attrs)
+
     %Person{user_id: user_id}
     |> Person.changeset(apply_relationship_metric_growth(attrs, nil))
     |> Repo.insert()
@@ -230,15 +232,32 @@ defmodule Maraithon.Crm do
 
   def create_person(_user_id, _attrs), do: {:error, :invalid_person_attrs}
 
-  def update_person(%Person{} = person, attrs) when is_map(attrs) do
+  def update_person(%Person{} = person, attrs) when is_map(attrs),
+    do: update_person_data(person, attrs, false)
+
+  def update_person(_person, _attrs), do: {:error, :invalid_person_attrs}
+
+  def update_inferred_person(%Person{} = person, attrs) when is_map(attrs),
+    do: update_person_data(person, attrs, true)
+
+  defp update_person_data(person, attrs, inferred?) do
     Repo.transaction(fn ->
       Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(person.user_id)
 
       case get_person_for_user(person.user_id, person.id) do
         %Person{} = current ->
+          attrs = Maraithon.Crm.Confirmations.merge_update_attrs(current, attrs)
+
+          attrs =
+            if inferred?,
+              do: Maraithon.Crm.Confirmations.protect_inferred(current, attrs),
+              else: attrs
+
           current
           |> Person.changeset(apply_relationship_metric_growth(attrs, current))
+          |> Maraithon.Crm.Confirmations.invalidate_changed_confirmation(current)
           |> Repo.update()
+          |> Maraithon.Crm.Confirmations.after_update(current)
 
         nil ->
           {:error, :person_not_found}
@@ -250,8 +269,6 @@ defmodule Maraithon.Crm do
     end
     |> tap_refresh_embedding()
   end
-
-  def update_person(_person, _attrs), do: {:error, :invalid_person_attrs}
 
   defp tap_refresh_embedding({:ok, %Person{} = person} = result) do
     Maraithon.Crm.PersonEmbeddings.refresh_async(person)
@@ -330,14 +347,21 @@ defmodule Maraithon.Crm do
     case person_id_from_attrs(attrs) do
       person_id when is_binary(person_id) ->
         case get_person_for_user(user_id, person_id) do
-          %Person{} = person -> update_person(person, attrs)
-          nil -> {:error, :person_not_found}
+          %Person{} = person ->
+            update_inferred_person(person, attrs)
+
+          nil ->
+            {:error, :person_not_found}
         end
 
       nil ->
         case find_existing_person(user_id, attrs) do
           %Person{} = person ->
-            update_person(person, preserve_specific_display_name(person, attrs))
+            update_inferred_person(
+              person,
+              attrs
+              |> then(&preserve_specific_display_name(person, &1))
+            )
 
           nil ->
             create_person(user_id, attrs)

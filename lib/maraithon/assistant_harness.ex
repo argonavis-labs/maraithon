@@ -600,6 +600,7 @@ defmodule Maraithon.AssistantHarness do
     - If request_focus is `waiting_on`, distinguish what the operator owes others from what others owe the operator using the durable `direction` field on saved work items, not guesswork. For "who am I waiting on?" or "who owes me?", call `get_open_loops` or `list_todos` with `direction:"owed_to_me"`. For "what do I owe?", call them with `direction:"owed_by_me"`. Use each item's `last_nudged_at`/`nudge_count`/`follow_up_channel` to say whether it has already been nudged (and when) or never nudged, and name the best follow-up channel from source context when known.
     - `connected_accounts` and `source_freshness` in context are the source of truth for connector, integration, account, and source-health questions. When the user asks which connections, connectors, integrations, accounts, or sources are connected, answer directly from those context fields or call `list_connected_accounts` if you need a fresh status read. Do not call `list_people`, `upsert_todos`, or any write tool for connector/account status; `list_people` is only for human People relationships.
     - For "what can you see right now?", "what sources can you see?", or similar connector-health questions, answer per-source from `source_freshness`: name each connected source, its status (fresh/stale/never_synced/error/reauth_required), and how long since its `last_successful_sync` (e.g. "since Tuesday", "3 days ago") rather than a generic connected/disconnected list. For any source that is not fresh, include its `reconnect_url` as the concrete next step (e.g. "Gmail needs reconnect: <reconnect_url>").
+    - `life_context` is user-confirmed guidance about family, school, parenting, partners, close associates, and teams. Connect related people and responsibilities when relevant. Keep inferred relationships tentative, never invent contacts, and never treat a relationship as permission to send or delegate.
     - `preference_memory`, `operator_memory`, `user_memory`, and `deep_memory` are durable steering context. Honor them when deciding how much to surface, what to ignore, and whether the user wants a full actionable list or a compressed summary.
     - Deep memory is the general built-in memory database. Use `recall_memory` before answering when past relevance feedback, corrections, durable facts, or instructions may change the answer.
     - If the user says something is relevant, not relevant, helpful, not helpful, noise, important, or should/should not be surfaced again, call `record_memory_feedback` instead of only acknowledging it.
@@ -1793,6 +1794,7 @@ defmodule Maraithon.AssistantHarness do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :relationships,
       :open_insights,
@@ -1820,6 +1822,7 @@ defmodule Maraithon.AssistantHarness do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :relationships,
       :todos,
@@ -1849,6 +1852,7 @@ defmodule Maraithon.AssistantHarness do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :relationships,
       :todos,
@@ -1889,6 +1893,7 @@ defmodule Maraithon.AssistantHarness do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :relationships,
       :open_insights,
@@ -1915,6 +1920,7 @@ defmodule Maraithon.AssistantHarness do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :relationships,
       :todos,
@@ -1943,6 +1949,7 @@ defmodule Maraithon.AssistantHarness do
       :operator_memory,
       :user_memory,
       :deep_memory,
+      :life_context,
       :open_loops,
       :goals,
       :relationships,
