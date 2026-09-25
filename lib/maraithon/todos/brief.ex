@@ -62,7 +62,8 @@ defmodule Maraithon.Todos.Brief do
 
   defp content_current(%Todo{} = todo) do
     case stored(todo) do
-      %{"version" => @version, "fingerprint" => fingerprint} = brief ->
+      %{"version" => version, "fingerprint" => fingerprint} = brief
+      when version in [11, @version] ->
         if fingerprint == fingerprint(todo), do: brief, else: nil
 
       _other ->
@@ -374,9 +375,14 @@ defmodule Maraithon.Todos.Brief do
       todo.summary,
       todo.notes,
       todo.source_item_id,
-      (todo.metadata || %{})["life_context_revision"],
       iso(todo.due_at)
     ]
+    |> then(fn fields ->
+      case (todo.metadata || %{})["life_context_revision"] do
+        nil -> fields
+        revision -> fields ++ [revision]
+      end
+    end)
     |> Enum.map(&to_string/1)
     |> Enum.join("\n")
     |> then(&:crypto.hash(:sha256, &1))
