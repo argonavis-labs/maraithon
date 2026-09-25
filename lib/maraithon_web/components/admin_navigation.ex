@@ -35,6 +35,13 @@ defmodule MaraithonWeb.AdminNavigation do
                 Todos
               </.link>
               <.link
+                navigate={~p"/operator/people"}
+                class={nav_link_class(@normalized_path, "/operator/people")}
+                aria-current={active?(@normalized_path, "/operator/people") && "page"}
+              >
+                People
+              </.link>
+              <.link
                 navigate={~p"/activity"}
                 class={nav_link_class(@normalized_path, "/activity")}
                 aria-current={active?(@normalized_path, "/activity") && "page"}
@@ -86,6 +93,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   defp active?(path, "/todos"), do: path == "/todos" or String.starts_with?(path, "/todos/")
   defp active?(path, "/activity"), do: path == "/activity"
+  defp active?(path, "/operator/people"), do: String.starts_with?(path, "/operator/people")
   defp active?(path, "/connectors"), do: String.starts_with?(path, "/connectors")
   defp active?(_path, _destination), do: false
 
