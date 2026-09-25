@@ -50,7 +50,14 @@ defmodule Maraithon.Todos.Timeline do
         &(&1.from_user == false && is_binary(&1.at) && &1.at >= iso(todo.inserted_at))
       )
       |> Enum.map(fn m ->
-        entry(m.id, "reply", "Reply from " <> m.speaker, m.text, m.at, m.provider)
+        entry(
+          m.id,
+          "reply",
+          if(m.provider == "imessage", do: "Message from ", else: "Reply from ") <> m.speaker,
+          m.text,
+          m.at,
+          m.provider
+        )
       end)
 
     (lifecycle(todo) ++

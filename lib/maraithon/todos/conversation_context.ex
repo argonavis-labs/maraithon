@@ -23,7 +23,8 @@ defmodule Maraithon.Todos.ConversationContext do
             speaker:
               if(m.is_from_me,
                 do: "You",
-                else: m.sender_handle || m.chat_display_name || "Contact"
+                else:
+                  payload["recipient_name"] || m.chat_display_name || m.sender_handle || "Contact"
               ),
             text: String.slice(m.text || "", 0, 8_000),
             at: iso(m.sent_at),

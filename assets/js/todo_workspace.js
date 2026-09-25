@@ -137,6 +137,8 @@ export const TodoWorkspace = {
     for (const review of this.el.querySelectorAll('[data-workspace-review]')) {
       if (!this.knownReviews.has(review.id)) {
         this.knownReviews.add(review.id)
+        const conversation = review.querySelector('[data-source-conversation]')
+        if (conversation) requestAnimationFrame(() => { conversation.scrollTop = conversation.scrollHeight })
         if (review.dataset.editable === 'true' && !Object.hasOwn(this.saved.expanded, review.id)) {
           review.open = true
           requestAnimationFrame(() => review.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start'}))

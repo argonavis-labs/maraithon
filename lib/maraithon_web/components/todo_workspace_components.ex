@@ -188,7 +188,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       <form data-workspace-draft data-action-id={@card["prepared_action_id"]} data-from={@card["from"]} class="space-y-4 border-t border-zinc-950/10 p-4 sm:p-5">
         <details :if={(@card["conversation"] || []) != []} open class="border-b border-zinc-950/10 pb-3">
           <summary class="cursor-pointer text-sm font-medium text-zinc-700">Conversation</summary>
-          <div class="mt-3 max-h-64 space-y-4 overflow-y-auto">
+          <div data-source-conversation class="mt-3 max-h-64 space-y-4 overflow-y-auto">
             <div :for={message <- @card["conversation"]} class="border-l-2 border-zinc-200 pl-3">
               <p class="text-xs/5 text-zinc-500"><%= message[:speaker] || message["speaker"] %>
                 <time :if={message[:at] || message["at"]} datetime={message[:at] || message["at"]} data-workspace-time><%= message[:at] || message["at"] %></time>
