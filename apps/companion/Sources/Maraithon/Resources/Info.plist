@@ -39,12 +39,16 @@
 	<false/>
 	<key>MaraithonBaseURL</key>
 	<string>https://maraithon.com</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Send the Messages drafts you approve in Maraithon.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Maraithon mirrors your Mac calendar so the assistant can answer scheduling questions and prep you for meetings. Calendar data stays in your account and is never shared.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Maraithon mirrors your Mac contacts so the assistant can merge people context and identify who messages, emails, and meetings involve. Contacts stay in your account and are never shared.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a life and work note for your assistant. You review its transcript before saving.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Maraithon mirrors your Mac reminders so the assistant can include them when you ask about your to-dos. Reminders stay in your account and are never shared.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
@@ -53,7 +57,5 @@
 	<string>https://maraithon.com/companion/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SUPublicEDKey)</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Record a life and work note for your assistant. You review its transcript before saving.</string>
 </dict>
 </plist>

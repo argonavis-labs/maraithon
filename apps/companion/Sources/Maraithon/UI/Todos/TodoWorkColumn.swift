@@ -26,8 +26,9 @@ struct TodoWorkColumn: View {
                 canDelegate: todo.canDelegate == true, proposal: todo.delegationProposal, request: store.delegationRequest,
                 refreshTodo: { await store.refreshTodo() })
                 .id(todo.id)
-            if todo.canMarkDone && todo.delegation == nil && plan.primary != nil { nextAction }
+            if todo.delegation == nil && plan.primary != nil { nextAction }
             people
+            TodoActivityView(entries: store.thread?.todoTimeline ?? [])
         }
         .sheet(item: $person) { reference in
             LifeContextSheet(person: reference, saved: { await store.refreshTodo() })
@@ -106,6 +107,7 @@ struct TodoWorkColumn: View {
             }
         }
         .frame(maxWidth: Tokens.TodoLayout.cardMaxWidth, alignment: .leading)
+        .id("todo-review")
     }
 
     @ViewBuilder private var people: some View {

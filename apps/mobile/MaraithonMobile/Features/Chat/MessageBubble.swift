@@ -13,6 +13,7 @@ struct MessageBubble: View {
     var actionHandler: (ChatMessageAction) -> Void = { _ in }
     var prepareHandler: (String) -> Void = { _ in }
     var actionsDisabled = false
+    var reviewHandler: ((ChatMessage) -> Void)?
 
     private var isUser: Bool {
         message.role == .user
@@ -39,6 +40,14 @@ struct MessageBubble: View {
             }
 
             if !isUser, let draftCard = message.draftCard {
+                if let reviewHandler {
+                    Button {
+                        reviewHandler(message)
+                    } label: {
+                        Label(draftCard.isTerminal ? draftCard.status ?? "View draft" : "Review \(draftCard.title)",
+                              systemImage: draftCard.status == "Sent" ? "checkmark.circle" : "square.and.pencil")
+                    }.buttonStyle(.plain).font(.callout).foregroundStyle(.secondary)
+                } else {
                 ChatDraftCardView(
                     card: draftCard,
                     messageID: message.id,
@@ -50,6 +59,7 @@ struct MessageBubble: View {
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }

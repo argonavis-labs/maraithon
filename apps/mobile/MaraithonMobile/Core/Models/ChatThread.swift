@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import AssistantProgressKit
 
 @Model
 final class ChatThread {
@@ -17,6 +18,13 @@ final class ChatThread {
     var pendingRunID: UUID?
     var pendingRunWorkSummary: Data?
     var lastSyncedAt: Date?
+    // Additive optional storage uses SwiftData's lightweight migration.
+    var todoTimelineData: Data?
+
+    var todoTimeline: [TodoActivity] {
+        guard let todoTimelineData else { return [] }
+        return (try? JSONDecoder().decode([TodoActivity].self, from: todoTimelineData)) ?? []
+    }
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.thread) var messages: [ChatMessage] = []
 
     var sortedMessages: [ChatMessage] {

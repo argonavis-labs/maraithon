@@ -2,6 +2,7 @@
 /// (editable for Gmail), calendar times for events, the browser step, and the
 /// draft body. Edits flow back through bindings; nothing sends from here.
 import SwiftUI
+import AssistantProgressKit
 
 struct TodoReviewFields: View {
     let draft: CompanionConversationDraft
@@ -11,6 +12,7 @@ struct TodoReviewFields: View {
     @Binding var cc: String
     @Binding var bcc: String
     @Binding var bodyText: String
+    @State private var previewsFormatting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
@@ -19,7 +21,18 @@ struct TodoReviewFields: View {
             case "browser": row("Browser", "Local Chrome · on your Mac")
             default: messageRows
             }
-            bodyField
+            if editable && draft.provider == "slack" {
+                Picker("Message", selection: $previewsFormatting) {
+                    Text("Edit").tag(false)
+                    Text("Preview").tag(true)
+                }.pickerStyle(.segmented)
+            }
+            if previewsFormatting && draft.provider == "slack" {
+                ChannelMessageText(bodyText, provider: draft.provider).font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                bodyField
+            }
         }
     }
 

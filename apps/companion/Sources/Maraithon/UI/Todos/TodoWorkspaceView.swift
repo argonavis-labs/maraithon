@@ -66,9 +66,7 @@ struct TodoWorkspaceView: View {
         let chatWidth = min(max(size.width * Tokens.TodoLayout.chatPaneFraction, Tokens.TodoLayout.chatPaneMinWidth),
                             Tokens.TodoLayout.chatPaneMaxWidth)
         return HStack(spacing: 0) {
-            ScrollView {
-                TodoWorkColumn(store: store)
-            }
+            workPane
             .frame(minWidth: Tokens.TodoLayout.workColumnMinWidth, maxWidth: .infinity, maxHeight: .infinity)
             Rectangle()
                 .fill(Tokens.Palette.border)
@@ -81,12 +79,19 @@ struct TodoWorkspaceView: View {
 
     private func stacked(in size: CGSize) -> some View {
         VStack(spacing: 0) {
-            ScrollView {
-                TodoWorkColumn(store: store)
-            }
+            workPane
             .frame(height: size.height * Tokens.TodoLayout.stackedWorkFraction)
             RunnerHairline()
             TodoChatPane(store: store, reconnect: { reconnectID = UUID() })
+        }
+    }
+
+    private var workPane: some View {
+        ScrollViewReader { proxy in
+            ScrollView { TodoWorkColumn(store: store) }
+                .onChange(of: store.preferredReviewID) { _, id in
+                    if id != nil { proxy.scrollTo("todo-review", anchor: .top) }
+                }
         }
     }
 

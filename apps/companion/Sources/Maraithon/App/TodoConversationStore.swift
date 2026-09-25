@@ -243,6 +243,10 @@ final class TodoConversationStore {
     }
 
     private func apply(_ response: CompanionConversation.Response) {
+        let existing = Set((thread?.messages ?? []).compactMap { $0.draftCard == nil ? nil : $0.id })
+        if let newest = response.thread.messages.last(where: { $0.draftCard != nil && !existing.contains($0.id) }) {
+            preferredReviewID = newest.id
+        }
         // A REST mutation can race a streamed snapshot. Only resume from a
         // cursor whose snapshot is still the state displayed by this store.
         progressCursor = nil

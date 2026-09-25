@@ -118,6 +118,7 @@ extension MobileAPIClient: MobileChatAPI {
         let linkedTodo: JSONValue?
         let threadKind: String?
         let linkedTodoID: UUID?
+        let todoTimeline: [TodoActivity]?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -132,6 +133,7 @@ extension MobileAPIClient: MobileChatAPI {
             case linkedTodo = "linked_todo"
             case threadKind = "thread_kind"
             case linkedTodoID = "linked_todo_id"
+            case todoTimeline = "todo_timeline"
         }
 
         init(
@@ -160,6 +162,7 @@ extension MobileAPIClient: MobileChatAPI {
             self.linkedTodo = linkedTodo
             self.threadKind = threadKind
             self.linkedTodoID = linkedTodoID
+            self.todoTimeline = nil
         }
 
         init(from decoder: Decoder) throws {
@@ -176,6 +179,7 @@ extension MobileAPIClient: MobileChatAPI {
             linkedTodo = try container.decodeIfPresent(JSONValue.self, forKey: .linkedTodo)
             threadKind = try container.decodeIfPresent(String.self, forKey: .threadKind)
             linkedTodoID = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoID)
+            todoTimeline = try container.decodeIfPresent([TodoActivity].self, forKey: .todoTimeline)
         }
     }
 

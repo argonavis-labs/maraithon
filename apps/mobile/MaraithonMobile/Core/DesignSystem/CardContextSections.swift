@@ -1,9 +1,11 @@
 import SwiftUI
+import AssistantProgressKit
 
 /// Quoted excerpt of the source conversation a card is acting on.
 struct CardConversationSection: View {
     let messages: [CardConversationMessage]
     var maxMessages = 6
+    var provider = ""
 
     var body: some View {
         if messages.isEmpty {
@@ -29,7 +31,7 @@ struct CardConversationSection: View {
                                 }
                             }
 
-                            Text(message.text)
+                            ChannelMessageText(message.text, provider: provider)
                                 .font(Runner.Typography.small)
                                 .foregroundStyle(Runner.Palette.foreground)
                                 .fixedSize(horizontal: false, vertical: true)

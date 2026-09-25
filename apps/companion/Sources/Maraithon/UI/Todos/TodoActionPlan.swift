@@ -31,7 +31,6 @@ struct TodoActionPlan {
 
     static func make(todo: CompanionTodo, messages: [CompanionConversation.Message],
                      preferredReviewID: String?) -> TodoActionPlan {
-        guard todo.canMarkDone else { return TodoActionPlan(primary: nil, secondary: nil) }
         var reviews: [(CompanionConversation.Message, CompanionConversationDraft)] = messages.reversed().compactMap { message in
             guard let card = message.draftCard, !isTerminal(card) else { return nil }
             return (message, card)
@@ -46,7 +45,7 @@ struct TodoActionPlan {
             let target = (card.recipient ?? card.title ?? "").lowercased()
             return seenTargets.insert(card.provider + "|" + target).inserted
         }
-        let suggestions = (todo.brief?.suggestedActions ?? []).filter { action in
+        let suggestions = (["triage", "open", "snoozed"].contains(todo.status) ? todo.brief?.suggestedActions ?? [] : []).filter { action in
             !reviews.contains { covers($0.1, action) }
         }
         let slots: [Slot] = reviews.map { .review($0.0, $0.1) } + suggestions.map { .suggestion($0) }

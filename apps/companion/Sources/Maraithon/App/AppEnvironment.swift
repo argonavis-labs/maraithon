@@ -31,6 +31,7 @@ final class AppEnvironment {
     /// receives a reference and prefers it over HTTP when connected.
     let realtime: RealtimeChannel
     let browserRelay: BrowserRelay
+    let messageSendRelay: MessageSendRelay
 
     private(set) var isPaused: Bool = false
 
@@ -74,6 +75,12 @@ final class AppEnvironment {
             Task { @MainActor in log?.info(event, source: .browser) }
         })
         self.browserRelay = relay
+        let messageRelay = MessageSendRelay(client: MaraithonClient(tokenProvider: { [weak auth] in
+            await MainActor.run { [auth] in auth?.currentToken }
+        }), log: { [weak log] event in
+            Task { @MainActor in log?.info(event, source: .imessage) }
+        })
+        self.messageSendRelay = messageRelay
 
         let imessageIngest = IMessageIngest(
             tokenProvider: { [weak deviceAuth] in
@@ -201,6 +208,7 @@ final class AppEnvironment {
             // surface as `.needsAttention(...)` rather than crashing.
             registry.startAll()
             Task { await relay.start() }
+            Task { await messageRelay.start() }
         }
     }
 

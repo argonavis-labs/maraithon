@@ -527,6 +527,9 @@ struct ChatSyncService {
         )
 
         thread.remoteID = remoteThread.id
+        if let timeline = remoteThread.todoTimeline {
+            thread.todoTimelineData = try JSONEncoder().encode(timeline)
+        }
         thread.linkedTodoID = remoteThread.linkedTodoID
             ?? remoteThread.linkedTodo?.object?["id"]?.string.flatMap(UUID.init(uuidString:))
             ?? thread.linkedTodoID

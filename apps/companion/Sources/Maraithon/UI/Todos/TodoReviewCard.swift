@@ -3,6 +3,7 @@
 /// execute, and nothing sends on navigation.
 import SwiftUI
 import AppKit
+import AssistantProgressKit
 
 struct TodoReviewCard: View {
     let draft: CompanionConversationDraft
@@ -17,6 +18,7 @@ struct TodoReviewCard: View {
     @State private var localNotice: String?
     @State private var confirmsAction = false
     @State private var sharingService: NSSharingService?
+    @State private var showsConversation = true
 
     private var locked: Bool { store.decidingActionID != nil }
     private var editable: Bool { draft.isEditable && !locked }
@@ -35,10 +37,11 @@ struct TodoReviewCard: View {
     }
 
     var body: some View {
-        RunnerCard {
+        GroupBox {
             VStack(alignment: .leading, spacing: 0) {
                 header.runnerCardRow()
                 RunnerHairline()
+                conversation
                 TodoReviewFields(draft: draft, editable: editable, recipient: $recipient, subject: $subject,
                                  cc: $cc, bcc: $bcc, bodyText: $bodyText)
                     .runnerCardRow()
@@ -61,6 +64,32 @@ struct TodoReviewCard: View {
         }
     }
 
+    @ViewBuilder private var conversation: some View {
+        if let messages = draft.conversation, !messages.isEmpty {
+            DisclosureGroup("Conversation", isExpanded: $showsConversation) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+                        ForEach(Array(messages.enumerated()), id: \.offset) { _, message in
+                            VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
+                                HStack {
+                                    Text(message.speaker ?? "Contact").font(.caption.bold())
+                                    Spacer()
+                                    if let date = CompanionConversation.date(from: message.at) {
+                                        Text(date, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption)
+                                    }
+                                }.foregroundStyle(.secondary)
+                                ChannelMessageText(message.text, provider: draft.provider).font(.callout)
+                            }
+                            Divider()
+                        }
+                    }
+                }.frame(maxHeight: Tokens.TodoLayout.reviewBodyMaxHeight)
+                    .defaultScrollAnchor(.bottom)
+            }.runnerCardRow()
+            RunnerHairline()
+        }
+    }
+
     private var header: some View {
         HStack(spacing: Tokens.Spacing.small) {
             TodoProviderMark(provider: draft.provider, size: Tokens.IconSize.inline)
@@ -74,6 +103,9 @@ struct TodoReviewCard: View {
     }
 
     @ViewBuilder private var notices: some View {
+        if let note = draft.deliveryNote {
+            Text(note).font(.caption).foregroundStyle(.secondary).runnerCardRow()
+        }
         if let localNotice {
             Text(localNotice)
                 .font(Tokens.Typography.caption)
@@ -107,7 +139,7 @@ struct TodoReviewCard: View {
                 Button("Copy", systemImage: "doc.on.doc") { copy() }
                     .buttonStyle(RunnerButtonStyle(.plain))
             }
-            if draft.provider == "imessage" {
+            if draft.provider == "imessage", draft.preparedActionID == nil, !TodoActionPlan.isTerminal(draft) {
                 Button("Open in Messages", systemImage: "message") { openMessages() }
                     .buttonStyle(RunnerButtonStyle(.plain))
                     .disabled(trimmedBody.isEmpty)

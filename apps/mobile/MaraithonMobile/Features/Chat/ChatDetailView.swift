@@ -1,6 +1,7 @@
 import SwiftData
 import SwiftUI
 import UIKit
+import AssistantProgressKit
 
 struct ChatDetailView: View {
     @Environment(SessionStore.self) private var sessionStore
@@ -31,6 +32,7 @@ struct ChatDetailView: View {
     @State private var deleteTask: Task<Void, Never>?
     @State private var visibleMessageLimit = 60
     @State private var timelineRows: [ChatTimelineRow]
+    @State private var reviewingDraft: ChatMessage?
     @FocusState private var isComposerFocused: Bool
 
     private let chatSyncService = ChatSyncService()
@@ -82,6 +84,14 @@ struct ChatDetailView: View {
                     if let workspaceHeader {
                         workspaceHeader(send, isComposerDisabled)
                             .padding(.bottom, Runner.Spacing.medium)
+                        if let latest = latestDraft, let card = latest.draftCard {
+                            Button { reviewingDraft = latest } label: {
+                                Label("Review \(card.title)", systemImage: "square.and.pencil")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.bordered).padding(.bottom, Runner.Spacing.small)
+                        }
+                        TodoActivityView(entries: thread.todoTimeline)
+                            .padding(.bottom, Runner.Spacing.medium)
                     }
 
                     if let contextHeader {
@@ -116,7 +126,8 @@ struct ChatDetailView: View {
                                 endsGroup: row.layout.endsGroup,
                                 actionHandler: decide,
                                 prepareHandler: send,
-                                actionsDisabled: isComposerDisabled
+                                actionsDisabled: isComposerDisabled,
+                                reviewHandler: workspaceHeader == nil ? nil : { reviewingDraft = $0 }
                             )
                             .id(row.id)
                             .padding(.top, row.layout.startsGroup ? Runner.Spacing.medium : Runner.Spacing.compact)
@@ -160,6 +171,7 @@ struct ChatDetailView: View {
             }
             .onAppear {
                 if workspaceHeader == nil { scrollToBottom(proxy, animated: false) }
+                else { reviewingDraft = latestDraft }
                 if focusComposerOnAppear || (workspaceHeader == nil && thread.messages.isEmpty) {
                     isComposerFocused = true
                 }
@@ -167,6 +179,21 @@ struct ChatDetailView: View {
             }
         }
         .onChange(of: requestedPrompt) { _, _ in consumeRequestedPrompt() }
+        .onChange(of: latestDraft?.id) { _, _ in
+            if workspaceHeader != nil { reviewingDraft = latestDraft }
+        }
+        .sheet(item: $reviewingDraft) { message in
+            NavigationStack {
+                ScrollView {
+                    if let card = message.draftCard {
+                        draftSheet(card: card, message: message)
+                    }
+                }
+                .navigationTitle("Review draft")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { reviewingDraft = nil } } }
+            }.presentationDragIndicator(.visible)
+        }
         .onChange(of: isComposerDisabled) { _, disabled in
             if !disabled { consumeRequestedPrompt() }
         }
@@ -229,6 +256,17 @@ struct ChatDetailView: View {
         } message: {
             Text(ChatDetailCopy.renameAlertMessage)
         }
+    }
+
+    private var latestDraft: ChatMessage? {
+        thread.sortedMessages.last { $0.draftCard.map { !$0.isTerminal } ?? false }
+    }
+
+    private func draftSheet(card: ChatDraftCard, message: ChatMessage) -> some View {
+        var view = ChatDraftCardView(card: card, messageID: message.id, actionsDisabled: isComposerDisabled,
+            prepareHandler: send, actionHandler: decide, openHandler: { UIApplication.shared.open($0) })
+        view.presented = true
+        return view.padding(Runner.Layout.pageInset)
     }
 
     private var composer: some View {

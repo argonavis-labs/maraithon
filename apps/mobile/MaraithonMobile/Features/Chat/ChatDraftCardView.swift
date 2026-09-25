@@ -1,5 +1,6 @@
 import MessageUI
 import SwiftUI
+import AssistantProgressKit
 
 /// Provider review cards: account, recipient, editable content, explicit action.
 /// Scene storage retains local edits; the server owns execution and outcomes.
@@ -9,6 +10,7 @@ struct ChatDraftCardView: View {
     let prepareHandler: (String) -> Void
     let actionHandler: (ChatMessageAction) -> Void
     let openHandler: (URL) -> Void
+    var presented = false
     @SceneStorage private var recipient: String
     @SceneStorage private var cc: String
     @SceneStorage private var bcc: String
@@ -18,7 +20,8 @@ struct ChatDraftCardView: View {
     @State private var messageComposeDraft: MessageComposeDraft?
     @State private var localNotice: String?
     @State private var confirmsAction = false
-    @State private var showsSourceContext = false
+    @State private var showsSourceContext = true
+    @State private var previewsFormatting = false
     @State private var showsCopyFields = false
 
     init(card: ChatDraftCard, messageID: UUID, actionsDisabled: Bool,
@@ -64,15 +67,18 @@ struct ChatDraftCardView: View {
             }.buttonStyle(.plain)
                 .accessibilityLabel("\(isExpanded ? "Collapse" : "Review") \(card.title)")
 
-            if isExpanded {
+            if isExpanded || presented {
                 RunnerHairline()
                 VStack(alignment: .leading, spacing: Runner.Spacing.tight) {
-                    if card.providerKey == "calendar" { calendarDetails } else { messageDetails }
                     if !card.isTerminal, !card.conversation.isEmpty || !card.participants.isEmpty {
-                        CardDisclosure(title: "Source context", isExpanded: $showsSourceContext) {
+                        CardDisclosure(title: "Conversation", isExpanded: $showsSourceContext) {
                             if !card.participants.isEmpty { CardParticipantsSection(participants: card.participants) }
-                            if !card.conversation.isEmpty { CardConversationSection(messages: card.conversation) }
+                            if !card.conversation.isEmpty { CardConversationSection(messages: card.conversation, maxMessages: 24, provider: card.providerKey) }
                         }
+                    }
+                    if card.providerKey == "calendar" { calendarDetails } else { messageDetails }
+                    if card.providerKey == "imessage", card.primaryAction != nil {
+                        Text("Sends through Messages on your Mac").font(.caption).foregroundStyle(.secondary)
                     }
                     if let notice = card.connectionNotice, card.connectionRequired == true {
                         Text(notice)
@@ -124,7 +130,15 @@ struct ChatDraftCardView: View {
                 if !subject.isEmpty { detail("Subject", subject) }
             }
             if let workspace = card.workspace { detail("Workspace", workspace) }
-            if isEditable {
+            if isEditable && card.providerKey == "slack" {
+                Picker("Message", selection: $previewsFormatting) {
+                    Text("Edit").tag(false)
+                    Text("Preview").tag(true)
+                }.pickerStyle(.segmented)
+            }
+            if previewsFormatting && card.providerKey == "slack" {
+                ChannelMessageText(bodyText, provider: "slack").font(.body)
+            } else if isEditable {
                 TextField("Draft message", text: $bodyText, axis: .vertical)
                     .lineLimit(4...16)
                     .font(Runner.Typography.body)
@@ -199,7 +213,7 @@ struct ChatDraftCardView: View {
                 localNotice = "Copied"
             }
         }
-        if !card.isTerminal, card.providerKey == "imessage", messageRecipient != nil {
+        if !card.isTerminal, card.primaryAction == nil, card.providerKey == "imessage", messageRecipient != nil {
             Button("Open in Messages", systemImage: "message") { openMessages() }
                 .disabled(!canPrepare).accessibilityIdentifier("chat-draft-open")
         } else if !card.isTerminal, let url = currentOpenURL {

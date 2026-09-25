@@ -8,6 +8,7 @@ struct CompanionConversation: Decodable, Sendable {
     let messages: [Message]
     let pendingRun: Run?
     let linkedTodo: LinkedTodo?
+    let todoTimeline: [TodoActivity]?
 
     struct LinkedTodo: Decodable, Sendable {
         let id: String
@@ -16,7 +17,7 @@ struct CompanionConversation: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, messages
-        case pendingRun = "pending_run", linkedTodo = "linked_todo"
+        case pendingRun = "pending_run", linkedTodo = "linked_todo", todoTimeline = "todo_timeline"
     }
 
     struct Message: Decodable, Identifiable, Sendable {
