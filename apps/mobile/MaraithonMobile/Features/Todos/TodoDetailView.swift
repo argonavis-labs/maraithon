@@ -215,11 +215,12 @@ struct TodoDetailView: View {
     /// a bounded lifetime; a failed request leaves the cached workspace usable.
     private func refreshBrief() async {
         guard let token = sessionStore.user?.sessionToken else { return }
-        for attempt in 0..<12 {
+        for attempt in 0..<64 {
             do {
                 if attempt > 0 { try await Task.sleep(for: .seconds(5)) }
                 try Task.checkCancellation()
                 let remote = try await MobileAPIClient().getTodo(sessionToken: token, id: todo.id)
+                guard sessionStore.user?.sessionToken == token, todo.modelContext != nil else { return }
                 ProductionDataSync.apply(remote, to: todo)
                 try modelContext.save()
                 if remote.delegation != nil || remote.brief?.suggestedActions != nil { return }

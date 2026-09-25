@@ -17,6 +17,11 @@ struct TodoWorkColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
             read
+            if brief == nil && todo.delegation == nil && ["triage", "open", "snoozed"].contains(todo.status) {
+                ProgressView("Preparing people and next steps…")
+                    .controlSize(.small)
+                    .font(Tokens.Typography.small)
+            }
             TodoDelegationPanel(todoID: todo.id, summary: todo.delegation,
                 canDelegate: todo.canDelegate == true, proposal: todo.delegationProposal, request: store.delegationRequest,
                 refreshTodo: { await store.refreshTodo() })

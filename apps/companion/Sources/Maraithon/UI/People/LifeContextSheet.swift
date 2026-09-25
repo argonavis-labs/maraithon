@@ -19,7 +19,7 @@ struct LifeContextSheet: View {
         let client = MaraithonClient(tokenProvider: { await auth.currentToken })
         do { return try await client.lifeContext(path: path, input: input) }
         catch MaraithonClientError.unauthorized {
-            await auth.tokenRejected()
+            auth.tokenRejected()
             throw MaraithonClientError.unauthorized
         }
     }

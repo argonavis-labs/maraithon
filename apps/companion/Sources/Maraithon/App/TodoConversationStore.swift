@@ -220,6 +220,17 @@ final class TodoConversationStore {
         if let details = try? await client.todoDetails(id: todo.id) { todo = details.todo }
     }
 
+    /// Preparation completes independently of chat events. Observe only this
+    /// open todo, bounded by the provider deadline plus context gathering.
+    func observeBriefPreparation() async {
+        for _ in 0..<64 {
+            guard todo.brief == nil, todo.delegation == nil,
+                  ["triage", "open", "snoozed"].contains(todo.status), !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            await refreshTodo()
+        }
+    }
+
     private func refresh() async throws {
         guard let thread else { return }
         let wasThinking = isThinking
