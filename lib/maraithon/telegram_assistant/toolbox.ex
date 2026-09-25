@@ -986,7 +986,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "draft_imessage",
-        "Prepare an editable Messages draft. First resolve the recipient from People or a real Messages source. Pass their exact phone/email as recipient, the grounded message body, and optionally source_message_id from messages_get. This never sends; the native client opens the reviewed draft in Messages.",
+        "Prepare an editable Messages draft. First resolve the recipient from People or a real Messages source. Pass their exact phone/email as recipient, the grounded message body, and optionally source_message_id from messages_get. This creates a review card and never sends by itself. The user sends from the card through their paired Mac.",
         %{
           "type" => "object",
           "required" => ["recipient", "body"],
@@ -1800,7 +1800,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         inject_user_and_execute("gmail_drafts", runtime_context, args)
 
       "draft_imessage" ->
-        Maraithon.AssistantChat.MessageDraft.prepare(runtime_context.user_id, args)
+        Maraithon.AssistantChat.MessageDraft.prepare_action(
+          Map.put(runtime_context, :surface, runtime_surface(runtime_context)),
+          Map.put(args, "todo_id", linked_todo_id(runtime_context))
+        )
 
       "draft_message" ->
         inject_user_and_execute("draft_message", runtime_context, args)
@@ -3628,8 +3631,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        prepared_action_id: action.id,
        preview_text: preview_text,
        requires_confirmation: action.status == "awaiting_confirmation",
-       message: "#{preview_text} Booking did not go through: #{ActionFailureCopy.prepared_action(reason)}",
-       assistant_note: "Tell the user what blocked it and how to fix it. Do not claim it is booked."
+       message:
+         "#{preview_text} Booking did not go through: #{ActionFailureCopy.prepared_action(reason)}",
+       assistant_note:
+         "Tell the user what blocked it and how to fix it. Do not claim it is booked."
      }}
   end
 

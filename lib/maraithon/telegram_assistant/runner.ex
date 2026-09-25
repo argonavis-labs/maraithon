@@ -2617,6 +2617,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp execute_external_action(action_type, payload, prepared_action, frozen_payload) do
     case action_type do
+      "imessage_send" ->
+        Maraithon.MessageSend.execute(prepared_action)
+
       "browser_interact" ->
         execute_tool_action(
           "browser_interact",

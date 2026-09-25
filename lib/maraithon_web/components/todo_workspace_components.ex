@@ -17,7 +17,10 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       messages
       |> Enum.reverse()
       |> Enum.filter(&is_map(&1.structured_data["draft_card"]))
-      |> Enum.uniq_by(& &1.structured_data["draft_card"]["provider"])
+      |> Enum.uniq_by(fn message ->
+        card = message.structured_data["draft_card"]
+        {card["provider"], card["recipient"]}
+      end)
       |> Enum.take(4)
 
     assigns =
@@ -25,6 +28,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       |> assign(:messages, Enum.take(messages, -assigns.state.history_limit))
       |> assign(:more?, length(messages) > assigns.state.history_limit)
       |> assign(:reviews, reviews)
+      |> assign(:timeline, if(thread, do: Map.get(thread, :todo_timeline, []), else: []))
       |> assign(:run, thread && thread.pending_run)
       |> assign(
         :receipts,
@@ -41,7 +45,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
     <div id={"todo-workspace-#{@todo.id}"} phx-hook="TodoWorkspace"
       data-storage-key={"maraithon:todo:#{@user_id}:#{@todo.id}"}
       data-receipts={Jason.encode!(@receipts)} data-busy={to_string(@state.busy?)}
-      class="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_16rem]">
+      class="grid min-w-0 gap-8 xl:grid-cols-2">
       <div class="min-w-0 space-y-6">
         <.live_component module={MaraithonWeb.DelegationPanel} id={"delegation-#{@todo.id}"} todo={@todo} />
         <section :if={not @delegated?} aria-label="Maraithon’s read" class="space-y-3">
@@ -52,7 +56,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
             <p :for={question <- @brief["open_questions"]}><%= question %></p>
           </div>
           <p :if={@brief_progress} role="status" class="text-sm/6 text-zinc-500"><%= @brief_progress %></p>
-          <div :if={@todo.status in ~w(open snoozed)} class="flex flex-wrap items-center gap-3">
+          <div :if={@todo.status in ~w(triage open snoozed)} class="flex flex-wrap items-center gap-3">
             <.button :if={@brief_state not in [:generating, :waiting]} phx-click="regenerate_brief" variant="plain">Refresh context</.button>
           </div>
         </section>
@@ -61,6 +65,52 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           <.draft_review :for={message <- @reviews} message={message} busy?={@state.busy? || @state.loading?} />
         </section>
 
+        <section :if={not @delegated? && @todo.status in ~w(triage open snoozed) && @actions != []} aria-labelledby="todo-next-actions-title">
+          <h2 id="todo-next-actions-title" class="text-sm/6 font-semibold text-zinc-950">Suggested next actions</h2>
+          <div class="mt-2 divide-y divide-zinc-950/10 border-y border-zinc-950/10">
+            <.button :for={action <- @actions} variant="plain" class="w-full justify-start py-3 text-left"
+              data-workspace-prompt={action_request(action)} disabled={@state.busy? || @state.loading? || @run != nil || is_nil(@state.thread)}>
+              <.provider_mark provider={action["provider"]} />
+              <span class="min-w-0 flex-1"><span class="block"><%= action["label"] %></span>
+                <span class="block text-xs/5 font-normal text-zinc-500"><%= action["purpose"] %></span>
+              </span>
+              <.icon name="hero-arrow-up-right" class="size-4 shrink-0 text-zinc-400" />
+            </.button>
+          </div>
+        </section>
+
+        <details class="border-b border-zinc-950/10 pb-4">
+          <summary class="cursor-pointer text-sm/6 font-medium text-zinc-600">Context and source</summary>
+          <div class="mt-3 space-y-4"><%= render_slot(@summary) %></div>
+        </details>
+
+
+        <.activity_timeline entries={@timeline} />
+      <aside class="min-w-0 border-t border-zinc-950/10 pt-5" aria-labelledby="todo-people-title">
+        <details id={"todo-people-#{@todo.id}"} >
+          <summary id="todo-people-title" class="cursor-pointer text-sm/6 font-semibold text-zinc-950">People <span class="ml-1 font-normal text-zinc-400"><%= length(@people) %></span></summary>
+          <div class="mt-4 divide-y divide-zinc-950/10">
+            <article :for={person <- @people} class="space-y-2 py-4 first:pt-0">
+              <div class="flex items-center gap-3">
+                <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-xs font-medium text-zinc-600" aria-hidden="true"><%= initials(person["name"]) %></span>
+                <div class="min-w-0"><h3 class="text-sm/6 font-medium text-zinc-950"><.link navigate={~p"/operator/people/confirm?#{%{todo_id: @todo.id, reference: person["id"]}}"}><%= person["name"] %></.link></h3>
+                  <p :if={person["relationship"]} class="text-xs/5 text-zinc-500"><%= person["relationship"] %></p>
+                </div>
+              </div>
+              <p :if={person["context"]} class="text-sm/6 text-zinc-600"><%= person["context"] %></p>
+
+              <div class="flex flex-wrap gap-1">
+                <.button navigate={~p"/operator/people/confirm?#{%{todo_id: @todo.id, reference: person["id"]}}"} variant="plain" class="text-xs">Confirm details</.button>
+                <.button variant="plain" class="text-xs" disabled={@state.busy? || @state.loading? || @run != nil || is_nil(@state.thread)}
+                  data-workspace-prompt={"Who is #{person["name"]}, how do I know them, and what should I know for this todo? Check our real relationship and source history."}>Ask Maraithon</.button>
+              </div>
+            </article>
+            <p :if={@people == []} class="text-sm/6 text-zinc-500">No people identified in this todo yet.</p>
+          </div>
+        </details>
+      </aside>
+      </div>
+      <div class="min-w-0 xl:border-l xl:border-zinc-950/10 xl:pl-6">
         <section id="todo-conversation" class="min-w-0 scroll-mt-6" aria-labelledby="todo-conversation-title">
           <div class="mb-3 flex items-center justify-between gap-3">
             <h2 id="todo-conversation-title" class="text-sm/6 font-semibold text-zinc-950">Chat</h2>
@@ -103,51 +153,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
             </div>
           </form>
         </section>
-        <section :if={not @delegated? && @todo.status in ~w(open snoozed) && @actions != []} aria-labelledby="todo-next-actions-title">
-          <h2 id="todo-next-actions-title" class="text-sm/6 font-semibold text-zinc-950">Suggested next actions</h2>
-          <div class="mt-2 divide-y divide-zinc-950/10 border-y border-zinc-950/10">
-            <.button :for={action <- @actions} variant="plain" class="w-full justify-start py-3 text-left"
-              data-workspace-prompt={action_request(action)} disabled={@state.busy? || @state.loading? || @run != nil || is_nil(@state.thread)}>
-              <.provider_mark provider={action["provider"]} />
-              <span class="min-w-0 flex-1"><span class="block"><%= action["label"] %></span>
-                <span class="block text-xs/5 font-normal text-zinc-500"><%= action["purpose"] %></span>
-              </span>
-              <.icon name="hero-arrow-up-right" class="size-4 shrink-0 text-zinc-400" />
-            </.button>
-          </div>
-        </section>
-
-        <details class="border-b border-zinc-950/10 pb-4">
-          <summary class="cursor-pointer text-sm/6 font-medium text-zinc-600">Context and source</summary>
-          <div class="mt-3 space-y-4"><%= render_slot(@summary) %></div>
-        </details>
-
-
       </div>
-
-      <aside class="min-w-0 border-t border-zinc-950/10 pt-5 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0" aria-labelledby="todo-people-title">
-        <details open id={"todo-people-#{@todo.id}"} class="xl:sticky xl:top-6">
-          <summary id="todo-people-title" class="cursor-pointer text-sm/6 font-semibold text-zinc-950">People <span class="ml-1 font-normal text-zinc-400"><%= length(@people) %></span></summary>
-          <div class="mt-4 divide-y divide-zinc-950/10">
-            <article :for={person <- @people} class="space-y-2 py-4 first:pt-0">
-              <div class="flex items-center gap-3">
-                <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-xs font-medium text-zinc-600" aria-hidden="true"><%= initials(person["name"]) %></span>
-                <div class="min-w-0"><h3 class="text-sm/6 font-medium text-zinc-950"><.link navigate={~p"/operator/people/confirm?#{%{todo_id: @todo.id, reference: person["id"]}}"}><%= person["name"] %></.link></h3>
-                  <p :if={person["relationship"]} class="text-xs/5 text-zinc-500"><%= person["relationship"] %></p>
-                </div>
-              </div>
-              <p :if={person["context"]} class="text-sm/6 text-zinc-600"><%= person["context"] %></p>
-
-              <div class="flex flex-wrap gap-1">
-                <.button navigate={~p"/operator/people/confirm?#{%{todo_id: @todo.id, reference: person["id"]}}"} variant="plain" class="text-xs">Confirm details</.button>
-                <.button variant="plain" class="text-xs" disabled={@state.busy? || @state.loading? || @run != nil || is_nil(@state.thread)}
-                  data-workspace-prompt={"Who is #{person["name"]}, how do I know them, and what should I know for this todo? Check our real relationship and source history."}>Ask Maraithon</.button>
-              </div>
-            </article>
-            <p :if={@people == []} class="text-sm/6 text-zinc-500">No people identified in this todo yet.</p>
-          </div>
-        </details>
-      </aside>
     </div>
     """
   end
@@ -169,7 +175,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
       |> assign(:card_id, "review-" <> assigns.message.id)
 
     ~H"""
-    <details id={@card_id} data-workspace-review data-provider={@card["provider"]} data-message-id={@message.id}
+    <details open={!terminal?(@card)} id={@card_id} data-workspace-review data-provider={@card["provider"]} data-message-id={@message.id}
       data-editable={to_string(@editable?)} class="group rounded-lg border border-zinc-950/10 bg-white">
       <summary class="flex cursor-pointer list-none items-center gap-3 p-4">
         <.provider_mark provider={@card["provider"]} />
@@ -180,6 +186,17 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
         <.icon name="hero-chevron-down" class="size-4 shrink-0 text-zinc-400 group-open:rotate-180" />
       </summary>
       <form data-workspace-draft data-action-id={@card["prepared_action_id"]} data-from={@card["from"]} class="space-y-4 border-t border-zinc-950/10 p-4 sm:p-5">
+        <details :if={(@card["conversation"] || []) != []} open class="border-b border-zinc-950/10 pb-3">
+          <summary class="cursor-pointer text-sm font-medium text-zinc-700">Conversation</summary>
+          <div class="mt-3 max-h-64 space-y-4 overflow-y-auto">
+            <div :for={message <- @card["conversation"]} class="border-l-2 border-zinc-200 pl-3">
+              <p class="text-xs/5 text-zinc-500"><%= message[:speaker] || message["speaker"] %>
+                <time :if={message[:at] || message["at"]} datetime={message[:at] || message["at"]} data-workspace-time><%= message[:at] || message["at"] %></time>
+              </p>
+              <div data-channel-message={@card["provider"]} class="whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><span data-channel-source><%= message[:text] || message["text"] %></span><span data-channel-rendered /></div>
+            </div>
+          </div>
+        </details>
         <div :if={@card["from"]} class="text-sm/6"><span class="mr-2 text-zinc-500">From</span><%= @card["from"] %></div>
         <.field :if={@card["recipient"]} label="To" for={@card_id <> "-recipient"}>
           <.c_input id={@card_id <> "-recipient"} name="recipient" value={@card["recipient"]}
@@ -203,10 +220,15 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           <.c_textarea id={@card_id <> "-body"} name="body" value={@card["body"]} rows={7}
             readonly={!@editable? || @card["provider"] == "calendar"} required={@card["provider"] != "calendar"} />
         </.field>
+        <details :if={@card["provider"] == "slack"} class="text-sm/6">
+          <summary class="cursor-pointer font-medium text-zinc-600">Preview formatting</summary>
+          <div data-draft-preview class="mt-3 whitespace-pre-wrap break-words text-zinc-800" />
+        </details>
         <div :if={@card["connection_required"]} class="space-y-2 rounded-lg bg-amber-50 p-3 text-sm/6 text-amber-900">
           <p><%= @card["connection_notice"] %></p>
           <.button :if={safe_link(@card["connection_url"])} href={@card["connection_url"]} target="_blank" rel="noopener" variant="outline"><%= @card["connection_label"] %></.button>
         </div>
+        <p :if={@card["delivery_note"]} class="text-xs/5 text-zinc-500"><%= @card["delivery_note"] %></p>
         <div class="flex flex-wrap items-center gap-2">
           <.button :if={@card["prepared_action_id"]} type="submit" data-decision="confirm"
             disabled={@busy? || @card["connection_required"] == true}>
@@ -215,7 +237,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
           <.button :if={@card["prepared_action_id"]} type="submit" data-decision="reject" formnovalidate variant="plain" disabled={@busy?}>Cancel action</.button>
           <.button :if={@editable? && @card["provider"] == "gmail" && is_nil(@card["prepared_action_id"])}
             data-prepare-email disabled={@busy? || @card["connection_required"] == true}>Prepare to send</.button>
-          <.button :if={@card["provider"] == "imessage" && !terminal?(@card)} data-open-messages variant="outline">Open in Messages</.button>
+          <.button :if={@card["provider"] == "imessage" && is_nil(@card["prepared_action_id"]) && !terminal?(@card)} data-open-messages variant="outline">Open in Messages</.button>
           <.button :if={@card["body"]} data-copy-draft variant="outline">Copy</.button>
           <.button :if={safe_link(@card["open_url"])} href={@card["open_url"]} target="_blank" rel="noopener" variant="plain"><%= @card["open_label"] || "Open source" %></.button>
         </div>
@@ -248,6 +270,27 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
     ~H"""
     <img :if={@logo} src={@logo} alt={provider_label(@provider)} class="size-5 shrink-0 object-contain" />
     <.icon :if={!@logo} name={if(@provider == "calendar", do: "hero-calendar-days", else: "hero-sparkles")} class="size-5 shrink-0 text-zinc-500" />
+    """
+  end
+
+  attr :entries, :list, required: true
+
+  def activity_timeline(assigns) do
+    ~H"""
+    <details :if={@entries != []} class="border-y border-zinc-950/10 py-4">
+      <summary class="cursor-pointer text-sm/6 font-semibold text-zinc-950">Timeline · <%= length(@entries) %></summary>
+      <ol class="mt-4 space-y-4" aria-label="Todo activity">
+        <li :for={entry <- @entries}>
+          <details class="border-l-2 border-zinc-200 pl-3">
+            <summary class="cursor-pointer text-sm/6 text-zinc-800">
+              <span class={if(entry.kind in ["sent", "marked_done"], do: "text-emerald-700 font-medium")}><%= entry.title %></span>
+              <time :if={entry.occurred_at} datetime={entry.occurred_at} data-workspace-time class="ml-2 text-xs text-zinc-500"><%= entry.occurred_at %></time>
+            </summary>
+            <p :if={entry.body} class="mt-2 whitespace-pre-wrap break-words text-sm/6 text-zinc-600"><%= entry.body %></p>
+          </details>
+        </li>
+      </ol>
+    </details>
     """
   end
 

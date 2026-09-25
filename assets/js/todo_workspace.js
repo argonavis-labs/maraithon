@@ -1,8 +1,11 @@
+import { renderSlackMessage } from './channel_message'
+
 // Tab-scoped drafts survive LiveView patches, navigation and reconnects.
 // Only a server receipt clears a submitted message. Retrying reuses its UUID.
 export const TodoWorkspace = {
   mounted() {
     this.connected = true
+    this.knownReviews = new Set()
     this.key = this.el.dataset.storageKey
     try { this.saved = JSON.parse(sessionStorage.getItem(this.key)) || {} } catch (_) { this.saved = {} }
     this.saved.drafts ||= {}
@@ -12,6 +15,7 @@ export const TodoWorkspace = {
       const review = event.target.closest('[data-workspace-review]')
       if (review && review.dataset.editable === 'true') {
         this.saved.drafts[review.dataset.messageId] = this.fields(review.querySelector('form'))
+        this.preview(review)
       }
       this.persist()
     }
@@ -93,6 +97,10 @@ export const TodoWorkspace = {
     try { sessionStorage.setItem(this.key, JSON.stringify(this.saved)) } catch (_) {}
   },
   fields(form) { return Object.fromEntries(new FormData(form).entries()) },
+  preview(review) {
+    const preview = review.querySelector('[data-draft-preview]')
+    if (preview) renderSlackMessage(preview, review.querySelector('textarea[name="body"]')?.value || '')
+  },
   ask(body) {
     body = body.trim()
     if (!body) return
@@ -127,6 +135,13 @@ export const TodoWorkspace = {
     status.textContent = this.saved.request ? `Awaiting confirmation: ${this.saved.request.body.slice(0, 180)}` : ''
     this.el.querySelector('[data-retry-request]').hidden = !this.saved.request
     for (const review of this.el.querySelectorAll('[data-workspace-review]')) {
+      if (!this.knownReviews.has(review.id)) {
+        this.knownReviews.add(review.id)
+        if (review.dataset.editable === 'true' && !Object.hasOwn(this.saved.expanded, review.id)) {
+          review.open = true
+          requestAnimationFrame(() => review.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start'}))
+        }
+      }
       if (Object.hasOwn(this.saved.expanded, review.id)) review.open = this.saved.expanded[review.id]
       const fields = this.saved.drafts[review.dataset.messageId]
       if (fields && review.dataset.editable === 'true') {
@@ -136,6 +151,12 @@ export const TodoWorkspace = {
       } else if (review.dataset.editable !== 'true') {
         delete this.saved.drafts[review.dataset.messageId]
       }
+      this.preview(review)
+    }
+    for (const content of this.el.querySelectorAll('[data-channel-message="slack"]')) {
+      const source = content.querySelector('[data-channel-source]')
+      source.hidden = true
+      renderSlackMessage(content.querySelector('[data-channel-rendered]'), source.textContent)
     }
     for (const time of this.el.querySelectorAll('[data-workspace-time]')) {
       try {

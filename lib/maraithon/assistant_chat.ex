@@ -751,6 +751,19 @@ defmodule Maraithon.AssistantChat do
   end
 
   defp prepared_action_draft_edit_attrs(
+         %PreparedAction{action_type: "imessage_send"} = prepared_action,
+         edits
+       ) do
+    body = read_string(edits, "body")
+
+    if is_binary(body) and byte_size(body) <= 16_384 do
+      {:ok, %{payload: Map.put(prepared_action.payload, "body", body)}}
+    else
+      {:error, :invalid_message_body}
+    end
+  end
+
+  defp prepared_action_draft_edit_attrs(
          %PreparedAction{action_type: "slack_post"} = prepared_action,
          edits
        ) do
@@ -791,6 +804,11 @@ defmodule Maraithon.AssistantChat do
     do: {:ok, %{payload: prepared_action.payload || %{}}}
 
   defp gmail_payload_with_edits(payload, edits) do
+    body = read_string(edits, "body") || read_string(edits, "text")
+
+    payload =
+      if body && body != payload["body"], do: Map.delete(payload, "html_body"), else: payload
+
     payload
     |> maybe_put_payload("to", read_string(edits, "to") || read_string(edits, "recipient"))
     |> maybe_put_payload("recipient", read_string(edits, "to") || read_string(edits, "recipient"))
@@ -912,6 +930,7 @@ defmodule Maraithon.AssistantChat do
 
   defp prime_todo_thread(%Conversation{} = conversation, todo, opts) do
     with {:ok, primed_conversation} <- TodoThreadPrimer.ensure(conversation, todo, opts) do
+      Maraithon.AssistantChat.LegacyMessageDrafts.prepare(primed_conversation, todo)
       {:ok, reload_thread(primed_conversation)}
     end
   end
@@ -1049,11 +1068,13 @@ defmodule Maraithon.AssistantChat do
   defp prepared_action_uncertain_label("gmail_send"), do: "the Gmail message was sent"
   defp prepared_action_uncertain_label("gmail_draft_send"), do: "the Gmail draft was sent"
   defp prepared_action_uncertain_label("slack_post"), do: "the Slack message was posted"
+  defp prepared_action_uncertain_label("imessage_send"), do: "the Messages message was sent"
   defp prepared_action_uncertain_label(_action_type), do: "the confirmed action completed"
 
   defp prepared_action_label("gmail_send"), do: "the Gmail message"
   defp prepared_action_label("gmail_draft_send"), do: "the Gmail draft"
   defp prepared_action_label("slack_post"), do: "the Slack message"
+  defp prepared_action_label("imessage_send"), do: "the Messages message"
   defp prepared_action_label("linear_create_issue"), do: "the Linear issue"
   defp prepared_action_label("linear_create_comment"), do: "the Linear comment"
   defp prepared_action_label("linear_update_issue_state"), do: "the Linear issue status update"
@@ -1069,6 +1090,7 @@ defmodule Maraithon.AssistantChat do
   defp prepared_action_failure_label("gmail_send"), do: "send the Gmail message"
   defp prepared_action_failure_label("gmail_draft_send"), do: "send the Gmail draft"
   defp prepared_action_failure_label("slack_post"), do: "send the Slack message"
+  defp prepared_action_failure_label("imessage_send"), do: "send the Messages message"
   defp prepared_action_failure_label("linear_create_issue"), do: "create the Linear issue"
   defp prepared_action_failure_label("linear_create_comment"), do: "add the Linear comment"
 

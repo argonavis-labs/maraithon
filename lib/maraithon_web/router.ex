@@ -322,6 +322,8 @@ defmodule MaraithonWeb.Router do
     post "/files", CompanionController, :ingest_files
     post "/browser/claim", CompanionBrowserController, :claim
     post "/browser/:id/result", CompanionBrowserController, :complete
+    post "/message-send/claim", CompanionMessageSendController, :claim
+    post "/message-send/:id/result", CompanionMessageSendController, :complete
     post "/browser-history", CompanionController, :ingest_browser_history
     post "/recall", CompanionController, :recall
 

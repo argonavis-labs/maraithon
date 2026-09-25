@@ -1,10 +1,104 @@
 defmodule Maraithon.AssistantChat.MessageDraft do
   @moduledoc """
   Builds a native Messages draft from a user-scoped, known contact or message.
-  Preparation is read-only; opening a composer is never recorded as delivery.
+  Preparing a draft never sends; only the human-confirmed action may execute.
   """
 
-  alias Maraithon.{Crm, LocalMessages}
+  import Ecto.Query
+  alias Maraithon.{Crm, LocalMessages, Repo, TelegramAssistant}
+  alias Maraithon.TelegramAssistant.PreparedAction
+
+  def prepare_action(context, args) do
+    with {:ok, result} <- prepare(context.user_id, args) do
+      if is_binary(args["todo_id"]) do
+        card = result.draft_card
+
+        payload = %{
+          "recipient" => card.recipient,
+          "recipient_name" => card.recipient_name,
+          "body" => card.body,
+          "todo_id" => args["todo_id"],
+          "keep_todo_open" => true,
+          "user_id" => context.user_id,
+          "chat_key" => Maraithon.Todos.ConversationContext.message_chat(context.user_id, args)
+        }
+
+        with {:ok, action} <-
+               replace_draft(%{
+                 user_id: context.user_id,
+                 chat_id: context.chat_id,
+                 conversation_id: context.conversation_id,
+                 run_id: context.run_id,
+                 surface: context.surface,
+                 action_type: "imessage_send",
+                 target_type: "imessage_recipient",
+                 target_id: card.recipient,
+                 payload: payload,
+                 preview_text: "Send a message to #{card.recipient_name} via your paired Mac.",
+                 status: "awaiting_confirmation",
+                 expires_at:
+                   DateTime.add(
+                     DateTime.utc_now(),
+                     TelegramAssistant.confirmation_window_seconds(),
+                     :second
+                   )
+               }) do
+          {:ok,
+           %{
+             status: "awaiting_confirmation",
+             prepared_action_id: action.id,
+             requires_confirmation: true,
+             draft_card: Map.put(card, :prepared_action_id, action.id),
+             message: "Draft ready in the todo workspace. Review it and choose Send or Cancel."
+           }}
+        end
+      else
+        {:ok, result}
+      end
+    end
+  end
+
+  defp replace_draft(attrs) do
+    Repo.transaction(fn ->
+      Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(attrs.user_id)
+
+      existing =
+        Repo.one(
+          from a in PreparedAction,
+            where:
+              a.user_id == ^attrs.user_id and a.action_type == "imessage_send" and
+                a.payload_todo_id == ^attrs.payload["todo_id"] and
+                a.status == "awaiting_confirmation",
+            lock: "FOR UPDATE"
+        )
+        |> PreparedAction.hydrate_payload()
+
+      if existing && existing.payload == attrs.payload &&
+           not TelegramAssistant.prepared_action_expired?(existing) do
+        existing
+      else
+        if existing do
+          status =
+            if TelegramAssistant.prepared_action_expired?(existing),
+              do: "expired",
+              else: "rejected"
+
+          case TelegramAssistant.update_prepared_action(existing, %{
+                 status: status,
+                 error: "draft_replaced"
+               }) do
+            {:ok, _} -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end
+
+        case TelegramAssistant.create_prepared_action(attrs) do
+          {:ok, action} -> action
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end
+    end)
+  end
 
   def prepare(user_id, args) do
     recipient = text(args["recipient"])
@@ -22,7 +116,7 @@ defmodule Maraithon.AssistantChat.MessageDraft do
            recipient_name: name,
            body: body,
            status: "Draft",
-           open_label: "Open in Messages"
+           open_label: "Review message"
          },
          message: "Draft ready for review in Messages. Nothing has been sent."
        }}

@@ -200,6 +200,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       status: conversation.status,
       pending_run: active_run && run(active_run),
       linked_todo: current_linked_todo(conversation),
+      todo_timeline: Maraithon.Todos.Timeline.for_conversation(conversation),
       messages:
         conversation
         |> sorted_turns()
@@ -432,7 +433,7 @@ defmodule MaraithonWeb.MobileChatJSON do
   end
 
   defp prepared_action_confirm_label(%PreparedAction{action_type: action_type})
-       when action_type in ["gmail_send", "gmail_draft_send", "slack_post"],
+       when action_type in ["gmail_send", "gmail_draft_send", "slack_post", "imessage_send"],
        do: "Send"
 
   defp prepared_action_confirm_label(%PreparedAction{action_type: "browser_interact"}),
@@ -453,6 +454,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       is_binary(prepared_action_id) ->
         PreparedAction
         |> Repo.get(prepared_action_id)
+        |> PreparedAction.hydrate_payload()
         |> prepared_action_draft_card()
 
       get_in(structured_data || %{}, ["message_class"]) == "todo_chat_primer" ->
@@ -472,6 +474,20 @@ defmodule MaraithonWeb.MobileChatJSON do
       |> SourceContext.merge_into(SourceContext.for_payload(payload))
 
     case prepared_action.action_type do
+      "imessage_send" ->
+        %{
+          "provider" => "imessage",
+          "title" => "Message to " <> (payload["recipient_name"] || payload["recipient"]),
+          "recipient" => payload["recipient"],
+          "recipient_name" => payload["recipient_name"],
+          "body" => payload["body"],
+          "editable" => prepared_action.status == "awaiting_confirmation",
+          "send_label" => "Send message",
+          "delivery_note" => "Sends through Messages on your Mac"
+        }
+        |> Map.merge(base)
+        |> Map.put("send_label", "Send message")
+
       "gmail_draft_send" ->
         %{
           "provider" => "gmail",
@@ -533,6 +549,21 @@ defmodule MaraithonWeb.MobileChatJSON do
       _ ->
         nil
     end
+    |> then(fn card ->
+      if is_map(card) do
+        Map.put(
+          card,
+          "conversation",
+          Maraithon.Todos.ConversationContext.messages(
+            prepared_action.user_id,
+            card["provider"],
+            payload
+          )
+        )
+      else
+        card
+      end
+    end)
     |> MaraithonWeb.TodoActionAccess.enrich(prepared_action.user_id, payload)
   end
 

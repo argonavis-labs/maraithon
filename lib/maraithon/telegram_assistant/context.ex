@@ -120,6 +120,12 @@ defmodule Maraithon.TelegramAssistant.Context do
           linked_project
         ),
       recent_turns: serialize_recent_turns(conversation),
+      todo_timeline:
+        Maraithon.Todos.Timeline.for_todo(linked_todo)
+        |> Enum.take(-40)
+        |> Enum.map(fn event ->
+          Map.update!(event, :body, &if(is_binary(&1), do: String.slice(&1, 0, 700)))
+        end),
       preference_memory: fetched.preference_memory,
       operator_memory: fetched.operator_memory,
       user_memory: fetched.user_memory,

@@ -678,8 +678,9 @@ defmodule Maraithon.AssistantHarness do
     - If a sender_handle resolves to a People profile via `resolve_handle`, answer using the person's name, not the raw phone/email.
     - If the user asks you to draft a reply, email, or Slack message, use relationship/open-work/source context as needed and call `draft_message` so the draft uses durable email or Slack voice memory. If they ask for a real Gmail draft, or they are in a selected work-item chat asking to "Draft reply" or "Take action" for an email/Gmail item, call `draft_message` with `channel:"gmail"` and `save_to_provider:true`; then call `prepare_external_action` with `action_type:"gmail_draft_send"` and payload including `draft_id`, `to`, `subject`, and `body` so the mobile/web client can show a saved Gmail draft with a real Send action. Do not call `gmail_drafts` directly unless you need to list, fetch, update, send, or delete an existing Gmail draft. If `draft_message` returns no `provider_draft`, keep its editable `draft_card` visible and explain that Gmail has not saved it. Do not invent a draft ID or prepare `gmail_draft_send` until a real provider draft exists; let the user enable the missing Google permission from the card and retry.
     - For Slack draft/send requests, prepare a `slack_post` external action for approval once the workspace, channel, thread, and text are known. Slack does not provide a normal provider-side saved draft, so the prepared action is the interactive draft.
-    - For iMessage/Messages draft requests, resolve the person and their actual phone/email from People or Messages, then call `draft_imessage` with recipient and body. This produces an editable native draft. Never invent a handle or claim the server sent an iMessage. The operator opens the reviewed draft in Messages to send it.
-    - In a linked todo conversation, act as a chief of staff carrying this exact obligation forward. Read its source when needed, explain who the people are from evidence, check real calendar availability, and prepare the next useful draft/action. Treat a draft to another person or a calendar block as a supporting step, not completion of the parent obligation. Keep the work open until the operator says it is done or fresh evidence proves the full obligation satisfied. Do not silently send messages from a request to draft or find a time.
+    - For a Slack draft in a todo, follow draft_message with prepare_external_action using action_type slack_post and the verified team_id, channel, text, and thread_ts when replying. This creates an editable review card; it does not send.
+    - For iMessage/Messages draft requests, resolve the person and their actual phone/email from People or Messages, then call `draft_imessage` with recipient and body. This produces an editable native draft. Never invent a handle or claim the server sent an iMessage. The draft opens in the todo workspace; the operator sends from its review card through their paired Mac. Only claim it was sent after a confirmed action result. Include the specific school/work obligation in the message instead of vague references like "this one". Use natural plain text for Messages, Slack mrkdwn for Slack, and clear paragraphs with a subject for email. Preserve exact thread IDs when replying.
+    - In a linked todo conversation, act as a chief of staff carrying this exact obligation forward. Consult todo_timeline for previous drafts, cancellations, confirmed sends and incoming replies. A cancelled or unconfirmed draft is not a sent message. New messages in an associated conversation are context, not proof the todo is complete. Read its source when needed, explain who the people are from evidence, check real calendar availability, and prepare the next useful draft/action. Treat a draft to another person or a calendar block as a supporting step, not completion of the parent obligation. Keep the work open until the operator says it is done or fresh evidence proves the full obligation satisfied. Do not silently send messages from a request to draft or find a time.
     - When asked to help finish a todo, investigate and prepare the concrete next step in this turn. Ask only for a missing decision that actually blocks progress; do not return a generic checklist when connected tools can do the work.
     - A direct instruction in task chat applies to the linked todo immediately. Follow the specific instruction without making the user enter a preparation mode. A general request to help with the task delegates its preparation. Establish the outcome that would finish the original obligation, then use connected sources to resolve dependencies in order. Look up the source's latest state, relevant people, documents, and real calendar facts yourself. Continue through useful read/research steps and prepare a concrete reviewable action; do not stop after explaining what you could do or make the operator choose tools. An action already prepared in this conversation should be reused when still current instead of creating a duplicate.
     - For a specific linked-task instruction, do only the reads needed for that instruction. “Add this to my calendar tomorrow” needs the linked task, local timezone, calendar preference, and tomorrow’s availability, not the original email thread or a general task review. Use a sensible free 30-minute block when duration is unspecified, state the chosen time, and keep the task open. Reuse or move an existing task block instead of creating another.
@@ -1775,6 +1776,7 @@ defmodule Maraithon.AssistantHarness do
       :user,
       :chat,
       :recent_turns,
+      :todo_timeline,
       :connected_accounts,
       :source_freshness,
       :defaults,
@@ -1789,6 +1791,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :linked_item,
       :preference_memory,
       :operator_memory,
@@ -1818,6 +1821,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,
@@ -1848,6 +1852,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,
@@ -1873,6 +1878,7 @@ defmodule Maraithon.AssistantHarness do
       :user,
       :chat,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,
@@ -1889,6 +1895,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,
@@ -1916,6 +1923,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,
@@ -1945,6 +1953,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,
@@ -1972,6 +1981,7 @@ defmodule Maraithon.AssistantHarness do
       :chat,
       :conversation,
       :recent_turns,
+      :todo_timeline,
       :preference_memory,
       :operator_memory,
       :user_memory,

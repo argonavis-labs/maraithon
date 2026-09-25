@@ -3132,11 +3132,13 @@ defmodule Maraithon.TelegramAssistant do
   defp prepared_action_uncertain_label("gmail_send"), do: "the Gmail message was sent"
   defp prepared_action_uncertain_label("gmail_draft_send"), do: "the Gmail draft was sent"
   defp prepared_action_uncertain_label("slack_post"), do: "the Slack message was posted"
+  defp prepared_action_uncertain_label("imessage_send"), do: "the Messages message was sent"
   defp prepared_action_uncertain_label(_action_type), do: "the confirmed action completed"
 
   defp prepared_action_label("gmail_send"), do: "the Gmail message"
   defp prepared_action_label("gmail_draft_send"), do: "the Gmail draft"
   defp prepared_action_label("slack_post"), do: "the Slack message"
+  defp prepared_action_label("imessage_send"), do: "the Messages message"
   defp prepared_action_label("linear_create_issue"), do: "the Linear issue"
   defp prepared_action_label("linear_create_comment"), do: "the Linear comment"
   defp prepared_action_label("linear_update_issue_state"), do: "the Linear issue status update"
@@ -3155,6 +3157,7 @@ defmodule Maraithon.TelegramAssistant do
   defp prepared_action_failure_label("gmail_send"), do: "send the Gmail message"
   defp prepared_action_failure_label("gmail_draft_send"), do: "send the Gmail draft"
   defp prepared_action_failure_label("slack_post"), do: "send the Slack message"
+  defp prepared_action_failure_label("imessage_send"), do: "send the Messages message"
   defp prepared_action_failure_label("linear_create_issue"), do: "create the Linear issue"
   defp prepared_action_failure_label("linear_create_comment"), do: "add the Linear comment"
 
