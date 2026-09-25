@@ -58,7 +58,11 @@ struct RootWindow: View {
         .focusedSceneValue(\.quickTodoAction,
             env.deviceAuth.currentToken != nil && env.onboarding.current == .done && !quickTodoShown
                 ? { quickTodoShown = true } : nil)
-        .sheet(isPresented: $quickTodoShown) { QuickTodoView(store: env.todos) }
+        .background {
+            QuickTodoPresenter(isPresented: $quickTodoShown, store: env.todos)
+                .frame(width: 0, height: 0)
+        }
+        .onChange(of: quickTodoShown) { _, shown in env.todos.quickCapturePresented = shown }
         .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme)
         .animation(.default, value: env.deviceAuth.state)
         .animation(.default, value: env.onboarding.current)
@@ -76,6 +80,7 @@ struct RootWindow: View {
             // do not get re-prompted (the persisted flag wins).
             switch newState {
             case .signedOut, .error:
+                quickTodoShown = false
                 env.todos.clear()
                 env.onboarding.reset()
             default:

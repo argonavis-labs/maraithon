@@ -174,7 +174,7 @@ struct TodosView: View {
                     return .handled
                 }
                 .onKeyPress(.space, phases: .down) { press in
-                    guard !searchFocused, !store.quickEntryFocused, press.modifiers.isEmpty,
+                    guard !searchFocused, !store.quickEntryFocused, !store.quickCapturePresented, press.modifiers.isEmpty,
                           activeTodo != nil else { return .ignored }
                     handle(.complete, store: store)
                     return .handled
@@ -197,7 +197,7 @@ struct TodosView: View {
     }
 
     private func focusedShortcutActions(store: TodosStore) -> TodoShortcutActions? {
-        guard !searchFocused, !store.quickEntryFocused, !shortcutHelpShown else { return nil }
+        guard !searchFocused, !store.quickEntryFocused, !store.quickCapturePresented, !shortcutHelpShown else { return nil }
         return TodoShortcutActions(isTriage: store.filter == .triage) { shortcut in
             handle(shortcut, store: store)
         }

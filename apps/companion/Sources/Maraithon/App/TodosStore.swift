@@ -41,6 +41,7 @@ final class TodosStore {
         }
     }
     var quickEntryFocused = false
+    var quickCapturePresented = false
     var query: String = ""
 
     private let client: MaraithonClient
