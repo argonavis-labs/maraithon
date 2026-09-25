@@ -34,5 +34,7 @@
     <true/>
     <key>com.apple.security.personal-information.reminders</key>
     <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

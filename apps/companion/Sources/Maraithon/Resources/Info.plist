@@ -48,10 +48,12 @@
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Maraithon mirrors your Mac reminders so the assistant can include them when you ask about your to-dos. Reminders stay in your account and are never shared.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Maraithon transcribes your Voice Memos locally on this Mac so you can search them by content. Audio never leaves your device for transcription.</string>
+	<string>Maraithon transcribes your Voice Memos and life/work notes locally on this Mac. Audio never leaves your device for transcription.</string>
 	<key>SUFeedURL</key>
 	<string>https://maraithon.com/companion/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SUPublicEDKey)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a life and work note for your assistant. You review its transcript before saving.</string>
 </dict>
 </plist>

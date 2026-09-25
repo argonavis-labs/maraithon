@@ -193,6 +193,7 @@ struct TodoDetailView: View {
 
     private var contextPanel: some View {
         TodoWorkspaceContextView(
+            todoID: todo.id.uuidString,
             people: todo.todoBrief?.people,
             hasBrief: todo.todoBrief != nil,
             actionsDisabled: chatThread == nil || chatThread?.pendingRunID != nil,

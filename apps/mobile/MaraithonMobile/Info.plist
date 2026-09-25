@@ -48,5 +48,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a life and work note for your assistant. You review its transcript before saving.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Transcribe your voice on this device so you can review and save life and work context.</string>
 </dict>
 </plist>

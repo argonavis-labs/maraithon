@@ -1,6 +1,9 @@
 import SwiftUI
+import AssistantProgressKit
 
 struct TodoWorkspaceContextView: View {
+    let todoID: String
+    @State private var reviewingPerson: LifeWorkContext.PersonReference?
     let people: [TodoWorkspacePerson]?
     let hasBrief: Bool
     let actionsDisabled: Bool
@@ -28,7 +31,9 @@ struct TodoWorkspaceContextView: View {
                         ForEach(people) { person in
                             RunnerCard {
                                 VStack(alignment: .leading, spacing: Runner.Spacing.compact) {
-                                    Label(person.name, systemImage: "person.crop.circle")
+                                    Button { reviewingPerson = .init(todoID: todoID, reference: person.id) } label: {
+                                        Label(person.name, systemImage: "person.crop.circle")
+                                    }
                                         .font(Runner.Typography.bodyMedium)
                                         .foregroundStyle(Runner.Palette.foreground)
                                     if let relationship = person.relationship, !relationship.isEmpty {
@@ -43,6 +48,10 @@ struct TodoWorkspaceContextView: View {
                                             .fixedSize(horizontal: false, vertical: true)
                                             .textSelection(.enabled)
                                     }
+                                    Button("Confirm details", systemImage: "person.crop.circle.badge.checkmark") {
+                                        reviewingPerson = .init(todoID: todoID, reference: person.id)
+                                    }
+                                    .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
                                     Button("Ask about \(person.name)", systemImage: "bubble.left") {
                                         ask(person.question)
                                     }
@@ -67,6 +76,7 @@ struct TodoWorkspaceContextView: View {
                 .padding(Runner.Layout.pageInset)
             }
         }
+        .sheet(item: $reviewingPerson) { person in LifeContextSheet(person: person) }
         .background(Runner.Palette.background)
     }
 }

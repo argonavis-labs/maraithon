@@ -19,6 +19,7 @@ struct PeopleNetworkPage: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var store = PeopleNetworkPageStore()
     @State private var tab: Tab = .list
+    @State private var contextPresented = false
     @State private var days = 30
     @State private var query = ""
     @State private var sort: PeopleNetworkCopy.Sort = .affinity
@@ -60,12 +61,18 @@ struct PeopleNetworkPage: View {
                     selection: $tab
                 )
 
+                Button("Life & work", systemImage: "person.2") { contextPresented = true }
+                    .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+                    .padding(.horizontal, Runner.Layout.pageInset)
+                    .padding(.top, Runner.Spacing.small)
+
                 filters
                 content
             }
             .padding(.top, Runner.Spacing.small)
             .padding(.bottom, Runner.Spacing.xlarge)
         }
+        .sheet(isPresented: $contextPresented) { LifeContextSheet() }
         .refreshable { await refresh() }
         .runnerPage()
         .toolbar(.hidden, for: .navigationBar)

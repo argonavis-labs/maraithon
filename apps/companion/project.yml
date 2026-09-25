@@ -93,7 +93,8 @@ targets:
         # description even when we hard-set `requiresOnDeviceRecognition`.
         # No audio leaves the device for transcription — the description
         # makes that promise to the user verbatim at the auth prompt.
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Maraithon transcribes your Voice Memos locally on this Mac so you can search them by content. Audio never leaves your device for transcription."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Record a life and work note for your assistant. You review its transcript before saving."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Maraithon transcribes your Voice Memos and life/work notes locally on this Mac. Audio never leaves your device for transcription."
         # EventKit full-access (read) for Reminders. macOS 14+ requires
         # an explicit "full access" prompt — there is no read-only tier
         # for Reminders any more. We never write back, even though the
@@ -137,7 +138,8 @@ targets:
         # written Info.plist also has the key — xcodegen's `info` block
         # owns Info.plist, the INFOPLIST_KEY_* settings are for targets
         # that use GENERATE_INFOPLIST_FILE=YES.
-        NSSpeechRecognitionUsageDescription: "Maraithon transcribes your Voice Memos locally on this Mac so you can search them by content. Audio never leaves your device for transcription."
+        NSMicrophoneUsageDescription: "Record a life and work note for your assistant. You review its transcript before saving."
+        NSSpeechRecognitionUsageDescription: "Maraithon transcribes your Voice Memos and life/work notes locally on this Mac. Audio never leaves your device for transcription."
         # EventKit Reminders read access (mirrored in INFOPLIST_KEY_*
         # above for target generation; mirrored here so the written
         # Info.plist contains the key as well).

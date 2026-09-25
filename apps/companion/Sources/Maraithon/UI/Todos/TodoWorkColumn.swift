@@ -1,10 +1,11 @@
 /// The work column: Maraithon's read, the next action (at most two cards, one
-/// open), and the people involved as chips that ask about them in the chat.
+/// open), and the people involved as chips that open their details for confirmation.
 import SwiftUI
 import AssistantProgressKit
 
 struct TodoWorkColumn: View {
     let store: TodoConversationStore
+    @State private var person: LifeWorkContext.PersonReference?
 
     private var todo: CompanionTodo { store.todo }
     private var brief: CompanionTodoBrief? { todo.delegation == nil ? store.todo.brief : nil }
@@ -22,6 +23,9 @@ struct TodoWorkColumn: View {
                 .id(todo.id)
             if todo.canMarkDone && todo.delegation == nil && plan.primary != nil { nextAction }
             people
+        }
+        .sheet(item: $person) { reference in
+            LifeContextSheet(person: reference, saved: { await store.refreshTodo() })
         }
         .padding(.horizontal, Tokens.Spacing.page)
         .padding(.vertical, Tokens.Spacing.large)
@@ -106,7 +110,7 @@ struct TodoWorkColumn: View {
                 FlowLayout {
                     ForEach(people) { person in
                         TodoPersonChip(person: person) {
-                            Task { await store.send(TodoActionCopy.askAboutPerson(person.name)) }
+                            self.person = .init(todoID: todo.id, reference: person.id)
                         }
                     }
                 }
@@ -116,7 +120,7 @@ struct TodoWorkColumn: View {
     }
 }
 
-/// One person from the brief. Clicking asks Maraithon about them in the chat;
+/// One person from the brief. Clicking opens their details for confirmation;
 /// the relationship and context show as help text so the row stays quiet.
 private struct TodoPersonChip: View {
     let person: CompanionTodoWorkspace.Person

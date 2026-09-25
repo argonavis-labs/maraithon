@@ -2,6 +2,7 @@
 import SwiftData
 import SwiftUI
 import PeopleNetworkKit
+import AssistantProgressKit
 
 struct CRMView: View {
     @Environment(SessionStore.self) private var sessionStore
@@ -9,7 +10,7 @@ struct CRMView: View {
     @Environment(\.openURL) private var openURL
     @State private var managing = false
     @State private var selectedTodo: TodoItem?
-    @State private var selectedContact: CRMContact?
+    @State private var reviewingPerson: LifeWorkContext.PersonReference?
     @State private var path: [String] = []
 
     var body: some View {
@@ -36,19 +37,14 @@ struct CRMView: View {
         .sheet(isPresented: $managing) {
             CRMManageView()
         }
-        .sheet(item: $selectedContact) { contact in
-            NavigationStack { ContactDetailView(contact: contact) }
-        }
+        .sheet(item: $reviewingPerson) { person in LifeContextSheet(person: person) }
         .sheet(item: $selectedTodo) { todo in
             NavigationStack { TodoDetailView(todo: todo) }
         }
     }
 
     private func showPerson(_ id: String?) {
-        if let id, let uuid = UUID(uuidString: id),
-           let contact = try? modelContext.fetch(FetchDescriptor<CRMContact>(predicate: #Predicate { $0.id == uuid })).first {
-            selectedContact = contact
-        } else { managing = true }
+        if let id { reviewingPerson = .init(personID: id) } else { managing = true }
     }
 
     private func showTodo(_ id: String) {

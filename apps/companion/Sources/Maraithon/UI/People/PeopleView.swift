@@ -3,6 +3,7 @@
 /// credential and ranking stays server-side; no ingestion work runs here.
 import SwiftUI
 import PeopleNetworkKit
+import AssistantProgressKit
 
 struct PeopleView: View {
     @Environment(AppEnvironment.self) private var env
@@ -17,6 +18,8 @@ struct PeopleView: View {
 
     @State private var store = PeopleStore()
     @State private var tab: Tab = .list
+    @State private var contextPresented = false
+    @State private var reviewingPerson: LifeWorkContext.PersonReference?
     @State private var days = 30
     @State private var query = ""
     @State private var sort: PeopleCopy.Sort = .affinity
@@ -52,6 +55,8 @@ struct PeopleView: View {
             .padding(.bottom, Tokens.Spacing.page)
         }
         .background(Tokens.Palette.background)
+        .sheet(isPresented: $contextPresented) { LifeContextSheet() }
+        .sheet(item: $reviewingPerson) { person in LifeContextSheet(person: person) }
         .task(id: requestKey) {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -107,6 +112,8 @@ struct PeopleView: View {
                 if store.loading {
                     ProgressView().controlSize(.small).accessibilityLabel("Refreshing people")
                 }
+                Button("Life & work") { contextPresented = true }
+                    .buttonStyle(RunnerButtonStyle(.secondary))
                 Button("Manage people") { managePerson(nil) }
                     .buttonStyle(RunnerButtonStyle(.secondary))
                 Button {
@@ -263,37 +270,11 @@ struct PeopleView: View {
         await store.load(days: days, query: query, loader: networkLoader)
     }
 
-    private var networkLoader: PeopleStore.Loader {
-        let auth = env.deviceAuth
-        let log = env.eventLog
-        let client = MaraithonClient(tokenProvider: { await auth.currentToken })
-        return { days, query, focus in
-            do {
-                return try await client.peopleNetwork(days: days, query: query, focus: focus)
-            } catch MaraithonClientError.unauthorized {
-                await auth.tokenRejected()
-                throw MaraithonClientError.unauthorized
-            } catch {
-                await log.warning("people.read_failed", source: .cloud)
-                throw error
-            }
-        }
-    }
-
-    private var personLoader: PeopleStore.DetailLoader {
-        let auth = env.deviceAuth
-        let client = MaraithonClient(tokenProvider: { await auth.currentToken })
-        return { days, id in
-            do {
-                return try await client.networkPerson(days: days, id: id)
-            } catch MaraithonClientError.unauthorized {
-                await auth.tokenRejected()
-                throw MaraithonClientError.unauthorized
-            }
-        }
-    }
+    private var networkLoader: PeopleStore.Loader { PeopleLoaders.network(env) }
+    private var personLoader: PeopleStore.DetailLoader { PeopleLoaders.person(env) }
 
     private func managePerson(_ id: String?) {
+        if let id { reviewingPerson = .init(personID: id); return }
         var components = URLComponents(url: MaraithonClient.defaultBaseURL, resolvingAgainstBaseURL: false)
         components?.path = "/operator/people/manage"
         components?.queryItems = id.map { [URLQueryItem(name: "person_id", value: $0)] }
