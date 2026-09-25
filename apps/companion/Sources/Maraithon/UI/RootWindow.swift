@@ -21,6 +21,7 @@ struct RootWindow: View {
     /// Bumped by the sidebar's "Find a task" row; the task list consumes it
     /// by focusing search and resetting it to zero.
     @State private var searchRequestToken = 0
+    @State private var quickTodoShown = false
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw: String = AppearanceMode.system.rawValue
 
     var body: some View {
@@ -54,6 +55,10 @@ struct RootWindow: View {
             }
         }
         .background(Tokens.Palette.background)
+        .focusedSceneValue(\.quickTodoAction,
+            env.deviceAuth.currentToken != nil && env.onboarding.current == .done && !quickTodoShown
+                ? { quickTodoShown = true } : nil)
+        .sheet(isPresented: $quickTodoShown) { QuickTodoView(store: env.todos) }
         .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme)
         .animation(.default, value: env.deviceAuth.state)
         .animation(.default, value: env.onboarding.current)

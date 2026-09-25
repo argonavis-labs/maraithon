@@ -38,7 +38,8 @@ defmodule MaraithonWeb.TodosLive do
   }
   @empty_state_filter_keys ~w(q status attention due source category project agent)
   @status_options [
-    {"Active", "active"},
+    {"Triage", "triage"},
+    {"Todos", "active"},
     {"Tracking", "tracking"},
     {"Open", "open"},
     {"Snoozed", "snoozed"},
@@ -108,7 +109,9 @@ defmodule MaraithonWeb.TodosLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Phoenix.PubSub.subscribe(Maraithon.PubSub, "delegations:#{current_user_id(socket)}")
+    if connected?(socket),
+      do: Phoenix.PubSub.subscribe(Maraithon.PubSub, "delegations:#{current_user_id(socket)}")
+
     {:ok,
      assign(socket,
        page_title: "Todos",
@@ -159,6 +162,11 @@ defmodule MaraithonWeb.TodosLive do
 
   @impl true
   def handle_params(params, uri, socket) do
+    params =
+      if not Map.has_key?(params, "status") and not Map.has_key?(params, "todo_id"),
+        do: Map.put(params, "status", Todos.default_view(current_user_id(socket))),
+        else: params
+
     filters = normalize_filters(params)
     raw_todo_id = normalize_text(Map.get(params, "todo_id"))
     selected_todo_id = normalize_todo_id(raw_todo_id)
@@ -382,6 +390,32 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
+  def handle_event("review_triage", %{"id" => todo_id, "action" => action}, socket)
+      when action in ["accept", "ignore"] do
+    user_id = current_user_id(socket)
+    opts = todo_action_opts(user_id, "Reviewed from Triage.")
+
+    result =
+      case action do
+        "accept" -> Todos.accept_from_triage(user_id, todo_id, opts)
+        "ignore" -> Todos.see_less_like(user_id, todo_id, opts)
+      end
+
+    case result do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> refresh_todos()
+         |> put_flash(
+           :info,
+           if(action == "accept", do: "Added to Todos.", else: "Suggestion ignored.")
+         )}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, TodoActionCopy.error(:update, reason))}
+    end
+  end
+
   def handle_event("toggle_all_todos", _params, socket) do
     visible_ids = visible_todo_ids(socket)
 
@@ -411,6 +445,7 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("todo_shortcut", %{"key" => "x"} = params, socket) do
     case shortcut_target_todo(socket, Map.get(params, "id")) do
+      %Todo{status: "triage"} -> {:noreply, socket}
       %Todo{id: todo_id} -> handle_event("toggle_todo_selection", %{"id" => todo_id}, socket)
       nil -> {:noreply, socket}
     end
@@ -689,6 +724,7 @@ defmodule MaraithonWeb.TodosLive do
     if todo = socket.assigns.selected_todo do
       send_update(MaraithonWeb.DelegationPanel, id: "delegation-#{todo.id}", todo: todo)
     end
+
     {:noreply, socket}
   end
 
@@ -936,7 +972,7 @@ defmodule MaraithonWeb.TodosLive do
           <% else %>
             <div class="space-y-4">
               <.page_header
-                title="Tasks"
+                title={if(@filters["status"] == "triage", do: "Triage", else: "Todos")}
                 eyebrow="Your workspace"
                 subtitle={if(@filters["status"] == "tracking",
                   do: "Work that matters to you, owned by someone else.",
@@ -1182,6 +1218,7 @@ defmodule MaraithonWeb.TodosLive do
                   <.table_row>
                     <.table_header class="w-10">
                       <input
+                        :if={@filters["status"] != "triage"}
                         type="checkbox"
                         aria-label="Select all todos"
                         checked={all_visible_todos_selected?(@todos, @selected_todo_ids)}
@@ -1226,9 +1263,11 @@ defmodule MaraithonWeb.TodosLive do
                       />
                       <input
                         type="checkbox"
-                        aria-label={"Select #{todo.title}"}
-                        checked={MapSet.member?(@selected_todo_ids, todo.id)}
-                        phx-click="toggle_todo_selection"
+                        aria-label={if(todo.status == "triage", do: "Mark #{todo.title} done", else: "Select #{todo.title}")}
+                        checked={todo.status != "triage" && MapSet.member?(@selected_todo_ids, todo.id)}
+                        data-todo-resolve={if(todo.status == "triage", do: "complete")}
+                        data-todo-id={todo.id}
+                        phx-click={if(todo.status == "triage", do: "complete_todo", else: "toggle_todo_selection")}
                         phx-value-id={todo.id}
                         class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
                       />
@@ -1267,6 +1306,10 @@ defmodule MaraithonWeb.TodosLive do
                       <%= format_datetime(todo.due_at, "No due date", @timezone_info) %>
                     </.table_cell>
                     <.table_cell class="align-top text-right">
+                      <.button :if={todo.status == "triage"} type="button" variant="plain"
+                        phx-click="review_triage" phx-value-id={todo.id} phx-value-action="accept">Add</.button>
+                      <.button :if={todo.status == "triage"} type="button" variant="plain"
+                        phx-click="review_triage" phx-value-id={todo.id} phx-value-action="ignore">Ignore</.button>
                       <.button
                         :if={todo.status in ["open", "snoozed"]}
                         type="button"
@@ -1405,6 +1448,7 @@ defmodule MaraithonWeb.TodosLive do
                 const todoId = this.activeTodoId()
 
                 if (this.el.dataset.view === "index" && normalizedKey === "x") {
+                  if (this.activeTodoRow()?.querySelector("input[data-todo-resolve='complete']")) return
                   this.toggleActiveCheckbox()
                 }
 
@@ -2073,8 +2117,12 @@ defmodule MaraithonWeb.TodosLive do
           </div>
 
           <div id="todo-primary-actions" class="flex shrink-0 flex-wrap items-center gap-2">
+            <.button :if={@todo.status == "triage"} type="button" variant="outline"
+              phx-click="review_triage" phx-value-id={@todo.id} phx-value-action="accept">Add to Todos</.button>
+            <.button :if={@todo.status == "triage"} type="button" variant="plain"
+              phx-click="review_triage" phx-value-id={@todo.id} phx-value-action="ignore">Ignore</.button>
             <.button
-              :if={@can_edit_next_action}
+              :if={@can_edit_next_action || @todo.status == "triage"}
               type="button"
               data-todo-resolve="complete"
               data-todo-id={@todo.id}
@@ -2872,6 +2920,7 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_ownership(assigns) do
     workflow = assigns.workflow
+
     owner_label =
       if workflow["owner"]["kind"] == "person",
         do: "Owned by #{workflow["owner"]["label"]}",
@@ -3233,7 +3282,7 @@ defmodule MaraithonWeb.TodosLive do
 
   defp status_filter(status) when status in ~w(active tracking), do: ["open", "snoozed"]
   defp status_filter("all"), do: nil
-  defp status_filter(status) when status in ~w(open snoozed done dismissed), do: [status]
+  defp status_filter(status) when status in ~w(triage open snoozed done dismissed), do: [status]
   defp status_filter(_status), do: ["open", "snoozed"]
 
   defp attention_filter("all"), do: nil
@@ -3291,7 +3340,7 @@ defmodule MaraithonWeb.TodosLive do
       "status" =>
         normalize_choice(
           Map.get(params, "status"),
-          ~w(active tracking open snoozed done dismissed all),
+          ~w(triage active tracking open snoozed done dismissed all),
           "active"
         ),
       "attention" =>
@@ -3366,16 +3415,20 @@ defmodule MaraithonWeb.TodosLive do
   defp normalize_source(_value), do: "all"
 
   defp todo_view_tabs(filters) do
-    Enum.map(~w(active tracking snoozed done all), fn status ->
-      view_filters = Map.merge(@default_filters, %{
-        "status" => status,
-        "q" => filters["q"],
-        "category" => filters["category"],
-        "sort" => if(status in ~w(done all), do: "updated", else: "rank")
-      })
+    Enum.map(~w(triage active tracking snoozed done all), fn status ->
+      view_filters =
+        Map.merge(@default_filters, %{
+          "status" => status,
+          "q" => filters["q"],
+          "category" => filters["category"],
+          "sort" => if(status in ~w(done all), do: "updated", else: "rank")
+        })
 
-      %{label: option_label(@status_options, status), path: todos_path(view_filters),
-        current?: filters["status"] == status}
+      %{
+        label: option_label(@status_options, status),
+        path: todos_path(view_filters),
+        current?: filters["status"] == status
+      }
     end)
   end
 
@@ -3384,7 +3437,7 @@ defmodule MaraithonWeb.TodosLive do
       filters
       |> Map.merge(extra_params)
       |> Enum.reject(fn {key, value} ->
-        blank?(value) or Map.get(@default_filters, key) == value
+        blank?(value) or (key != "status" and Map.get(@default_filters, key) == value)
       end)
       |> Enum.into(%{})
 
@@ -3395,7 +3448,7 @@ defmodule MaraithonWeb.TodosLive do
     query =
       filters
       |> Enum.reject(fn {key, value} ->
-        blank?(value) or Map.get(@default_filters, key) == value
+        blank?(value) or (key != "status" and Map.get(@default_filters, key) == value)
       end)
       |> Enum.into(%{})
 
@@ -3530,6 +3583,9 @@ defmodule MaraithonWeb.TodosLive do
       present?(query) ->
         "No work matches that search."
 
+      filters["status"] == "triage" ->
+        "Triage is clear. New suggestions will appear here."
+
       filters["status"] == "tracking" ->
         "No work is being tracked. Work owned by someone else will appear here so you can follow its progress."
 
@@ -3651,6 +3707,7 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_decision_signal?(%Todo{} = todo),
     do: not Workflow.owned_by_someone_else?(todo) and DecisionSignals.needs_decision?(todo)
+
   defp todo_decision_signal?(_todo), do: false
 
   defp todo_next_action_label(%Todo{} = todo) do

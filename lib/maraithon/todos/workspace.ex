@@ -6,13 +6,28 @@ defmodule Maraithon.Todos.Workspace do
   alias Maraithon.Crm
 
   def candidate_people(user_id, todo, source) do
-    evidence = Jason.encode!(%{source: source, title: todo.title, summary: todo.summary})
+    evidence =
+      Jason.encode!(%{
+        source: source,
+        title: todo.title,
+        summary: todo.summary,
+        notes: todo.notes,
+        next_action: todo.next_action
+      })
+
     linked = Crm.people_for_resource(user_id, "todo", todo.id, limit: 8)
 
     mentioned =
       Crm.list_people(user_id, limit: 500)
       |> Enum.filter(fn person ->
-        mentioned?(evidence, person.display_name) or mentioned?(evidence, person.first_name)
+        details = person.contact_details || %{}
+        emails = [details["email"] | List.wrap(details["emails"])]
+
+        mentioned?(evidence, person.display_name) or mentioned?(evidence, person.first_name) or
+          Enum.any?(
+            emails,
+            &(is_binary(&1) and String.contains?(&1, "@") and mentioned?(evidence, &1))
+          )
       end)
       |> Enum.sort_by(fn person -> not mentioned?(evidence, person.display_name) end)
 
@@ -20,7 +35,12 @@ defmodule Maraithon.Todos.Workspace do
   end
 
   def normalize_people(values, context) when is_list(values) do
-    evidence = Jason.encode!(%{source: context.source, people: context.people})
+    evidence =
+      Jason.encode!(%{
+        source: context.source,
+        related: Map.get(context, :related),
+        people: context.people
+      })
 
     values
     |> Enum.filter(&is_map/1)

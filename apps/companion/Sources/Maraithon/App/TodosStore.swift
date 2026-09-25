@@ -26,6 +26,7 @@ final class TodosStore {
     var filter: TodoListFilter = .triage {
         didSet {
             guard filter != oldValue else { return }
+            needsInitialView = false
             loadGeneration += 1
             todos = []
             phase = .idle
@@ -49,6 +50,7 @@ final class TodosStore {
     private var loadingGeneration: Int?
     private var submittedQuery: String?
     private var accountGeneration = 0
+    private var needsInitialView = true
     private var detailRequestTokens: [String: UUID] = [:]
 
     init(
@@ -106,11 +108,7 @@ final class TodosStore {
         let requestedQuery = normalizedQuery
         submittedQuery = requestedQuery
         if !automatically || phase == .idle { phase = .loading }
-        eventLog.debug(
-            "todos.load_started",
-            source: .cloud,
-            payload: ["filter": requestedFilter.rawValue]
-        )
+        eventLog.debug("todos.load_started", source: .cloud, payload: ["filter": requestedFilter.rawValue])
 
         do {
             let response = try await client.listTodos(
@@ -121,18 +119,23 @@ final class TodosStore {
             try Task.checkCancellation()
             guard generation == loadGeneration else { return }
 
+            if needsInitialView {
+                needsInitialView = false
+                if requestedFilter == .triage, requestedQuery == nil, category == .all,
+                   response.todos.isEmpty {
+                    filter = .active
+                    await load()
+                    return
+                }
+            }
+
             todos = response.todos
             detailErrors = [:]
             lastUpdatedAt = Date()
             phase = .loaded
-            eventLog.info(
-                "todos.load_finished",
-                source: .cloud,
-                payload: [
-                    "filter": requestedFilter.rawValue,
-                    "count": String(response.todos.count)
-                ]
-            )
+            eventLog.info("todos.load_finished", source: .cloud, payload: [
+                "filter": requestedFilter.rawValue, "count": String(response.todos.count)
+            ])
         } catch MaraithonClientError.unauthorized {
             guard generation == loadGeneration else { return }
             rejectToken()
@@ -145,11 +148,7 @@ final class TodosStore {
             }
             let message = CompanionErrorCopy.message(for: error)
             phase = .failed(message: message)
-            eventLog.warning(
-                "todos.load_failed",
-                source: .cloud,
-                payload: ["error": String(describing: error)]
-            )
+            eventLog.warning("todos.load_failed", source: .cloud, payload: ["error": String(describing: error)])
         }
     }
 
@@ -266,6 +265,7 @@ final class TodosStore {
         lastUpdatedAt = nil
         phase = .idle
         filter = .triage
+        needsInitialView = true
         category = .all
         query = ""
     }

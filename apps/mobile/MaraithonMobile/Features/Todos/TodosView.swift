@@ -11,6 +11,7 @@ struct TodosView: View {
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
     @State private var filter: TodoFilter = .triage
+    @State private var needsInitialView = true
     @State private var category: TaskCategory = .all
     @State private var searchText = ""
     @State private var isAddingTodo = false
@@ -103,7 +104,10 @@ struct TodosView: View {
                 .padding(.horizontal, Runner.Layout.pageInset)
                 .padding(.top, Runner.Spacing.small)
 
-                RunnerTabs(items: filterTabs(counts: lists.counts), selection: $filter)
+                RunnerTabs(items: filterTabs(counts: lists.counts), selection: Binding(
+                    get: { filter },
+                    set: { needsInitialView = false; filter = $0 }
+                ))
                 if filter == .triage {
                     TodoQuickEntry(create: quickAdd)
                         .padding(.horizontal, Runner.Layout.pageInset)
@@ -281,6 +285,12 @@ struct TodosView: View {
             guard isVisible else { return }
             rebuildWorkLists()
             await refreshLatestWork()
+            if !Task.isCancelled, needsInitialView, refreshErrorMessage == nil, linkedTodo == nil {
+                needsInitialView = false
+                let savedTodos = (try? modelContext.fetch(FetchDescriptor<TodoItem>())) ?? todos
+                filter = savedTodos.contains(where: \.isInTriage) ? .triage : .open
+                rebuildWorkLists()
+            }
         }
         .sensoryFeedback(.success, trigger: completion.successCount)
     }
@@ -545,12 +555,14 @@ struct TodosView: View {
 
     private func applyRequestedFilterIfNeeded() {
         guard let requestedFilter = appNavigation.requestedTodoFilter else { return }
+        needsInitialView = false
         filter = requestedFilter
         appNavigation.requestedTodoFilter = nil
     }
 
     private func openRequestedTodoIfNeeded() async {
         guard let id = appNavigation.requestedTodoID else { return }
+        needsInitialView = false
         do {
             var descriptor = FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == id })
             descriptor.fetchLimit = 1

@@ -38,6 +38,7 @@ defmodule Maraithon.Todos.Brief.Context do
           card: map(),
           source: map(),
           people: list(),
+          related: map(),
           identity: String.t() | nil,
           voice: String.t() | nil,
           now: String.t(),
@@ -59,6 +60,9 @@ defmodule Maraithon.Todos.Brief.Context do
     card =
       safe(fn -> ActionCards.for_todo(todo, include_disconnected: true) end, %{})
 
+    # Embeddings belong to background preparation, never the add-todo request.
+    bounded(fn -> Todos.refresh_embedding(todo) end, 5_000, :unavailable)
+
     progress.(source_progress_label(channel))
 
     source =
@@ -77,6 +81,15 @@ defmodule Maraithon.Todos.Brief.Context do
         []
       )
 
+    progress.("Finding related context")
+
+    related =
+      bounded(
+        fn -> Maraithon.Todos.Brief.RelatedContext.build(user_id, todo, people) end,
+        45_000,
+        %{"status" => "unavailable", "sources" => []}
+      )
+
     voice =
       bounded(
         fn -> voice(user_id, channel) end,
@@ -89,6 +102,7 @@ defmodule Maraithon.Todos.Brief.Context do
       card: card_section(card),
       source: source,
       people: people,
+      related: related,
       identity: safe(fn -> UserIdentity.prompt_block(user_id) end, nil),
       operator_identity:
         safe(fn -> Maraithon.Todos.PersonalInvolvement.identity_context(user_id) end, %{}),
@@ -660,6 +674,7 @@ defmodule Maraithon.Todos.Brief.Context do
       %{
         "person_id" => person.id,
         "contact_details" => person.contact_details,
+        "professional_profile" => get_in(person.metadata || %{}, ["fiber", "profile"]),
         "name" => person.display_name || Enum.join([person.first_name, person.last_name], " "),
         "relationship" => person.relationship,
         "preferred_channel" => person.preferred_communication_method,

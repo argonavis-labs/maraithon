@@ -4,16 +4,18 @@ import SwiftUI
 public struct TodoQuickEntry: View {
     let create: (String, UUID) async throws -> Void
     let focusChanged: (Bool) -> Void
+    let autofocus: Bool
     @FocusState private var focused: Bool
     @State private var title = ""
     @State private var requestID = UUID()
     @State private var working = false
     @State private var error: String?
 
-    public init(focusChanged: @escaping (Bool) -> Void = { _ in },
+    public init(autofocus: Bool = false, focusChanged: @escaping (Bool) -> Void = { _ in },
                 create: @escaping (String, UUID) async throws -> Void) {
         self.create = create
         self.focusChanged = focusChanged
+        self.autofocus = autofocus
     }
 
     public var body: some View {
@@ -34,6 +36,7 @@ public struct TodoQuickEntry: View {
         }
         .onChange(of: focused) { _, value in focusChanged(value) }
         .onDisappear { focusChanged(false) }
+        .task { if autofocus { focused = true } }
     }
 
     private func submit() {

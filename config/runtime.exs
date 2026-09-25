@@ -39,6 +39,8 @@ process_role =
 
 config :maraithon, process_role: process_role
 
+config :maraithon, Maraithon.Fiber, api_key: System.get_env("FIBER_API_KEY")
+
 # Identity/control and each provider's execution are separate rollout gates.
 config :maraithon,
   llm_development_spending: System.get_env("LLM_DEVELOPMENT_SPENDING", "false") == "true",

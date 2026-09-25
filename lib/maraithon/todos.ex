@@ -307,6 +307,13 @@ defmodule Maraithon.Todos do
 
   defp polish_todo_copy(other), do: other
 
+  defp enqueue_preparation!(%Todo{} = todo) do
+    case Brief.enqueue_generation(todo) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   defp enqueue_brief(%Todo{} = todo) do
     case Maraithon.Todos.SlackNameRepair.enqueue(todo) do
       {:ok, _} ->
@@ -327,6 +334,15 @@ defmodule Maraithon.Todos do
         Logger.warning("todo brief enqueue failed", todo_id: todo.id, reason: inspect(reason))
         :ok
     end
+  end
+
+  @doc "Choose the initial work view without loading the todo inventory."
+  def default_view(user_id) when is_binary(user_id) do
+    if Repo.exists?(
+         from(todo in Todo, where: todo.user_id == ^user_id and todo.status == "triage")
+       ),
+       do: "triage",
+       else: "active"
   end
 
   def sync_many_from_insights(insights) when is_list(insights) do
@@ -397,18 +413,18 @@ defmodule Maraithon.Todos do
           todos
         )
 
+        # The todo and its preparation job commit together. A process exit after
+        # saving cannot leave a new todo without background enhancement.
+        todos |> Enum.uniq_by(& &1.id) |> Enum.each(&enqueue_preparation!/1)
         todos
       end
     )
     |> case do
       {:ok, todos} ->
-        # Provider work runs after the short intake transaction releases its lock.
+        # No provider work runs in the add-todo request.
         todos
         |> Enum.uniq_by(& &1.id)
-        |> Enum.each(fn todo ->
-          _ = safe_refresh_embedding(todo)
-          enqueue_brief(todo)
-        end)
+        |> Enum.each(&enqueue_brief/1)
 
         {:ok, todos}
 
@@ -1864,12 +1880,12 @@ defmodule Maraithon.Todos do
                  )
                  |> Repo.insert(),
                {:ok, _event} <- record_activity_event(inserted, "created", []) do
+            enqueue_preparation!(inserted)
             inserted
           else
             {:error, reason} -> Repo.rollback(reason)
           end
         end)
-        |> tap_refresh_embedding()
     end
   end
 

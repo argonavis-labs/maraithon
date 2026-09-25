@@ -5,9 +5,16 @@ import SwiftUI
 /// list so standard text editing keeps precedence.
 struct TodoCommands: Commands {
     @FocusedValue(\.todoShortcutActions) private var actions
+    @FocusedValue(\.quickTodoAction) private var quickAdd
 
     var body: some Commands {
         CommandMenu("Todos") {
+            Button("Quick Add Todo") { quickAdd?() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(quickAdd == nil)
+
+            Divider()
+
             Button("Next Todo") { perform(.next) }
                 .keyboardShortcut("j", modifiers: [])
                 .disabled(actions == nil)

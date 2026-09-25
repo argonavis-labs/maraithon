@@ -190,7 +190,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
       case TodoBrief.generate_and_store(user_id, todo_id, force: force?) do
         {:ok, todo} ->
-          status = if todo && todo.status in ~w(open snoozed), do: "ready", else: "not_needed"
+          status =
+            if todo && todo.status in ~w(triage open snoozed), do: "ready", else: "not_needed"
+
           {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: status}}
 
         {:error, :in_progress} ->
