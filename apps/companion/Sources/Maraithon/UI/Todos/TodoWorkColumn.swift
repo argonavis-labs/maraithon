@@ -17,11 +17,7 @@ struct TodoWorkColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
             read
-            if brief == nil && todo.delegation == nil && ["triage", "open", "snoozed"].contains(todo.status) {
-                ProgressView("Preparing people and next steps…")
-                    .controlSize(.small)
-                    .font(Tokens.Typography.small)
-            }
+            preparation
             TodoDelegationPanel(todoID: todo.id, summary: todo.delegation,
                 canDelegate: todo.canDelegate == true, proposal: todo.delegationProposal, request: store.delegationRequest,
                 refreshTodo: { await store.refreshTodo() })
@@ -38,6 +34,23 @@ struct TodoWorkColumn: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder private var preparation: some View {
+        if TodoBriefPreparationStore.needsPreparation(todo), let message = store.preparation.state.message {
+            HStack(spacing: Tokens.Spacing.small) {
+                if store.preparation.state.isWorking { ProgressView().controlSize(.small) }
+                Text(message)
+                    .foregroundStyle(Tokens.Palette.mutedForeground)
+                if store.preparation.state.canRetry {
+                    Button(store.preparation.state == .deferred ? "Check again" : "Try again") {
+                        store.preparation.retry()
+                    }
+                    .buttonStyle(RunnerButtonStyle(.plain))
+                }
+            }
+            .font(Tokens.Typography.small)
+        }
+    }
+
     private var read: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.snug) {
             if let summary = brief?.summary ?? todo.summary, !summary.isEmpty {
@@ -47,14 +60,6 @@ struct TodoWorkColumn: View {
                     .foregroundStyle(Tokens.Palette.foreground)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if todo.canMarkDone {
-                HStack(spacing: Tokens.Spacing.small) {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing your summary…")
-                }
-                .font(Tokens.Typography.small)
-                .foregroundStyle(Tokens.Palette.mutedForeground)
-                .accessibilityElement(children: .combine)
             }
             if !todo.canMarkDone, let note = todo.resolutionNote {
                 (Text(todo.canReopen ? "Completed: " : "Resolved: ").foregroundStyle(Tokens.Palette.foreground)

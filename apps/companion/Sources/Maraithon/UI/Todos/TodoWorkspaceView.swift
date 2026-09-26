@@ -54,7 +54,9 @@ struct TodoWorkspaceView: View {
             )
         }
         .task(id: reconnectID) { await store.connectAndObserve() }
-        .task(id: "\(store.todo.id):\(store.todo.brief == nil)") { await store.observeBriefPreparation() }
+        .task(id: "\(store.todo.id):\(TodoBriefPreparationStore.needsPreparation(store.todo)):\(store.preparation.revision)") {
+            await store.observeBriefPreparation()
+        }
         .onDisappear { Task { await env.todos.load() } }
         .onKeyPress(.escape) {
             dismiss()

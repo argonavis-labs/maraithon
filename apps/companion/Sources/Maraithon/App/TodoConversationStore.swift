@@ -31,6 +31,7 @@ final class TodoConversationStore {
     private var progressCursor: String?
     private var runAwaitingResult: String?
     private let client: MaraithonClient
+    let preparation: TodoBriefPreparationStore
 
     struct PendingMessage {
         let id: String
@@ -40,6 +41,7 @@ final class TodoConversationStore {
     init(todo: CompanionTodo, client: MaraithonClient) {
         self.todo = todo
         self.client = client
+        self.preparation = TodoBriefPreparationStore(client: client)
     }
 
     var isThinking: Bool { run?.isActive == true || thread?.pendingRun?.isActive == true }
@@ -223,12 +225,7 @@ final class TodoConversationStore {
     /// Preparation completes independently of chat events. Observe only this
     /// open todo, bounded by the provider deadline plus context gathering.
     func observeBriefPreparation() async {
-        for _ in 0..<64 {
-            guard todo.brief == nil, todo.delegation == nil,
-                  ["triage", "open", "snoozed"].contains(todo.status), !Task.isCancelled else { return }
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
-            await refreshTodo()
-        }
+        await preparation.observe(todo: todo) { self.todo = $0 }
     }
 
     private func refresh() async throws {

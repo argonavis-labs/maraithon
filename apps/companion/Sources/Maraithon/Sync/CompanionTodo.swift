@@ -209,6 +209,12 @@ struct CompanionTodoSourceAction: Codable, Hashable, Sendable {
 
 struct CompanionTodoDetailsResponse: Codable, Sendable {
     let todo: CompanionTodo
+    var briefPreparation: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case todo
+        case briefPreparation = "brief_preparation"
+    }
 }
 
 struct CompanionTodosResponse: Codable, Sendable {
