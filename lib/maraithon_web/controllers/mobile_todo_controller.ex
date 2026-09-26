@@ -119,7 +119,10 @@ defmodule MaraithonWeb.MobileTodoController do
         |> json(MobileJSON.error(:not_found))
 
       todo ->
-        json(conn, %{todo: MobileJSON.todo(todo, json_opts)})
+        json(conn, %{
+          todo: MobileJSON.todo(todo, json_opts),
+          brief_preparation: Brief.preparation_status(todo)
+        })
     end
   end
 
@@ -133,11 +136,17 @@ defmodule MaraithonWeb.MobileTodoController do
            source: "mobile_detail"
          ) do
       :ok ->
-        user_id
-        |> Todos.get_for_user(todo_id)
-        |> Brief.enqueue_generation(refresh_expired: true)
+        case user_id
+             |> Todos.get_for_user(todo_id)
+             |> Brief.enqueue_generation(refresh_expired: true) do
+          {:ok, _job} ->
+            json(conn, %{ok: true})
 
-        json(conn, %{ok: true})
+          {:error, reason} ->
+            conn
+            |> put_status(:service_unavailable)
+            |> json(MobileJSON.error(reason))
+        end
 
       {:error, :not_found} ->
         conn

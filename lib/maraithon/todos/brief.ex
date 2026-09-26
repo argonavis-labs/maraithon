@@ -19,6 +19,8 @@ defmodule Maraithon.Todos.Brief do
   alias Maraithon.Todos.Brief.Context
   alias Maraithon.Todos.Todo
 
+  import Ecto.Query
+
   require Logger
 
   @version 12
@@ -170,6 +172,33 @@ defmodule Maraithon.Todos.Brief do
 
   def public(_todo), do: nil
 
+  @doc "Preparation status for one open detail view, based on durable work rather than a missing brief."
+  def preparation_status(%Todo{} = todo) do
+    cond do
+      current(todo) ->
+        "ready"
+
+      todo.status not in ~w(triage open snoozed) or Maraithon.Delegations.attached?(todo) ->
+        "inactive"
+
+      generating?(todo) ->
+        "generating"
+
+      true ->
+        keys = [generation_key(todo), generation_key(todo) <> refresh_key(todo)]
+
+        pending? =
+          Maraithon.Repo.exists?(
+            from job in Maraithon.Runtime.BackgroundJob,
+              where:
+                job.user_id == ^todo.user_id and job.job_type == "todo_brief_generation" and
+                  job.dedupe_key in ^keys and job.status in ~w(pending running)
+          )
+
+        if pending?, do: "queued", else: "unavailable"
+    end
+  end
+
   @doc "Durably schedules a missing or stale brief on the per-user model lane."
   def enqueue_generation(todo, opts \\ [])
 
@@ -192,7 +221,7 @@ defmodule Maraithon.Todos.Brief do
       true ->
         refresh_key =
           if Keyword.get(opts, :refresh_expired, false) || force?,
-            do: ":refresh:#{(stored(todo) || %{})["generated_at"] || "missing"}",
+            do: refresh_key(todo),
             else: ""
 
         BackgroundJobs.enqueue("todo_brief_generation", %{
@@ -200,8 +229,7 @@ defmodule Maraithon.Todos.Brief do
           queue: @queue,
           partition_key: tenant_partition(todo.user_id),
           rate_limit_key: "model",
-          dedupe_key:
-            "todo-preparation:v#{@version}:#{todo.id}:#{fingerprint(todo)}#{refresh_key}",
+          dedupe_key: generation_key(todo) <> refresh_key,
           max_attempts: 3,
           payload: %{
             "todo_id" => todo.id,
@@ -213,6 +241,9 @@ defmodule Maraithon.Todos.Brief do
   end
 
   def enqueue_generation(_todo, _opts), do: {:error, :invalid_todo}
+
+  defp generation_key(todo), do: "todo-preparation:v#{@version}:#{todo.id}:#{fingerprint(todo)}"
+  defp refresh_key(todo), do: ":refresh:#{(stored(todo) || %{})["generated_at"] || "missing"}"
 
   @doc "Prepare the first actionable item in a visible list without running a model in the request."
   def prepare_focus(todos) when is_list(todos) do

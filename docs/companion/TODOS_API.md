@@ -67,7 +67,18 @@ model, and scoring metadata is never serialized.
 GET /api/v1/companion/todos/:id?include_cards=true
 ```
 
-The response is `{"todo": TODO}`. A missing or different-user ID returns 404.
+The response is `{"todo": TODO, "brief_preparation": "ready"}`. A missing or
+different-user ID returns 404. `brief_preparation` reports `ready`, `inactive`,
+`queued`, `generating`, or `unavailable`. It checks the current brief and its
+durable preparation job. A missing brief does not mean preparation is running.
+
+`POST /api/v1/companion/todos/:id/opened` records the open and queues a missing
+or stale brief. An existing active job is reused. It returns `{"ok": true}`
+when accepted, or 503 if preparation could not be queued. The Mac polls the
+detail endpoint for up to six minutes, then offers **Check again**. Failed
+requests or unavailable preparation offer **Try again** through the same open
+endpoint. Neither action sends a message.
+
 Completed todos include `closed_at` and may include a human-readable
 `metadata.resolution_note`. The Mac shows that note as the completion
 explanation and treats the original summary as historical context. It does
