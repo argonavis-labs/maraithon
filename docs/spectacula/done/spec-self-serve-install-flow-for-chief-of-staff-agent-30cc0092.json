@@ -1,0 +1,55 @@
+{
+  "blockers": [],
+  "created_at": "2026-05-30T22:39:54Z",
+  "history": [
+    {
+      "at": "2026-05-30T22:39:54Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task 30CC0092-3355-469F-9FF6-E8B011A59B4C.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-30T22:47:13Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "Started by Codex as part of the active chief-of-staff product-output audit."
+    },
+    {
+      "at": "2026-05-30T22:51:32Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented tenant-neutral cleanup in meeting enrichment, commitment tracking prompt examples, and attention ranking. Targeted tests passed: 15 tests, 0 failures. Full gate passed: MIX_ENV=test mix precommit, 2343 tests, 0 failures, assistant_eval 60/60."
+    }
+  ],
+  "next_action": "Closed. Continue the broader Chief of Staff product-output audit.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/spec-self-serve-install-flow-for-chief-of-staff-agent-30cc0092.md"
+    ],
+    "last_completed_step": "Moved manifest to done after required verification gates passed.",
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "30CC0092-3355-469F-9FF6-E8B011A59B4C"
+  },
+  "slug": "spec-self-serve-install-flow-for-chief-of-staff-agent-30cc0092",
+  "spec_id": "spec-self-serve-install-flow-for-chief-of-staff-agent-30cc0092",
+  "spec_path": "../specs/spec-self-serve-install-flow-for-chief-of-staff-agent-30cc0092.md",
+  "stage": "done",
+  "summary": "Self-serve Chief of Staff install flow verified and closed. Dashboard install, connector gating, Telegram linking route, docs, first-brief scheduling, and tenant-neutral defaults were checked; residual tenant-specific default terms were removed.",
+  "title": "Spec: Self-serve install flow for Chief of Staff agent",
+  "updated_at": "2026-05-30T22:51:32Z",
+  "verification": {
+    "build": "passed",
+    "format": "passed",
+    "lint": "skipped",
+    "notes": "Targeted regression: mix test self_serve_install_smoke_test, meeting_enrichment_test, attention_ranker_test passed with 15 tests and 0 failures. Full gate: MIX_ENV=test mix precommit passed with 2343 tests, 0 failures, assistant_eval 60/60. Lint has no separate project target beyond precommit.",
+    "spec_review": "passed",
+    "tests": "passed",
+    "typecheck": "passed"
+  },
+  "started_at": "2026-05-30T22:47:13Z",
+  "completed_at": "2026-05-30T22:51:32Z"
+}

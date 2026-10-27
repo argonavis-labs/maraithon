@@ -1,0 +1,74 @@
+{
+  "spec_id": "morning-briefing-reference-eval-action-stack",
+  "slug": "morning-briefing-reference-eval-action-stack",
+  "title": "Morning Briefing Reference Eval and Action Stack",
+  "stage": "done",
+  "spec_path": "../specs/morning-briefing-reference-eval-action-stack.md",
+  "created_at": "2026-05-27T17:20:26Z",
+  "updated_at": "2026-05-27T17:31:01Z",
+  "summary": "Implemented the May 27 reference briefing eval shape in the prompt, verifier, skill docs, and tests.",
+  "next_action": "Done. Re-run mix precommit before future briefing prompt changes.",
+  "blockers": [],
+  "reference_examples": [],
+  "review_policy": {
+    "final_vetting": "off"
+  },
+  "implementation": {
+    "status": "complete",
+    "artifacts": [
+      "priv/agents/skills/chief_of_staff/morning_briefing.md",
+      "lib/maraithon/chief_of_staff/skills/morning_briefing.ex",
+      "test/maraithon/chief_of_staff/skills/morning_briefing_test.exs",
+      "/Users/kent/.runner/workspaces/my-workspace-68/skills/morning-briefing/SKILL.md"
+    ]
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "final_vetting": "skipped",
+    "notes": "Passed: mix format lib/maraithon/chief_of_staff/skills/morning_briefing.ex test/maraithon/chief_of_staff/skills/morning_briefing_test.exs; MIX_ENV=test mix compile --force; mix test test/maraithon/chief_of_staff/skills/morning_briefing_test.exs; mix test test/maraithon/chief_of_staff/skills/morning_briefing_smoke_test.exs; mix test test/maraithon/chief_of_staff/morning_briefing_verifier_test.exs; mix maraithon.assistant.eval --fail-on-issues; final mix precommit passed with 1989 tests, 0 failures and assistant_eval 60/60. Plain spectacula invocation sets final_vetting off. Global spectacula validate still reports unrelated legacy manifest schema/status errors outside this spec."
+  },
+  "resume_context": {
+    "last_completed_step": "Moved manifest to done after required verification gates passed.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [],
+    "artifacts": [
+      "docs/spectacula/specs/morning-briefing-reference-eval-action-stack.md",
+      "priv/agents/skills/chief_of_staff/morning_briefing.md",
+      "lib/maraithon/chief_of_staff/skills/morning_briefing.ex",
+      "test/maraithon/chief_of_staff/skills/morning_briefing_test.exs",
+      "/Users/kent/.runner/workspaces/my-workspace-68/skills/morning-briefing/SKILL.md"
+    ],
+    "notes": "Implemented the May 27 reference brief as an acceptance shape: Needs Your Attention, Today's Schedule with conflicts, Inbox/Slack triage, Open Commitments, inline action-card/draft/OF handles, Not a draft job, and durable todo metadata for source, person/company, why-now, evidence, and work_type."
+  },
+  "history": [
+    {
+      "at": "2026-05-27T17:20:26Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from template."
+    },
+    {
+      "at": "2026-05-27T17:21:20Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Spec filled from Kent's May 27 reference briefing and implementation started."
+    },
+    {
+      "at": "2026-05-27T17:31:01Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented and verified morning briefing reference-eval behavior."
+    }
+  ],
+  "started_at": "2026-05-27T17:21:20Z",
+  "completed_at": "2026-05-27T17:31:01Z"
+}

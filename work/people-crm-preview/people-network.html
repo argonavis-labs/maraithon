@@ -1,0 +1,225 @@
+<div id="maraithon-people-preview" aria-label="Proposed People experience">
+  <style>
+    #maraithon-people-preview {
+      --people-paper: light-dark(#ffffff, #18181b);
+      --people-chrome: light-dark(#fafafa, #202023);
+      --people-ink: light-dark(#18181b, #fafafa);
+      --people-muted: light-dark(#62626b, #b7b7c0);
+      --people-rule: light-dark(#e4e4e7, #3f3f46);
+      --people-selected: light-dark(#f0f0f3, #323238);
+      --people-line: light-dark(#a1a1aa, #71717a);
+      --people-accent: light-dark(#2563eb, #93b4ff);
+      --people-tint: light-dark(#eff6ff, #222f48);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--people-ink);
+    }
+    #maraithon-people-preview * { box-sizing: border-box; }
+    #maraithon-people-preview .people-window { display: grid; grid-template-columns: 142px minmax(0, 1fr); background: var(--people-paper); border: 1px solid var(--people-rule); border-radius: 8px; overflow: clip; }
+    #maraithon-people-preview .people-nav { padding: 22px 12px; background: var(--people-chrome); border-right: 1px solid var(--people-rule); }
+    #maraithon-people-preview .people-brand { display: block; padding: 0 9px 28px; font-weight: 500; }
+    #maraithon-people-preview .people-nav-item { display: flex; align-items: center; gap: 9px; padding: 9px; color: var(--people-muted); margin-bottom: 4px; }
+    #maraithon-people-preview .people-nav-item.current { background: var(--people-selected); border-radius: 6px; color: var(--people-ink); font-weight: 500; }
+    #maraithon-people-preview i, #maraithon-people-preview .people-nav-item svg { width: 16px; height: 16px; flex: none; }
+    #maraithon-people-preview .people-main { min-width: 0; padding: 22px; }
+    #maraithon-people-preview .people-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+    #maraithon-people-preview h1 { font-size: 24px; line-height: 1.3; font-weight: 500; margin: 0; }
+    #maraithon-people-preview h2 { font-size: 14px; line-height: 1.5; font-weight: 500; margin: 0; }
+    #maraithon-people-preview h3 { font-size: 12px; font-weight: 500; margin: 18px 0 8px; }
+    #maraithon-people-preview p { margin: 0; }
+    #maraithon-people-preview .people-muted { color: var(--people-muted); }
+    #maraithon-people-preview .people-small { font-size: 12px; }
+    #maraithon-people-preview .people-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--people-rule); margin-bottom: 20px; }
+    #maraithon-people-preview button { font: inherit; color: inherit; cursor: pointer; }
+    #maraithon-people-preview .people-tab { padding: 0 0 10px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--people-muted); }
+    #maraithon-people-preview .people-tab[aria-pressed="true"] { color: var(--people-ink); border-bottom-color: var(--people-ink); font-weight: 500; }
+    #maraithon-people-preview .people-body { display: grid; grid-template-columns: minmax(0, 1fr) 234px; gap: 22px; align-items: start; }
+    #maraithon-people-preview .people-content { min-width: 0; }
+    #maraithon-people-preview .people-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    #maraithon-people-preview .people-list { margin: 0 0 23px; padding: 0; list-style: none; }
+    #maraithon-people-preview .people-list > li { border-bottom: 1px solid var(--people-rule); }
+    #maraithon-people-preview .people-row { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; border: 0; padding: 12px 4px; background: transparent; }
+    #maraithon-people-preview .people-row:hover, #maraithon-people-preview .people-row[aria-pressed="true"] { background: var(--people-selected); }
+    #maraithon-people-preview .people-initials { width: 32px; height: 32px; background: var(--people-selected); color: var(--people-muted); display: grid; place-items: center; border: 1px solid var(--people-rule); border-radius: 6px; font-size: 11px; flex: none; }
+    #maraithon-people-preview .people-row-text { min-width: 0; flex: 1; }
+    #maraithon-people-preview .people-row-text span { display: block; }
+    #maraithon-people-preview .people-name { font-weight: 500; }
+    #maraithon-people-preview .people-meeting-time { flex: none; width: 48px; align-self: flex-start; padding-top: 1px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    #maraithon-people-preview .people-count { flex: none; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+    #maraithon-people-preview .people-detail { border-left: 1px solid var(--people-rule); padding-left: 20px; min-width: 0; }
+    #maraithon-people-preview .people-detail h2 { font-size: 18px; margin-bottom: 2px; }
+    #maraithon-people-preview .people-detail-header { padding-bottom: 14px; border-bottom: 1px solid var(--people-rule); }
+    #maraithon-people-preview .people-next { margin-top: 14px; padding: 10px 12px; background: var(--people-tint); border-radius: 6px; }
+    #maraithon-people-preview .people-history { margin: 0; padding: 0; list-style: none; }
+    #maraithon-people-preview .people-history li { padding: 8px 0; border-bottom: 1px solid var(--people-rule); }
+    #maraithon-people-preview .people-history li:last-child { border: 0; }
+    #maraithon-people-preview .people-todo { display: flex; gap: 8px; align-items: start; padding: 7px 0; }
+    #maraithon-people-preview .people-todo::before { content: ""; width: 12px; height: 12px; border: 1px solid var(--people-line); border-radius: 3px; flex: none; margin-top: 4px; }
+    #maraithon-people-preview .people-graph { position: relative; height: 330px; margin: 10px 0 14px; }
+    #maraithon-people-preview .people-graph-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+    #maraithon-people-preview .people-edge { stroke: var(--people-line); }
+    #maraithon-people-preview .people-edge.shared { stroke-dasharray: 4 5; stroke-width: 1; }
+    #maraithon-people-preview .people-node { position: absolute; transform: translate(-50%, -50%); width: 102px; padding: 8px 6px; border: 1px solid var(--people-rule); border-radius: 6px; background: var(--people-paper); font-size: 12px; text-align: center; }
+    #maraithon-people-preview .people-node span { display: block; }
+    #maraithon-people-preview .people-node[aria-pressed="true"] { background: var(--people-tint); border-color: var(--people-accent); }
+    #maraithon-people-preview .people-self { width: 52px; border-radius: 6px; background: var(--people-selected); font-weight: 500; padding: 9px 0; }
+    #maraithon-people-preview .people-legend { display: flex; flex-wrap: wrap; gap: 7px 14px; font-size: 12px; color: var(--people-muted); padding-bottom: 16px; border-bottom: 1px solid var(--people-rule); }
+    #maraithon-people-preview .people-legend span { display: flex; align-items: center; gap: 6px; }
+    #maraithon-people-preview .people-line-sample { display: inline-block; width: 17px; border-top: 2px solid var(--people-line); }
+    #maraithon-people-preview .people-line-sample.shared { border-top-style: dashed; border-top-width: 1px; }
+    #maraithon-people-preview .people-edge-choice { background: transparent; border: 0; border-bottom: 1px solid var(--people-rule); display: block; width: 100%; padding: 11px 0; text-align: left; font-size: 12px; }
+    #maraithon-people-preview .people-edge-choice span { display: block; }
+    #maraithon-people-preview .people-edge-choice[aria-pressed="true"] { color: var(--people-accent); }
+    #maraithon-people-preview .people-edge-evidence { font-size: 12px; padding: 10px 0; }
+    #maraithon-people-preview [hidden] { display: none !important; }
+    @media (max-width: 880px) {
+      #maraithon-people-preview .people-window { grid-template-columns: minmax(0, 1fr); }
+      #maraithon-people-preview .people-nav { display: flex; gap: 10px; align-items: center; padding: 10px 18px; border-right: 0; border-bottom: 1px solid var(--people-rule); }
+      #maraithon-people-preview .people-brand { padding: 0; margin-right: auto; }
+      #maraithon-people-preview .people-nav-item { margin: 0; padding: 5px 8px; font-size: 12px; }
+      #maraithon-people-preview .people-nav-item svg { display: none; }
+    }
+    @media (max-width: 610px) {
+      #maraithon-people-preview .people-main { padding: 18px 14px; }
+      #maraithon-people-preview .people-nav { padding: 12px 14px; gap: 4px; }
+      #maraithon-people-preview .people-body { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+      #maraithon-people-preview .people-detail { border-left: 0; border-top: 1px solid var(--people-rule); padding: 20px 0 0; }
+      #maraithon-people-preview .people-graph { height: 350px; }
+      #maraithon-people-preview .people-node { width: 92px; }
+      #maraithon-people-preview .people-self { width: 46px; }
+    }
+    @media (pointer: coarse) {
+      #maraithon-people-preview button { min-height: 44px; }
+    }
+  </style>
+  <div class="people-window">
+    <nav class="people-nav" aria-label="Maraithon navigation preview">
+      <span class="people-brand">Maraithon</span>
+      <span class="people-nav-item"><i data-lucide="list-checks" aria-hidden="true"></i>Todos</span>
+      <span class="people-nav-item current" aria-current="page"><i data-lucide="users" aria-hidden="true"></i>People</span>
+      <span class="people-nav-item"><i data-lucide="sun" aria-hidden="true"></i>Brief</span>
+    </nav>
+    <main class="people-main">
+      <header class="people-top"><h1>People</h1><span class="people-small people-muted">Design sketch · Illustrative data</span></header>
+      <div class="people-tabs" aria-label="People view">
+        <button type="button" class="people-tab" data-view="overview" aria-pressed="true">Overview</button>
+        <button type="button" class="people-tab" data-view="network" aria-pressed="false">Network</button>
+      </div>
+      <div class="people-body">
+        <div class="people-content">
+          <section class="people-overview" aria-label="Meetings and frequent contacts">
+            <div class="people-section-title"><h2>Meeting next</h2><span class="people-small people-muted">This week</span></div>
+            <ul class="people-list">
+              <li><button type="button" class="people-row" data-person="maya"><span class="people-meeting-time">Tue<br>10:30</span><span class="people-row-text"><span class="people-name">Roadmap review</span><span class="people-small people-muted">Maya Chen · Jordan Lee</span><span class="people-small">2 open todos to bring into the meeting</span></span></button></li>
+              <li><button type="button" class="people-row" data-person="taylor"><span class="people-meeting-time">Wed<br>14:00</span><span class="people-row-text"><span class="people-name">Introduction</span><span class="people-small people-muted">Taylor Brooks</span><span class="people-small">First meeting · No earlier exchanges found</span></span></button></li>
+            </ul>
+            <div class="people-section-title"><h2>In conversation</h2><span class="people-small people-muted">Last 30 days</span></div>
+            <ul class="people-list" id="people-frequency-list"></ul>
+          </section>
+          <section class="people-network" aria-label="Communication network" hidden>
+            <div class="people-section-title"><h2>Your network</h2><span class="people-small people-muted">Last 30 days</span></div>
+            <div class="people-graph" aria-label="Select a person to inspect their communication history">
+              <svg class="people-graph-lines" aria-hidden="true"></svg>
+              <span class="people-node people-self" data-node="you">You</span>
+            </div>
+            <div class="people-legend"><span><i class="people-line-sample" aria-hidden="true"></i>Your communication</span><span><i class="people-line-sample shared" aria-hidden="true"></i>Shared context</span></div>
+            <div class="people-shared-context">
+              <h3>Shared context</h3>
+              <button type="button" class="people-edge-choice" data-edge="roadmap" aria-pressed="false"><span>Maya Chen ↔ Jordan Lee</span><span class="people-muted">Roadmap email thread · 3 shared calendar events</span></button>
+              <button type="button" class="people-edge-choice" data-edge="founders" aria-pressed="false"><span>Alex Rivera ↔ Priya Shah</span><span class="people-muted">Both posted in the Founders group on Sep 4</span></button>
+              <p class="people-edge-evidence" aria-live="polite"></p>
+            </div>
+          </section>
+        </div>
+        <aside class="people-detail" aria-live="polite" aria-label="Selected person"></aside>
+      </div>
+    </main>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('maraithon-people-preview');
+      const state = { view: 'overview', sharedContext: true };
+      let selected = 'maya';
+      let selectedEdge = null;
+      const people = [
+        { id: 'maya', name: 'Maya Chen', initials: 'MC', role: 'Design partner · North Studio', days: 12, last: 'Yesterday', channels: 'Email · Messages', next: 'Tue, 10:30 · Roadmap review', note: 'You have been working together on the autumn launch.', todos: ['Send the updated launch brief', 'Confirm the final review date'], history: [['Email · Yesterday', 'Maya sent the revised scope and asked about the launch date.'], ['Messages · Sep 5', 'You agreed to bring two concepts to Tuesday’s review.'], ['Calendar · Sep 2', 'Roadmap review was on your calendar.']] },
+        { id: 'jordan', name: 'Jordan Lee', initials: 'JL', role: 'Product partner · North Studio', days: 9, last: 'Yesterday', channels: 'Slack · Email', next: 'Tue, 10:30 · Roadmap review', note: 'Recent conversations focus on the product rollout.', todos: ['Review Jordan’s rollout checklist'], history: [['Slack · Yesterday', 'You replied to Jordan’s question about rollout timing.'], ['Email · Sep 4', 'Jordan joined the roadmap discussion with Maya.']] },
+        { id: 'sam', name: 'Sam Ellis', initials: 'SE', role: 'Neighbour', days: 7, last: '2 days ago', channels: 'Messages', next: null, note: 'You recently discussed weekend plans.', todos: [], history: [['Messages · Sep 5', 'You and Sam confirmed Saturday’s plans.'], ['Messages · Sep 2', 'Sam shared a suggested route.']] },
+        { id: 'alex', name: 'Alex Rivera', initials: 'AR', role: 'Collaborator · Hiring project', days: 5, last: '3 days ago', channels: 'Email · WhatsApp', next: 'Fri, 11:00 · Hiring catch-up', note: 'Your current shared work is reviewing the interview plan.', todos: ['Comment on the interview plan'], history: [['Email · Sep 4', 'Alex sent the interview plan for your comments.'], ['WhatsApp group · Sep 4', 'Alex and Priya posted in the Founders group.']] },
+        { id: 'priya', name: 'Priya Shah', initials: 'PS', role: 'Founder group', days: 3, last: '3 days ago', channels: 'WhatsApp · Email', next: null, note: 'Most recent contact has been through your founder group.', todos: [], history: [['WhatsApp group · Sep 4', 'Priya shared an update in a group you both participate in.'], ['Email · Aug 28', 'You exchanged notes about the next founder dinner.']] },
+        { id: 'taylor', name: 'Taylor Brooks', initials: 'TB', role: 'Upcoming attendee · Role unknown', days: 0, last: null, channels: '', next: 'Wed, 14:00 · Introduction', note: 'Taylor appears on your calendar. No earlier communication was found in the connected sources.', todos: [], history: [] }
+      ];
+      const person = id => people.find(value => value.id === id);
+      root.querySelector('#people-frequency-list').innerHTML = people.filter(value => value.days).map(value => `
+        <li><button type="button" class="people-row" data-person="${value.id}" aria-pressed="false"><span class="people-initials">${value.initials}</span><span class="people-row-text"><span class="people-name">${value.name}</span><span class="people-small people-muted">${value.channels} · ${value.last}</span></span><span class="people-count">${value.days} days<br><span class="people-muted">in contact</span></span></button></li>
+      `).join('');
+      const graph = root.querySelector('.people-graph');
+      graph.insertAdjacentHTML('beforeend', people.filter(value => value.days).map(value => `
+        <button type="button" class="people-node" data-node="${value.id}" data-person="${value.id}" aria-pressed="false"><span class="people-name">${value.name}</span><span class="people-muted">${value.days} days in contact</span></button>
+      `).join(''));
+
+      function drawGraph() {
+        const width = graph.clientWidth;
+        const height = graph.clientHeight;
+        if (!width || !height) return;
+        const narrow = width < 360;
+        const positions = narrow
+          ? { you: [.5, .43], maya: [.2, .10], jordan: [.8, .10], alex: [.8, .67], priya: [.50, .93], sam: [.2, .67] }
+          : { you: [.50, .49], maya: [.21, .13], jordan: [.80, .16], alex: [.84, .66], priya: [.53, .91], sam: [.17, .71] };
+        root.querySelectorAll('[data-node]').forEach(node => {
+          const [x, y] = positions[node.dataset.node];
+          node.style.left = `${x * 100}%`;
+          node.style.top = `${y * 100}%`;
+        });
+        const edges = people.filter(value => value.days).map(value => ['you', value.id, 'direct', Math.max(1, value.days / 4)]);
+        if (state.sharedContext) edges.push(['maya', 'jordan', 'shared', 1], ['alex', 'priya', 'shared', 1]);
+        const svg = root.querySelector('.people-graph-lines');
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        svg.innerHTML = edges.map(([from, to, kind, weight]) => {
+          const a = positions[from], b = positions[to];
+          return `<line class="people-edge ${kind}" x1="${a[0] * width}" y1="${a[1] * height}" x2="${b[0] * width}" y2="${b[1] * height}" stroke-width="${weight}"/>`;
+        }).join('');
+      }
+
+      function render() {
+        root.querySelector('.people-overview').hidden = state.view !== 'overview';
+        root.querySelector('.people-network').hidden = state.view !== 'network';
+        root.querySelector('.people-shared-context').hidden = !state.sharedContext;
+        root.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.view === state.view)));
+        root.querySelectorAll('[data-person]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.person === selected)));
+        const value = person(selected);
+        root.querySelector('.people-detail').innerHTML = `
+          <div class="people-detail-header"><h2>${value.name}</h2><p class="people-muted people-small">${value.role}</p></div>
+          ${value.next ? `<div class="people-next"><span class="people-small people-muted">Next meeting</span><p>${value.next}</p></div>` : ''}
+          <h3>Context</h3><p class="people-small">${value.note}</p>
+          <h3>Open todos${value.todos.length ? ` · ${value.todos.length}` : ''}</h3>
+          ${value.todos.length ? value.todos.map(todo => `<p class="people-todo people-small">${todo}</p>`).join('') : '<p class="people-small people-muted">No open todos linked.</p>'}
+          <h3>Recent history</h3>
+          ${value.history.length ? `<ul class="people-history">${value.history.map(([source, text]) => `<li><p class="people-small people-muted">${source}</p><p class="people-small">${text}</p></li>`).join('')}</ul>` : '<p class="people-small people-muted">No earlier exchanges found.</p>'}
+        `;
+        root.querySelectorAll('[data-edge]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.edge === selectedEdge)));
+        root.querySelector('.people-edge-evidence').textContent = selectedEdge === 'roadmap'
+          ? 'Maya and Jordan appear in the same roadmap email thread. Both were invited to calendar events on Aug 19, Aug 26 and Sep 2.'
+          : selectedEdge === 'founders'
+            ? 'Alex and Priya both sent messages in the Founders group on Sep 4. This shows shared conversation context; it does not establish a direct relationship between them.'
+            : '';
+        drawGraph();
+      }
+
+      root.addEventListener('click', event => {
+        const button = event.target.closest('button');
+        if (!button || !root.contains(button)) return;
+        if (button.dataset.view) state.view = button.dataset.view;
+        if (button.dataset.person) selected = button.dataset.person;
+        if (button.dataset.edge) selectedEdge = button.dataset.edge;
+        render();
+      });
+      new ResizeObserver(drawGraph).observe(graph);
+      render();
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: render });
+        tweak.addSelect(state, 'view', { label: 'Opening view', options: [{ label: 'Meetings and people', value: 'overview' }, { label: 'Network graph', value: 'network' }] });
+        tweak.addToggle(state, 'sharedContext', { label: 'Show connections between people' });
+      }
+    })();
+  </script>
+</div>

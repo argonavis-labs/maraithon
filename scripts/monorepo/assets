@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+component="${1:-all}"
+
+validate_component \
+  "${component}" \
+  all native web api static companion mac mobile ios companion-assets mobile-assets native-assets
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "${tmpdir}"' EXIT
+
+build_web_static_assets() {
+  run_in "${ROOT_DIR}" env MIX_ENV=prod mix phx.digest
+  run_in "${ROOT_DIR}" env MIX_ENV=dev mix run --no-start -e '
+required = [
+  "priv/static/manifest.webmanifest",
+  "priv/static/sw.js",
+  "priv/static/offline.html",
+  "priv/static/favicon.ico"
+]
+
+missing = Enum.reject(required, &File.exists?/1)
+
+manifest =
+  "priv/static/manifest.webmanifest"
+  |> File.read!()
+  |> Jason.decode!()
+
+icon_missing =
+  manifest
+  |> Map.get("icons", [])
+  |> Enum.map(&Map.get(&1, "src"))
+  |> Enum.reject(&is_nil/1)
+  |> Enum.map(&String.trim_leading(&1, "/"))
+  |> Enum.reject(&File.exists?(Path.join("priv/static", &1)))
+
+case missing ++ icon_missing do
+  [] ->
+    IO.puts("Static web assets are digestible and PWA references resolve.")
+
+  failures ->
+    Enum.each(failures, &IO.puts(:stderr, "Missing static asset: #{&1}"))
+    System.halt(1)
+end
+'
+}
+
+build_companion_asset_catalog() {
+  require_command xcrun
+  mkdir -p "${tmpdir}/companion-assets"
+
+  run_in "${ROOT_DIR}" xcrun actool \
+    --output-format human-readable-text \
+    --notices \
+    --warnings \
+    --platform macosx \
+    --minimum-deployment-target 14.0 \
+    --app-icon AppIcon \
+    --output-partial-info-plist "${tmpdir}/companion-assets-info.plist" \
+    --compile "${tmpdir}/companion-assets" \
+    apps/companion/Sources/Maraithon/Resources/Assets.xcassets
+}
+
+build_mobile_asset_catalog() {
+  require_command xcrun
+  mkdir -p "${tmpdir}/mobile-assets"
+
+  run_in "${ROOT_DIR}" xcrun actool \
+    --output-format human-readable-text \
+    --notices \
+    --warnings \
+    --platform iphonesimulator \
+    --minimum-deployment-target 26.0 \
+    --target-device iphone \
+    --target-device ipad \
+    --app-icon AppIcon \
+    --accent-color AccentColor \
+    --output-partial-info-plist "${tmpdir}/mobile-assets-info.plist" \
+    --compile "${tmpdir}/mobile-assets" \
+    apps/mobile/MaraithonMobile/Resources/Assets.xcassets
+}
+
+if selected_component "${component}" "web" || [[ "${component}" == "static" ]]; then
+  build_web_static_assets
+fi
+
+if selected_component "${component}" "companion" || [[ "${component}" == "companion-assets" || "${component}" == "native-assets" ]]; then
+  build_companion_asset_catalog
+fi
+
+if selected_component "${component}" "mobile" || [[ "${component}" == "mobile-assets" || "${component}" == "native-assets" ]]; then
+  build_mobile_asset_catalog
+fi
+
+echo
+echo "Asset build completed for ${component}."

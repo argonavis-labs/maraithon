@@ -1,0 +1,1418 @@
+defmodule MaraithonWeb.DashboardLiveTest do
+  use MaraithonWeb.ConnCase, async: false
+
+  import Ecto.Query
+  import Phoenix.LiveViewTest
+
+  alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Events.Event
+  alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Insights
+  alias Maraithon.LogBuffer
+  alias Maraithon.OAuth
+  alias Maraithon.OperatorMemory.Summary, as: OperatorMemorySummary
+  alias Maraithon.PreferenceMemory.Rule, as: PreferenceRule
+  alias Maraithon.Projects
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.SourceFreshness
+  alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
+  alias Maraithon.UserMemory.Profile, as: UserMemoryProfile
+
+  @user_email "dashboard@example.com"
+
+  setup %{conn: conn} do
+    Repo.delete_all(from todo in Todo, where: todo.user_id == ^@user_email)
+
+    {:ok, user} = Maraithon.Accounts.get_or_create_user_by_email(@user_email)
+    {:ok, user} = Repo.update(Ecto.Changeset.change(user, is_admin: false))
+    {:ok, %{token: token}} = Maraithon.Accounts.create_session_for_user(user)
+
+    conn =
+      conn
+      |> Phoenix.ConnTest.init_test_session(%{})
+      |> Plug.Conn.put_session("user_session_token", token)
+
+    {:ok, conn: conn}
+  end
+
+  test "renders control center sections without the old agent management panels", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert has_element?(view, "h1", "Control Center")
+    assert has_element?(view, "h2", "Overview")
+    assert html =~ "Open work review"
+    assert has_element?(view, "h2", "Today")
+    assert has_element?(view, "h2", "Workspace")
+    assert has_element?(view, "h2", "Start Chief of Staff")
+    assert html =~ "New project"
+    assert html =~ "Saved context"
+    assert has_element?(view, "h2", "Projects")
+    assert html =~ "Automation overview"
+    assert html =~ "Nothing needs your review right now."
+
+    assert html =~
+             "Maraithon will add work here when messages, meetings, notes, or local context produce a concrete next move."
+
+    assert html =~ "attach an automation to recommend next moves"
+    assert html =~ "Follow-ups will appear here after"
+    assert html =~ "Connect work apps so Maraithon can see current context."
+    assert html =~ "Focus on clear obligations until a project focus is confirmed."
+    assert html =~ "begin reviewing active work"
+    assert html =~ "no review-ready work"
+    refute html =~ "none failed"
+    refute html =~ "No projects yet."
+    refute html =~ "No open follow-ups yet."
+    refute has_element?(view, "h2", "Health")
+    refute html =~ "Operational activity"
+    refute html =~ "Automation activity"
+    refute html =~ "Needs attention"
+    refute html =~ "System logs"
+    refute html =~ "Platform logs"
+    refute html =~ "Platform log access is unavailable in this environment."
+    refute html =~ "Technical notes"
+    refute html =~ "Failures &amp; stale work"
+    refute html =~ "Raw logs"
+    refute html =~ "Fly.io platform logs"
+    refute html =~ "FLY_API_TOKEN"
+    assert has_element?(view, "a[href='/agents/new']", "New automation")
+    refute has_element?(view, "h1", "Todos")
+    refute html =~ "New agent"
+    refute html =~ "All caught up"
+    refute html =~ "all clear"
+    refute html =~ "Focus queue"
+    refute html =~ "nothing waiting"
+    refute html =~ "high-signal"
+    refute html =~ "project-local state"
+    refute html =~ "operating system"
+    refute html =~ "how this user prefers to work"
+    refute html =~ "No durable preferences yet."
+    refute html =~ "source-backed"
+    refute html =~ "the user's"
+    refute html =~ "Install agent"
+    refute html =~ "Agent activity"
+    refute html =~ "Agent Registry"
+    refute html =~ "Agent Details"
+  end
+
+  test "dashboard greeting uses the operator local timezone" do
+    user = %{email: "operator@example.com"}
+    schedule = %{timezone_name: "America/Los_Angeles", timezone_offset_hours: -8}
+
+    assert apply(MaraithonWeb.DashboardLive, :dashboard_greeting, [
+             user,
+             schedule,
+             ~U[2026-05-31 02:00:00Z]
+           ]) == "Good evening, Operator"
+  end
+
+  test "renders operational diagnostics for admins only" do
+    admin_email = "dashboard-admin@example.com"
+
+    {:ok, agent} =
+      create_agent(%{
+        user_id: admin_email,
+        behavior: "prompt_agent",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 1,
+      event_type: "tool_failed",
+      payload: %{
+        "message" =>
+          "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+      }
+    })
+
+    conn = build_conn() |> log_in_admin_user(admin_email)
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert has_element?(view, "h2", "Health")
+    assert Regex.scan(~r/<dt[^>]*>\s*Uptime\s*<\/dt>/, html) |> length() == 1
+    assert html =~ "Operational activity"
+    assert html =~ "Needs attention"
+    assert html =~ "System logs"
+    assert html =~ "Platform logs"
+    assert html =~ "Platform log access is unavailable in this environment."
+    assert html =~ "Technical notes"
+    assert html =~ "No technical notes are available for this automation."
+    assert html =~ "Maraithon could not finish this step. Review the latest automation status."
+    refute html =~ "captured"
+    refute html =~ "No technical notes yet."
+    refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "token=secret")
+    refute_html_contains(html, "123456789")
+    refute_html_contains(html, "sarah@example.com")
+  end
+
+  test "renders saved context without internal confidence scoring", %{conn: conn} do
+    Repo.insert!(%UserMemoryProfile{
+      user_id: @user_email,
+      summary: "Use concise founder-style status updates.",
+      profile: %{"communication_style" => "Direct and decision-oriented."},
+      confidence: 0.93
+    })
+
+    Repo.insert!(%PreferenceRule{
+      user_id: @user_email,
+      status: "active",
+      source: "web",
+      kind: "style_preference",
+      label: "Direct updates",
+      instruction: "Keep updates direct and decision oriented.",
+      confidence: 0.91
+    })
+
+    Repo.insert!(%OperatorMemorySummary{
+      user_id: @user_email,
+      summary_type: "action_style",
+      content: "Prefers direct asks with clear owners.",
+      confidence: 0.88
+    })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    html = render(view)
+
+    assert html =~ "Use concise founder-style status updates."
+    assert html =~ "Keep updates direct and decision oriented."
+    assert html =~ "Prefers direct asks with clear owners."
+    refute html =~ "confidence 93"
+    refute html =~ "93.0%"
+    refute html =~ "91.0%"
+    refute html =~ "88.0%"
+  end
+
+  test "onboarding preview renders as product copy without confidence scoring", %{conn: conn} do
+    original_module = Application.get_env(:maraithon, :onboarding_proof_module)
+    original_response = Application.get_env(:maraithon, :onboarding_proof_stub_response)
+
+    on_exit(fn ->
+      restore_env(:onboarding_proof_module, original_module)
+      restore_env(:onboarding_proof_stub_response, original_response)
+    end)
+
+    Application.put_env(
+      :maraithon,
+      :onboarding_proof_module,
+      Maraithon.TestSupport.OnboardingProofStub
+    )
+
+    Application.put_env(:maraithon, :onboarding_proof_stub_response, {
+      :ok,
+      %{
+        items: [
+          %{
+            title: "Deck follow-up for Sarah",
+            summary: "The Sarah thread is waiting on the promised deck.",
+            rationale: "Sarah asked for the deck and recent activity does not show delivery.",
+            recommended_action:
+              "Check the thread and send the deck if the thread does not show delivery.",
+            source: "gmail",
+            account_label: "preview@example.com",
+            suggested_behavior: "founder_followthrough_agent",
+            confidence: 0.99
+          }
+        ],
+        sources: ["Gmail · preview@example.com"],
+        generated_at: DateTime.utc_now()
+      }
+    })
+
+    {:ok, _token} =
+      OAuth.store_tokens(@user_email, "google:preview@example.com", %{
+        access_token: "preview-token",
+        scopes: [],
+        metadata: %{"account_email" => "preview@example.com"}
+      })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render_async(view)
+
+    assert html =~ "3 things Maraithon would have caught this week"
+    assert html =~ "This preview shows what Maraithon can catch continuously"
+    assert html =~ "Deck follow-up for Sarah"
+    assert html =~ "Sarah asked for the deck"
+    assert html =~ "Recommended move:"
+    refute_html_contains(html, "recent sample")
+    refute_html_contains(html, "proof-of-value scan")
+    refute_html_contains(html, "proof-of-value preview")
+    refute_html_contains(html, "quick scan")
+    refute_html_contains(html, "Scanning your connected data")
+    refute_html_contains(html, "this scan")
+    refute_html_contains(html, "keeps watching")
+    refute_html_contains(html, "What Maraithon would do")
+    refute_html_contains(html, "confidence 99")
+    refute_html_contains(html, "99.0%")
+  end
+
+  test "onboarding preview errors stay product-facing", %{conn: conn} do
+    original_module = Application.get_env(:maraithon, :onboarding_proof_module)
+    original_response = Application.get_env(:maraithon, :onboarding_proof_stub_response)
+
+    on_exit(fn ->
+      restore_env(:onboarding_proof_module, original_module)
+      restore_env(:onboarding_proof_stub_response, original_response)
+    end)
+
+    Application.put_env(
+      :maraithon,
+      :onboarding_proof_module,
+      Maraithon.TestSupport.OnboardingProofStub
+    )
+
+    Application.put_env(
+      :maraithon,
+      :onboarding_proof_stub_response,
+      {:error, {:internal, "google_account_not_connected", "proof_build_failed"}}
+    )
+
+    {:ok, _token} =
+      OAuth.store_tokens(@user_email, "google:preview@example.com", %{
+        access_token: "preview-token",
+        scopes: [],
+        metadata: %{"account_email" => "preview@example.com"}
+      })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render_async(view)
+
+    assert html =~ "Could not prepare recent examples."
+    assert html =~ "Maraithon could not prepare recent examples from your connected accounts."
+    assert html =~ "Refresh the preview"
+    refute_html_contains(html, "onboarding proof")
+    refute_html_contains(html, "proof_build_failed")
+    refute_html_contains(html, "google_account_not_connected")
+    refute_html_contains(html, "temporarily unavailable")
+  end
+
+  test "creates a project and project context from the dashboard", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    _html =
+      view
+      |> form("#project-form",
+        project: %{
+          name: "Operator OS",
+          summary: "Founder system work",
+          description: "Everything related to the operator layer.",
+          priority: "high"
+        }
+      )
+      |> render_submit()
+
+    project = Projects.get_project_by_slug_for_user("operator-os", @user_email)
+    assert project.name == "Operator OS"
+
+    html =
+      view
+      |> form("#project-item-form",
+        project_item: %{
+          project_id: project.id,
+          item_type: "todo",
+          title: "Ship dashboard",
+          content: "Launch the first project workspace slice."
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Operator OS"
+    assert html =~ "Ship dashboard"
+    assert html =~ "Launch the first project workspace slice."
+    assert html =~ "Add project context, then attach a Product Planner"
+    assert html =~ "Grant read access when a recommendation needs code context."
+    assert html =~ "Accepted recommendations will appear here once you start delivery."
+    refute html =~ "No recommendations yet."
+    refute html =~ "No repo access granted yet."
+    refute html =~ "No delivery runs yet."
+  end
+
+  test "renders project setup guidance without placeholder absence copy", %{conn: conn} do
+    {:ok, _project} =
+      Projects.create_project(@user_email, %{
+        "name" => "Board Prep"
+      })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Board Prep"
+    assert html =~ "Add a project summary to keep recommendations focused."
+
+    assert html =~
+             "Add a note, work item, or repo grant so Maraithon has enough detail to make useful recommendations."
+
+    assert html =~ "Add project context, then attach a Product Planner"
+    assert html =~ "Grant read access when a recommendation needs code context."
+    assert html =~ "Accepted recommendations will appear here once you start delivery."
+    refute html =~ "No project context yet."
+    refute html =~ "No project summary yet."
+  end
+
+  test "renders project manager recommendations on the dashboard", %{conn: conn} do
+    {:ok, project} =
+      Projects.create_project(@user_email, %{
+        "name" => "Maraithon Product",
+        "summary" => "Product roadmap and operator UX"
+      })
+
+    assert {:ok, _item} =
+             Projects.create_project_item(project, %{
+               "item_type" => "grant",
+               "title" => "GitHub scope",
+               "content" => "Planner can inspect kent/bliss/maraithon."
+             })
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "github_product_planner",
+        project_id: project.id,
+        config: %{"name" => "Maraithon PM", "repo_full_name" => "kent/bliss/maraithon"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "github",
+          "category" => "product_opportunity",
+          "title" => "Project workspace",
+          "summary" => "Ship an app-facing project workspace with project-local state.",
+          "recommended_action" => "Launch projects on the dashboard first.",
+          "priority" => 96,
+          "confidence" => 0.91,
+          "dedupe_key" => "dashboard:project-recommendation:1",
+          "metadata" => %{"why_now" => "Users need project context in the app today."}
+        }
+      ])
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Maraithon Product"
+    assert html =~ "GitHub scope"
+    assert html =~ "Project workspace"
+    assert html =~ "Launch projects on the dashboard first."
+    assert html =~ "Critical path"
+    assert html =~ "Attach Project Manager"
+    refute html =~ "p96"
+    refute html =~ "priority 96"
+  end
+
+  test "lets the user accept a recommendation, grant repo access, and start delivery", %{
+    conn: conn
+  } do
+    original_projects = Application.get_env(:maraithon, Maraithon.Projects, [])
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Projects, original_projects)
+    end)
+
+    Application.put_env(:maraithon, Maraithon.Projects,
+      delivery_launcher: fn _project, _recommendation, _decision, _agent, _run ->
+        {:ok,
+         %{
+           status: "pending_plan",
+           result_summary: "Queued with the project repo planner.",
+           metadata: %{"launcher" => "stub"}
+         }}
+      end
+    )
+
+    {:ok, project} =
+      Projects.create_project(@user_email, %{
+        "name" => "Operator Delivery",
+        "summary" => "Project delivery workflow"
+      })
+
+    {:ok, _repo_planner} =
+      create_agent(%{
+        behavior: "repo_planner",
+        project_id: project.id,
+        config: %{"name" => "Project Builder", "codebase_path" => File.cwd!()}
+      })
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "github_product_planner",
+        project_id: project.id,
+        config: %{"name" => "PM", "repo_full_name" => "kent/bliss/maraithon"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, [recommendation]} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "github",
+          "category" => "product_opportunity",
+          "title" => "Delivery loop",
+          "summary" => "Track accepted recommendations and repo grants.",
+          "recommended_action" => "Ship the first delivery workflow slice.",
+          "priority" => 94,
+          "confidence" => 0.9,
+          "dedupe_key" => "dashboard:delivery-loop:1",
+          "metadata" => %{"repo_full_name" => "kent/bliss/maraithon"}
+        }
+      ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    view
+    |> element(
+      "button[phx-click='decide_project_recommendation'][phx-value-project_id='#{project.id}'][phx-value-recommendation_id='#{recommendation.id}'][phx-value-decision='accepted']"
+    )
+    |> render_click()
+
+    assert render(view) =~ "Accepted"
+
+    view
+    |> element(
+      "button[phx-click='grant_project_repo_access'][phx-value-project_id='#{project.id}'][phx-value-repo_full_name='kent/bliss/maraithon'][phx-value-scope='read_only']"
+    )
+    |> render_click()
+
+    assert render(view) =~ "Read only"
+
+    view
+    |> element(
+      "button[phx-click='start_project_implementation_run'][phx-value-project_id='#{project.id}'][phx-value-recommendation_id='#{recommendation.id}']"
+    )
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Planning"
+    assert html =~ "Queued with the project repo planner."
+
+    [run] = Projects.list_implementation_runs(project_id: project.id, user_id: @user_email)
+
+    assert {:ok, _updated_run} =
+             Projects.update_implementation_run(run.id, @user_email, %{
+               "status" => "awaiting_review",
+               "branch_name" => "feature/operator-delivery",
+               "pull_request_url" => "https://github.com/kent/bliss/maraithon/pull/51",
+               "result_summary" => "PR is ready for review.",
+               "metadata" => %{"plan_file_path" => "PLANS/operator_delivery.md"}
+             })
+
+    {:ok, _reloaded_view, reloaded_html} = live(conn, "/dashboard")
+    assert reloaded_html =~ "feature/operator-delivery"
+    assert reloaded_html =~ "Open PR"
+    assert reloaded_html =~ "Delivery plan recorded"
+    refute reloaded_html =~ "PLANS/operator_delivery.md"
+  end
+
+  test "renders enriched insight context and ideas", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply to the customer escalation",
+          "summary" => "A renewal thread needs a same-day response from the account team.",
+          "recommended_action" =>
+            "Reply now, confirm the owner, and send a timeline for the next update.",
+          "priority" => 100,
+          "confidence" => 0.9,
+          "dedupe_key" => "dashboard:enriched:1",
+          "metadata" => %{
+            "account" => @user_email,
+            "why_now" => "The customer asked for an update before today's review call.",
+            "follow_up_ideas" => [
+              "Pull the latest status from support before replying.",
+              "Write down the two risks you need covered on the call."
+            ]
+          }
+        }
+      ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Why now"
+    assert html =~ "Possible moves"
+    assert html =~ "from Gmail · account dashboard@example.com"
+    assert html =~ "The customer asked for an update before today&#39;s review call."
+    assert html =~ "Pull the latest status from support before replying."
+    assert html =~ "Write down the two risks you need covered on the call."
+    refute_html_contains(html, "Ideas")
+  end
+
+  test "dashboard due dates use the Chief of Staff timezone", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    due_at = ~U[2026-05-30 18:30:00Z]
+
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Send the board packet",
+                 "summary" => "The board packet is due before the afternoon review.",
+                 "next_action" => "Send the board packet and confirm the review window.",
+                 "priority" => 90,
+                 "due_at" => due_at,
+                 "dedupe_key" => "dashboard:todo:local-due-time"
+               }
+             ])
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "calendar",
+          "category" => "event_prep_needed",
+          "title" => "Prep the board review",
+          "summary" => "The board review needs a short prep pass.",
+          "recommended_action" => "Review the packet and confirm open asks.",
+          "priority" => 88,
+          "confidence" => 0.9,
+          "due_at" => due_at,
+          "dedupe_key" => "dashboard:insight:local-due-time"
+        }
+      ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "May 30, 2:30 PM ET"
+    assert html =~ "Due May 30 at 2:30 PM ET."
+    assert html =~ "from Calendar"
+    refute html =~ "2026-05-30 18:30:00 UTC"
+    refute html =~ "6:30 PM UTC"
+  end
+
+  test "dashboard evidence timestamps use the Chief of Staff timezone", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    assert {:ok, [insight]} =
+             Insights.record_many(@user_email, agent.id, [
+               %{
+                 "source" => "gmail",
+                 "category" => "reply_urgent",
+                 "title" => "Evidence timestamp check",
+                 "summary" => "A follow-up thread needs a same-day answer.",
+                 "recommended_action" => "Reply with the owner and next update time.",
+                 "priority" => 91,
+                 "confidence" => 0.9,
+                 "source_occurred_at" => ~U[2026-05-30 18:30:00Z],
+                 "dedupe_key" => "dashboard:evidence:local-time"
+               }
+             ])
+
+    assert {:ok, _delivery} =
+             %Delivery{}
+             |> Delivery.changeset(%{
+               insight_id: insight.id,
+               user_id: @user_email,
+               channel: "telegram",
+               destination: "chief-of-staff-chat",
+               score: 0.93,
+               threshold: 0.78,
+               status: "feedback_helpful",
+               sent_at: ~U[2026-05-30 18:45:00Z],
+               feedback: "helpful",
+               feedback_at: ~U[2026-05-30 19:00:00Z]
+             })
+             |> Repo.insert()
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    view
+    |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
+    |> render_click()
+
+    html = render(view)
+
+    assert html =~ "Source activity"
+    assert html =~ "Seen May 30, 2026 at 2:30 PM ET"
+    assert html =~ "May 30, 2026 at 2:45 PM ET"
+    assert html =~ "May 30, 2026 at 3:00 PM ET"
+    refute_html_contains(html, "6:30 PM UTC")
+    refute_html_contains(html, "2026-05-30 18:45")
+    refute_html_contains(html, "2026-05-30 19:00")
+  end
+
+  test "dashboard delivery evidence hides raw provider failure details", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, [insight]} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Failed delivery follow-up",
+          "summary" => "A promised update is waiting for review.",
+          "recommended_action" => "Send the update from the dashboard.",
+          "priority" => 93,
+          "confidence" => 0.9,
+          "dedupe_key" => "dashboard:delivery-error-copy"
+        }
+      ])
+
+    raw_error =
+      "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+
+    assert {:ok, _delivery} =
+             %Delivery{}
+             |> Delivery.changeset(%{
+               insight_id: insight.id,
+               user_id: @user_email,
+               channel: "telegram",
+               destination: "123456789",
+               score: 0.93,
+               threshold: 0.78,
+               status: "failed",
+               error_message: raw_error
+             })
+             |> Repo.insert()
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    view
+    |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
+    |> render_click()
+
+    html = render(view)
+
+    assert html =~ "Hide source context"
+    assert html =~ "Request"
+    assert html =~ "Requester"
+    assert html =~ "Source context checked"
+    assert html =~ "Delivery checked"
+    assert html =~ "Delivery failed. Check the connected channel before sending another delivery."
+    assert html =~ "Why this needs review"
+    assert html =~ "Inferred from available context"
+    assert html =~ "Missing context"
+    assert html =~ "Source excerpt is missing; review the original thread before acting."
+    refute_html_contains(html, "Hide evidence")
+    refute_html_contains(html, "Exact promise")
+    refute_html_contains(html, "Who asked")
+    refute_html_contains(html, "Evidence checked")
+    refute_html_contains(html, "Delivery evidence checked")
+    refute_html_contains(html, "Why this is on your review list")
+    refute_html_contains(html, "This item does not include a source excerpt.")
+    refute_html_contains(html, "not captured")
+    refute_html_contains(html, "saved evidence was captured")
+    refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "persisted")
+    refute_html_contains(html, "token=secret")
+    refute_html_contains(html, "123456789")
+    refute_html_contains(html, "sarah@example.com")
+    refute_html_contains(html, "stacktrace")
+  end
+
+  test "dashboard oauth flash hides technical query messages", %{conn: conn} do
+    raw_message =
+      "DBConnection.ConnectionError token=secret oauth_tokens chat_id=123456789 stacktrace"
+
+    {:ok, _view, html} =
+      live(
+        conn,
+        "/dashboard?oauth_status=error&oauth_message=#{URI.encode_www_form(raw_message)}"
+      )
+
+    assert html =~ "App connection did not finish. Reopen the connector and complete sign-in."
+    refute_html_contains(html, "try again")
+    refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "token=secret")
+    refute_html_contains(html, "oauth_tokens")
+    refute_html_contains(html, "123456789")
+    refute_html_contains(html, "stacktrace")
+  end
+
+  test "dashboard failure list hides raw runtime failure details", %{conn: conn} do
+    raw_error =
+      "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+
+    now = DateTime.utc_now()
+
+    Repo.insert!(%BackgroundJob{
+      user_id: @user_email,
+      queue: "default",
+      job_type: "source_ingest",
+      status: "failed",
+      scheduled_at: now,
+      failed_at: now,
+      attempts: 2,
+      last_error: raw_error
+    })
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    refute html =~
+             "Background job did not complete. Review the latest status before rerunning it."
+
+    refute html =~ "Operational activity"
+    refute html =~ "Needs attention"
+    refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "token=secret")
+    refute_html_contains(html, "123456789")
+    refute_html_contains(html, "sarah@example.com")
+    refute_html_contains(html, "stacktrace")
+  end
+
+  test "dashboard operational activity hides raw payload and log diagnostics", %{conn: conn} do
+    LogBuffer.clear()
+
+    on_exit(fn ->
+      LogBuffer.clear()
+    end)
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    raw_detail =
+      "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 1,
+      event_type: "tool_failed",
+      payload: %{
+        "message" => raw_detail,
+        "oauth_tokens" => "secret-token"
+      }
+    })
+
+    LogBuffer.record(%{
+      level: :error,
+      message: raw_detail,
+      metadata: %{
+        token: "secret",
+        query: "select * from oauth_tokens",
+        module: "DBConnection"
+      }
+    })
+
+    _ = :sys.get_state(LogBuffer)
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    refute html =~ "Operational activity"
+    refute html =~ "System logs"
+    refute_html_contains(html, "Recorded a failed action.")
+    refute_html_contains(html, "Recorded Maraithon activity.")
+    refute_html_contains(html, "Diagnostic details are hidden from this view.")
+    refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "token=secret")
+    refute_html_contains(html, "secret-token")
+    refute_html_contains(html, "oauth_tokens")
+    refute_html_contains(html, "123456789")
+    refute_html_contains(html, "sarah@example.com")
+    refute_html_contains(html, "stacktrace")
+    refute_html_contains(html, "select * from oauth_tokens")
+  end
+
+  test "automation coverage summarizes recent updates without raw event names", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 1,
+      event_type: "effect_completed",
+      payload: %{"summary" => "Prepared the renewal follow-up for review."}
+    })
+
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 2,
+      event_type: "effect_completed",
+      payload: %{
+        "message" =>
+          "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+      }
+    })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Automation overview"
+    assert html =~ "Completed work"
+    assert html =~ "Prepared the renewal follow-up for review."
+    assert html =~ "Maraithon finished this update."
+    refute html =~ "effect_completed"
+    refute html =~ "Recorded completed work."
+    refute html =~ "Automation activity"
+  end
+
+  test "separates act-now and monitor insight cards", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply to the customer escalation",
+          "summary" => "A same-day customer update is still owed.",
+          "recommended_action" => "Reply now with owner and ETA.",
+          "priority" => 94,
+          "confidence" => 0.92,
+          "dedupe_key" => "dashboard:act-now:1"
+        },
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Monitoring investor thread",
+          "summary" => "The investor thread is moving and does not need action from you now.",
+          "recommended_action" => "Watch for a blocker or a direct request back to you.",
+          "priority" => 84,
+          "confidence" => 0.86,
+          "attention_mode" => "monitor",
+          "dedupe_key" => "dashboard:monitor:1",
+          "tracking_key" => "dashboard:monitor:1"
+        }
+      ])
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Needs Action"
+    assert html =~ "Threads that currently need a direct decision or reply."
+    assert html =~ "Watching"
+    assert html =~ "Reply to the customer escalation"
+    assert html =~ "Monitoring investor thread"
+    assert html =~ "Reply with a clear owner and timing."
+    assert html =~ "high priority"
+    assert html =~ "watching"
+    assert html =~ "Action:"
+    assert html =~ "Track:"
+    assert html =~ "from Gmail"
+    refute html =~ "Reply now with owner and ETA"
+    refute html =~ "account unknown"
+    refute html =~ "confidence 92"
+    refute html =~ "confidence 86"
+    refute html =~ "founder debt"
+    refute html =~ "P94"
+    refute html =~ "P84"
+  end
+
+  test "shows dashboard metrics when agents exist", %{conn: conn} do
+    {:ok, _running} =
+      create_agent(%{
+        behavior: "prompt_agent",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _degraded} =
+      create_agent(%{
+        behavior: "prompt_agent",
+        config: %{},
+        status: "degraded",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Automations"
+    assert html =~ "active"
+    assert html =~ "need attention"
+    assert html =~ "Open work"
+    assert html =~ "no review-ready work"
+    assert html =~ "Connected services"
+    assert html =~ "connect apps for context"
+    assert html =~ "Projects"
+    assert html =~ "add project context"
+    refute html =~ "Assistant work"
+    refute html =~ "LLM calls"
+    refute html =~ "Spend"
+    refute html =~ "Queued actions"
+    assert html =~ "Prompt automation"
+    assert html =~ "Automation overview"
+    assert html =~ "Updates"
+    assert html =~ "Pending actions"
+    assert html =~ "Next checks"
+    refute html =~ "Automation coverage"
+    refute html =~ "Signals"
+    refute html =~ "Pending effects"
+    refute html =~ "Automation activity"
+    refute html =~ "Prompt agent"
+    refute html =~ "degraded"
+  end
+
+  test "shows reviewable work and links to the dedicated Work page", %{conn: conn} do
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to billing thread",
+                 "summary" => "Stripe needs a confirmation about the invoice owner.",
+                 "next_action" => "Reply with owner, ETA, and billing contact.",
+                 "priority" => 88,
+                 "dedupe_key" => "dashboard:todo:billing"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    html = render(view)
+    assert html =~ "Reply to billing thread"
+    assert html =~ "1 open work item is ready to review."
+    assert html =~ "1 item ready to review"
+    refute html =~ "open cards"
+    assert has_element?(view, "a[href='/todos']", "Open Work")
+
+    todo = List.first(Todos.list_open_for_user(@user_email))
+
+    _html =
+      view
+      |> element(
+        "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{todo.id}']"
+      )
+      |> render_click()
+
+    refute has_element?(view, "#todo-review-card-#{todo.id}")
+    assert Todos.list_open_for_user(@user_email) == []
+  end
+
+  test "renders a one-by-one todo card review queue with action context", %{conn: conn} do
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to Michael Berlingo on Starteryou UGC Campaigns",
+                 "summary" =>
+                   "Michael is waiting for confirmation on campaign materials and ownership.",
+                 "next_action" =>
+                   "Reply with the exact asset status, owner, and delivery timing.",
+                 "priority" => 92,
+                 "dedupe_key" => "dashboard:todo:starteryou",
+                 "metadata" => %{
+                   "person" => "Michael Berlingo",
+                   "company" => "Starteryou",
+                   "relationship" => "UGC campaign contact",
+                   "why_now" => "Deadline is today and no later follow-through was found.",
+                   "source_excerpt" =>
+                     "Can you confirm whether the UGC campaign materials are ready?"
+                 }
+               },
+               %{
+                 "source" => "calendar",
+                 "title" => "Prepare Monday board notes",
+                 "summary" => "Collect the three updates needed before the Monday board prep.",
+                 "next_action" => "Write the top three updates and owner for each.",
+                 "priority" => 80,
+                 "dedupe_key" => "dashboard:todo:board-notes",
+                 "metadata" => %{
+                   "project" => "Board prep",
+                   "why_it_matters" => "This feeds Monday's meeting prep."
+                 }
+               }
+             ])
+
+    [first, second] = Todos.list_for_user(@user_email, limit: 2, statuses: ["open"])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert has_element?(view, "#todo-review")
+    assert html =~ "Open work review"
+    assert html =~ "One commitment at a time"
+    assert html =~ "Choose the next move for each open commitment."
+    refute html =~ "Today's work"
+    refute html =~ "Today's cards"
+    refute html =~ "Focus queue"
+    refute html =~ "Review queue"
+    assert html =~ "1 of 2"
+    assert html =~ "Michael Berlingo"
+    assert html =~ "Starteryou"
+    assert html =~ "UGC campaign contact"
+    assert html =~ "Suggested next step"
+    assert html =~ "Why it matters"
+    assert html =~ "Draft the reply for approval."
+    assert html =~ "Can you confirm whether the UGC campaign materials are ready?"
+    assert html =~ "Next: Write the top three updates and owner for each."
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{first.id}']",
+             "Done"
+           )
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_keep_todo'][phx-value-id='#{first.id}']",
+             "Keep for later"
+           )
+
+    refute has_element?(
+             view,
+             "#todo-review button[phx-click='review_mark_important'][phx-value-id='#{first.id}']"
+           )
+
+    refute html =~ "Why important"
+    refute html =~ ">Important<"
+
+    view
+    |> element("#todo-review button[phx-click='review_next_todo']")
+    |> render_click()
+
+    assert render(view) =~ "Prepare Monday board notes"
+
+    calendar_card =
+      view
+      |> element("#todo-review-card-#{second.id}")
+      |> render()
+
+    assert calendar_card =~ "Calendar"
+    refute calendar_card =~ "Google Calendar"
+
+    view
+    |> element("#todo-review button[phx-click='review_previous_todo']")
+    |> render_click()
+
+    view
+    |> element(
+      "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{first.id}']"
+    )
+    |> render_click()
+
+    refute has_element?(view, "#todo-review-card-#{first.id}")
+    assert Todos.get_for_user(@user_email, first.id).status == "done"
+
+    view
+    |> element(
+      "#todo-review button[phx-click='review_dismiss_todo'][phx-value-id='#{second.id}']"
+    )
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Nothing needs your review right now."
+    assert html =~ "When a message, meeting, note, or local signal has a clear next move"
+    refute html =~ "No open work items."
+    refute html =~ "No open cards."
+    refute html =~ "No active work right now"
+    assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
+  end
+
+  test "dashboard stale todo review offers keep or dismiss only", %{conn: conn} do
+    five_days_ago =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Confirm Dan Bourke artifact status",
+                 "summary" => "Dan may no longer need the old artifact status follow-up.",
+                 "next_action" => "Ask whether this still matters before spending time on it.",
+                 "priority" => 40,
+                 "source_occurred_at" => five_days_ago,
+                 "dedupe_key" => "dashboard:todo:stale-keep-dismiss",
+                 "metadata" => %{
+                   "source_evidence" => "Dan asked for artifact status and ETA.",
+                   "record" => %{"person" => "Dan Bourke", "company" => "A-Team"}
+                 }
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Should this older follow-up"
+
+    assert html =~
+             "This choice helps Maraithon keep older work visible only when it still matters."
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_mark_important'][phx-value-id='#{todo.id}']",
+             "Keep active"
+           )
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_dismiss_todo'][phx-value-id='#{todo.id}']",
+             "Dismiss"
+           )
+
+    refute has_element?(
+             view,
+             "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{todo.id}']"
+           )
+
+    refute has_element?(
+             view,
+             "#todo-review button[phx-click='review_keep_todo'][phx-value-id='#{todo.id}']"
+           )
+  end
+
+  test "dashboard review avoids generated-work fallback copy", %{conn: conn} do
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "title" => "Review generated operating note",
+                 "summary" => "Maraithon created this work item from its own operating context.",
+                 "next_action" =>
+                   "Review the note, decide whether it belongs in open work, then keep or dismiss it.",
+                 "priority" => 72,
+                 "dedupe_key" => "dashboard:todo:generated-source"
+               }
+             ])
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Review generated operating note"
+
+    assert html =~
+             "No deadline or waiting signal is clear, so review it once and either keep it active or dismiss it."
+
+    refute html =~ "This is still open and needs a clear next decision."
+    refute html =~ "This is an open Maraithon item."
+    refute html =~ "account unknown"
+    refute html =~ "&gt;system&lt;"
+    refute html =~ "N/A"
+  end
+
+  test "dashboard todo review hides internal todo metadata fallbacks", %{conn: conn} do
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to investor financing update",
+                 "summary" => "The investor asked whether the financing update is ready.",
+                 "next_action" => "Reply with the current status and next review window.",
+                 "priority" => 91,
+                 "dedupe_key" => "dashboard:todo:internal-metadata",
+                 "metadata" => %{
+                   "person" => "Avery Investor",
+                   "source_quote" => "Can you confirm whether the financing update is ready?",
+                   "why_now" => "99% confidence from the model score says this should interrupt.",
+                   "why_it_matters" => "Internal reasoning says this is important.",
+                   "urgency_reason" => "Model score threshold passed.",
+                   "rationale" => "LLM_REASONING_SHOULD_NOT_RENDER",
+                   "source_evidence" => "thread-private-123 token secret",
+                   "source_excerpt" =>
+                     "The model is 91% confident because of thread-private-123.",
+                   "confidence" => 0.99
+                 }
+               }
+             ])
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Avery Investor"
+    assert html =~ "Can you confirm whether the financing update is ready?"
+    refute html =~ "99%"
+    refute html =~ "91%"
+    refute html =~ "confidence"
+    refute html =~ "model score"
+    refute html =~ "Model score"
+    refute html =~ "Internal reasoning"
+    refute html =~ "LLM_REASONING_SHOULD_NOT_RENDER"
+    refute html =~ "thread-private-123"
+    refute html =~ "token secret"
+  end
+
+  test "dashboard todo review uses executive-facing source health copy", %{conn: conn} do
+    {:ok, _gmail} =
+      ConnectedAccounts.upsert_manual(@user_email, "gmail", %{
+        external_account_id: "kent@runner.now"
+      })
+
+    assert {:ok, _gmail} =
+             SourceFreshness.mark_error(
+               @user_email,
+               "gmail",
+               "DBConnection.ConnectionError token=secret stacktrace",
+               at: DateTime.utc_now()
+             )
+
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to finance on the receipt thread",
+                 "summary" => "Finance needs a corrected receipt before reimbursement can move.",
+                 "next_action" => "Send the corrected receipt and ask finance to confirm timing.",
+                 "priority" => 91,
+                 "dedupe_key" => "dashboard:todo:source-health-copy"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Gmail context is incomplete"
+    assert html =~ "before sending this."
+    refute html =~ "Source gap"
+    refute html =~ "DBConnection"
+    refute html =~ "token=secret"
+    refute html =~ "stacktrace"
+  end
+
+  test "dashboard todo action errors hide internal reasons", %{conn: conn} do
+    assert {:ok, [complete_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Complete stale dashboard todo",
+                 "summary" => "This card will be stale before completion.",
+                 "next_action" => "Mark it done.",
+                 "priority" => 91,
+                 "dedupe_key" => "dashboard:stale-complete"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    Maraithon.Repo.delete!(complete_todo)
+
+    html =
+      view
+      |> element(
+        "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{complete_todo.id}']"
+      )
+      |> render_click()
+
+    refute has_element?(view, "#todo-review-card-#{complete_todo.id}")
+    assert html =~ "Nothing needs your review right now."
+    refute html =~ "No open work items."
+    refute html =~ "No active work right now"
+    refute html =~ ":not_found"
+    refute html =~ "not_found"
+
+    stale_at =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    assert {:ok, [important_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Keep-active dashboard work item",
+                 "summary" => "This card will be removed before it can be kept active.",
+                 "next_action" => "Keep it active.",
+                 "priority" => 40,
+                 "source_occurred_at" => stale_at,
+                 "dedupe_key" => "dashboard:stale-important"
+               }
+             ])
+
+    {:ok, important_view, _html} = live(conn, "/dashboard")
+    Maraithon.Repo.delete!(important_todo)
+
+    html =
+      important_view
+      |> element(
+        "#todo-review button[phx-click='review_mark_important'][phx-value-id='#{important_todo.id}']"
+      )
+      |> render_click()
+
+    refute has_element?(important_view, "#todo-review-card-#{important_todo.id}")
+    assert html =~ "Nothing needs your review right now."
+    refute html =~ "No open work items."
+    refute html =~ "No active work right now"
+    refute html =~ ":not_found"
+    refute html =~ "not_found"
+  end
+
+  test "redirects legacy selected-agent dashboard URLs to the agents workspace", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "prompt_agent",
+        config: %{"name" => "legacy-link"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} =
+             live(conn, "/dashboard?id=#{agent.id}")
+
+    assert redirect_id == agent.id
+  end
+
+  defp create_agent(attrs) do
+    attrs = Map.put_new(attrs, :user_id, @user_email)
+    Agents.create_agent(attrs)
+  end
+
+  defp refute_html_contains(html, needle) do
+    if html =~ needle do
+      flunk(
+        "expected rendered dashboard HTML not to include #{inspect(needle)}:\n" <>
+          html_snippet(html, needle)
+      )
+    end
+  end
+
+  defp html_snippet(html, needle) do
+    case :binary.match(html, needle) do
+      {index, _length} ->
+        start = max(index - 300, 0)
+        String.slice(html, start, 700)
+
+      :nomatch ->
+        ""
+    end
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:maraithon, key)
+  defp restore_env(key, value), do: Application.put_env(:maraithon, key, value)
+end

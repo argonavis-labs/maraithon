@@ -1,0 +1,232 @@
+defmodule MaraithonWeb.MobileJSONTest do
+  use Maraithon.DataCase, async: true
+
+  alias Maraithon.Todos.Todo
+  alias MaraithonWeb.MobileJSON
+
+  test "mobile payload timestamps always include an explicit UTC timezone" do
+    now = ~N[2026-06-17 09:30:00]
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-timestamps@example.com",
+      source: "gmail",
+      title: "Send investor update",
+      summary: "Send investor update",
+      next_action: "Send investor update.",
+      priority: 55,
+      status: "open",
+      due_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    response = MobileJSON.todo(todo)
+
+    assert response.due_at == "2026-06-17T09:30:00Z"
+    assert response.inserted_at == "2026-06-17T09:30:00Z"
+    assert response.updated_at == "2026-06-17T09:30:00Z"
+  end
+
+  test "fresh action card buttons use completion and feedback actions" do
+    now = DateTime.utc_now()
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-fresh-buttons@example.com",
+      source: "gmail",
+      title: "Reply to Alex about launch timing",
+      summary: "Alex is waiting on the launch sequencing decision.",
+      next_action: "Reply to Alex with the launch sequence and timing.",
+      action_draft: %{
+        "kind" => "gmail_reply",
+        "body" => "Thanks Alex. I can send the launch sequence today."
+      },
+      priority: 92,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Alex asked for the launch sequence and timing.",
+        "record" => %{"person" => "Alex Morgan", "company" => "Runway"}
+      },
+      inserted_at: now,
+      updated_at: now
+    }
+
+    response = MobileJSON.todo(todo, include_card: true, source_health_snapshots: [])
+    buttons = get_in(response, [:action_card, :available_buttons])
+
+    assert get_in(response, [:action_card, :draft_preview]) ==
+             "Thanks Alex. I can send the launch sequence today."
+
+    assert %{action: "done", label: "Done"} in buttons
+    assert %{action: "snooze", label: "Snooze"} in buttons
+    assert %{action: "dismiss", label: "Dismiss"} in buttons
+    assert %{action: "helpful", label: "Helpful"} in buttons
+    assert %{action: "not_helpful", label: "Less useful"} in buttons
+    refute Enum.any?(buttons, &(&1.action in ["important", "keep_active"]))
+    refute Enum.any?(buttons, &(&1.label == "Keep active"))
+  end
+
+  test "stale action card buttons expose one keep-active decision" do
+    five_days_ago =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-stale-buttons@example.com",
+      source: "gmail",
+      title: "Confirm Dan Bourke artifact status",
+      summary: "Dan Bourke may no longer need the old artifact status follow-up.",
+      next_action: "Ask whether this still matters before spending more time on it.",
+      priority: 40,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Dan asked for artifact status and ETA.",
+        "record" => %{"person" => "Dan Bourke", "company" => "A-Team"}
+      },
+      source_occurred_at: five_days_ago,
+      inserted_at: five_days_ago,
+      updated_at: five_days_ago
+    }
+
+    response = MobileJSON.todo(todo, include_card: true, source_health_snapshots: [])
+    buttons = get_in(response, [:action_card, :available_buttons])
+
+    assert get_in(response, [:action_card, :attention_mode]) == "stale_check"
+    assert %{action: "important", label: "Keep active"} in buttons
+    assert %{action: "dismiss", label: "Dismiss"} in buttons
+    assert Enum.count(buttons, &(&1.label == "Keep active")) == 1
+    refute Enum.any?(buttons, &(&1.action == "keep_active"))
+    refute Enum.any?(buttons, &(&1.action == "done"))
+  end
+
+  test "action card source context hides raw source health failures" do
+    now = DateTime.utc_now()
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-source-context@example.com",
+      source: "gmail",
+      title: "Reply to Oak Street School about pickup",
+      summary: "Oak Street School asked whether Tuesday pickup should move to 4 PM.",
+      next_action: "Confirm the Tuesday pickup plan with the school.",
+      priority: 92,
+      status: "open",
+      metadata: %{
+        "life_domain" => "family",
+        "source_evidence" => "The school asked whether Tuesday pickup should move to 4 PM.",
+        "person" => "Oak Street School",
+        "project" => "Tuesday pickup"
+      },
+      inserted_at: now,
+      updated_at: now
+    }
+
+    response =
+      MobileJSON.todo(todo,
+        include_card: true,
+        source_health_snapshots: [
+          %{
+            "provider" => "gmail",
+            "status" => "error",
+            "stale_reason" => "DBConnection.ConnectionError token=secret stacktrace"
+          }
+        ]
+      )
+
+    source_context = get_in(response, [:action_card, :source_context])
+    context_items = get_in(response, [:action_card, :context_items])
+
+    assert source_context =~ "Mac companion context was not available"
+    assert source_context =~ "Gmail context is incomplete; review the source before sending this."
+    assert source_context =~ "Open the Mac companion to refresh it."
+    assert %{label: "Person", value: "Oak Street School"} in context_items
+    assert %{label: "Project", value: "Tuesday pickup"} in context_items
+    refute source_context =~ "DBConnection"
+    refute source_context =~ "token=secret"
+    refute source_context =~ "stacktrace"
+    refute source_context =~ "desktop: not connected"
+
+    encoded = inspect(response)
+    refute encoded =~ "source_health"
+    refute encoded =~ "DBConnection"
+    refute encoded =~ "token=secret"
+  end
+
+  test "personal logistics action cards disclose missing Mac companion context by default" do
+    now = DateTime.utc_now()
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-mac-context-gap@example.com",
+      source: "gmail",
+      title: "Confirm Tuesday pickup with school",
+      summary: "Oak Street School asked whether Tuesday pickup should move to 4 PM.",
+      next_action: "Confirm the Tuesday pickup plan with the school.",
+      priority: 92,
+      status: "open",
+      metadata: %{
+        "life_domain" => "family",
+        "source_evidence" => "The school asked whether Tuesday pickup should move to 4 PM.",
+        "record" => %{
+          "person" => "Oak Street School",
+          "relationship_context" => "school logistics"
+        }
+      },
+      inserted_at: now,
+      updated_at: now
+    }
+
+    response =
+      MobileJSON.todo(todo,
+        include_card: true,
+        source_health_snapshots: [%{"provider" => "gmail", "status" => "fresh"}]
+      )
+
+    source_context = get_in(response, [:action_card, :source_context])
+
+    assert source_context =~ "Used Gmail."
+    assert source_context =~ "Mac companion context was not available"
+    assert source_context =~ "Open the Mac companion to refresh it."
+
+    encoded = inspect(response)
+    refute encoded =~ "desktop: not connected"
+    refute encoded =~ "source_health"
+  end
+
+  test "business inbox action cards do not promote the Mac companion by default" do
+    now = DateTime.utc_now()
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-business-source-context@example.com",
+      source: "gmail",
+      title: "Reply to Michael Berlingo on Starteryou UGC Campaigns",
+      summary: "Michael Berlingo is waiting on Starteryou UGC campaign next steps.",
+      next_action:
+        "Reply with the recommended campaign next step and ask which asset he wants first.",
+      priority: 88,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Michael asked for Starteryou UGC campaign next steps and timing.",
+        "record" => %{
+          "person" => "Michael Berlingo",
+          "company" => "Starteryou",
+          "relationship_context" => "UGC campaign contact"
+        }
+      },
+      inserted_at: now,
+      updated_at: now
+    }
+
+    response =
+      MobileJSON.todo(todo,
+        include_card: true,
+        source_health_snapshots: [%{"provider" => "gmail", "status" => "fresh"}]
+      )
+
+    assert get_in(response, [:action_card, :source_context]) == "Used Gmail."
+  end
+end

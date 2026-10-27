@@ -1,0 +1,109 @@
+defmodule MaraithonWeb.SessionController do
+  use MaraithonWeb, :controller
+
+  alias Maraithon.Accounts
+  alias Maraithon.Accounts.MagicLinkSender
+
+  @session_key "user_session_token"
+
+  def create_magic_link(conn, params) do
+    email = extract_email(params)
+    request_opts = request_metadata(conn)
+
+    case Accounts.request_magic_link(email, request_opts) do
+      {:ok, %{user: user, token: token}} ->
+        link = url(~p"/auth/magic/#{token}")
+
+        case MagicLinkSender.deliver(user.email, link) do
+          :ok ->
+            conn
+            |> put_flash(:info, "Check your email for a sign-in link.")
+            |> put_status(:see_other)
+            |> redirect(to: "/login")
+
+          {:error, reason} ->
+            conn
+            |> put_flash(:error, delivery_error_message(reason))
+            |> put_status(:see_other)
+            |> redirect(to: "/login")
+        end
+
+      {:error, :invalid_email} ->
+        conn
+        |> put_flash(:error, "Please enter a valid email address.")
+        |> put_status(:see_other)
+        |> redirect(to: "/login")
+
+      {:error, _reason} ->
+        conn
+        |> put_flash(:error, "Unable to send sign-in link right now.")
+        |> put_status(:see_other)
+        |> redirect(to: "/login")
+    end
+  end
+
+  def consume_magic_link(conn, %{"token" => token}) do
+    case Accounts.consume_magic_link(token, request_metadata(conn)) do
+      {:ok, %{user: user, token: session_token}} ->
+        return_to = get_session(conn, :return_to)
+
+        conn
+        |> configure_session(renew: true)
+        |> put_session(@session_key, session_token)
+        |> delete_session(:return_to)
+        |> put_flash(:info, "Signed in as #{user.email}")
+        |> redirect(to: return_to || post_sign_in_path(user.id))
+
+      {:error, :invalid_or_expired_link} ->
+        conn
+        |> put_flash(:error, "Sign-in link is invalid or expired.")
+        |> redirect(to: "/login")
+
+      {:error, _reason} ->
+        conn
+        |> put_flash(:error, "Unable to sign in right now.")
+        |> redirect(to: "/login")
+    end
+  end
+
+  def delete(conn, _params) do
+    token = get_session(conn, @session_key)
+    _ = maybe_revoke_session(token)
+
+    conn
+    |> configure_session(drop: true)
+    |> put_flash(:info, "Signed out.")
+    |> put_status(:see_other)
+    |> redirect(to: "/")
+  end
+
+  defp delivery_error_message(:email_suppressed) do
+    "That email address cannot receive sign-in links. Use another address or contact support."
+  end
+
+  defp delivery_error_message(_reason), do: "Unable to send sign-in link right now."
+
+  defp extract_email(%{"magic_link" => %{"email" => email}}), do: email
+  defp extract_email(%{"email" => email}), do: email
+  defp extract_email(_params), do: ""
+
+  defp maybe_revoke_session(token) when is_binary(token) and token != "" do
+    Accounts.revoke_session(token)
+  end
+
+  defp maybe_revoke_session(_token), do: :ok
+
+  defp request_metadata(conn) do
+    [
+      ip: ip_to_string(conn.remote_ip),
+      user_agent: List.first(get_req_header(conn, "user-agent"))
+    ]
+  end
+
+  defp ip_to_string(nil), do: nil
+  defp ip_to_string(ip), do: to_string(:inet.ntoa(ip))
+
+  defp post_sign_in_path(user_id) do
+    if is_binary(user_id), do: "/dashboard", else: "/"
+  end
+end

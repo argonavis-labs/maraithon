@@ -1,0 +1,54 @@
+{
+  "name": "Maraithon",
+  "short_name": "Maraithon",
+  "description": "A focused todo list with supporting context and clear guidance for the next step.",
+  "id": "/todos",
+  "start_url": "/todos",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
+  "orientation": "portrait",
+  "background_color": "#f4f4f5",
+  "theme_color": "#18181b",
+  "categories": [
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/images/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/images/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/images/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Todos",
+      "short_name": "Todos",
+      "url": "/todos",
+      "description": "Open your todo list."
+    },
+    {
+      "name": "Apps",
+      "short_name": "Apps",
+      "url": "/connectors",
+      "description": "Manage connected apps and sources."
+    }
+  ]
+}

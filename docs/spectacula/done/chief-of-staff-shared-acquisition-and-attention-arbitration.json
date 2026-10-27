@@ -1,0 +1,74 @@
+{
+  "spec_id": "chief-of-staff-shared-acquisition-and-attention-arbitration",
+  "slug": "chief-of-staff-shared-acquisition-and-attention-arbitration",
+  "title": "Chief of Staff Shared Acquisition and Attention Arbitration",
+  "stage": "done",
+  "spec_path": "../specs/chief-of-staff-shared-acquisition-and-attention-arbitration.md",
+  "created_at": "2026-04-02T09:52:05Z",
+  "approved_at": "2026-04-02T09:52:05Z",
+  "started_at": "2026-04-02T10:10:00Z",
+  "completed_at": "2026-04-02T10:47:45Z",
+  "updated_at": "2026-04-02T10:47:45Z",
+  "summary": "Completed the shared Chief of Staff acquisition slice with a normalized source-bundle contract, assistant-owned acquisition coordinator, and assistant-level attention arbiter wired through the `AI Chief of Staff` root.",
+  "next_action": "Build on the new source-bundle spine for richer reactive intake and follow-on source classes when new skills need them.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "The shared bundle and attention-arbiter slice passed targeted Chief of Staff and travel tests, and the repository later passed `mix precommit` on the completed stack."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the source-bundle coordinator, attention arbiter, and trigger-scoped `AI Chief of Staff` wiring.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "4. Proposed Design",
+      "5. Backend Changes",
+      "7. Test Plan and Validation Matrix",
+      "8. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/chief-of-staff-shared-acquisition-and-attention-arbitration.md",
+      "lib/maraithon/chief_of_staff/source_bundle.ex",
+      "lib/maraithon/chief_of_staff/acquisition.ex",
+      "lib/maraithon/chief_of_staff/attention_arbiter.ex",
+      "lib/maraithon/behaviors/ai_chief_of_staff.ex",
+      "lib/maraithon/behaviors/inbox_calendar_advisor.ex",
+      "lib/maraithon/behaviors/slack_followthrough_agent.ex",
+      "lib/maraithon/behaviors/chief_of_staff_brief_agent.ex",
+      "lib/maraithon/behaviors/personal_assistant_agent.ex",
+      "lib/maraithon/travel.ex"
+    ],
+    "notes": "The assistant root now acquires once, reasons many times, and stamps shared arbitration metadata across the Chief of Staff skill pack."
+  },
+  "history": [
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "ready",
+      "note": "Created and immediately approved the follow-on spec for shared Chief of Staff acquisition and assistant-level attention arbitration."
+    },
+    {
+      "at": "2026-04-02T10:10:00Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "Started implementation of the assistant-owned source bundle, acquisition coordinator, and arbitration layer."
+    },
+    {
+      "at": "2026-04-02T10:47:45Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Marked the shared Chief of Staff acquisition slice done after the code, tests, and runtime wiring matched the canonical spec."
+    }
+  ]
+}

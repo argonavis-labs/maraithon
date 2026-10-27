@@ -1,0 +1,1717 @@
+defmodule Maraithon.AgentBuilder do
+  @moduledoc """
+  Shared launch defaults, guidance, and validation for automation builder surfaces.
+  """
+
+  alias Maraithon.Agents.Agent
+  alias Maraithon.ChiefOfStaff.SourceScope
+  alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
+  alias Maraithon.OAuth
+  alias Maraithon.OAuth.Google
+  alias Maraithon.Timezones
+
+  @default_prompt "You are a helpful assistant that reviews relevant events and responds thoughtfully."
+  @default_tools "read_file,search_files"
+
+  @launch_defaults %{
+    "behavior" => "prompt_agent",
+    "builder_mode" => "simple",
+    "cost_profile" => "balanced",
+    "project_id" => "",
+    "name" => "",
+    "prompt" => @default_prompt,
+    "subscriptions" => "",
+    "tools" => @default_tools,
+    "memory_limit" => "50",
+    "budget_llm_calls" => "500",
+    "budget_tool_calls" => "1000",
+    "config_json" => "",
+    "codebase_path" => "",
+    "output_path" => "",
+    "file_patterns" => "",
+    "ignore_patterns" => "",
+    "wakeup_interval_ms" => "",
+    "check_url" => "",
+    "repo_full_name" => "",
+    "base_branch" => "main",
+    "feature_limit" => "3",
+    "email_scan_limit" => "",
+    "event_scan_limit" => "",
+    "prep_window_hours" => "",
+    "max_insights_per_cycle" => "",
+    "min_confidence" => "",
+    "team_id" => "",
+    "channel_scan_limit" => "",
+    "dm_scan_limit" => "",
+    "lookback_hours" => "",
+    "timezone" => "",
+    "timezone_offset_hours" => "",
+    "morning_brief_hour_local" => "",
+    "end_of_day_brief_hour_local" => "",
+    "weekly_review_day_local" => "",
+    "weekly_review_hour_local" => "",
+    "brief_max_items" => "",
+    "write_plan_files" => "true"
+  }
+
+  @behavior_specs [
+    %{
+      id: "ai_chief_of_staff",
+      label: "Chief of Staff",
+      category: "Workflow",
+      summary:
+        "One assistant that combines follow-through, commitment tracking, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
+      inputs: [
+        "Gmail, Calendar, and Slack activity relevant to commitments, unanswered replies, and travel logistics",
+        "Phone push delivery for proactive nudges, travel briefs, and recurring summaries",
+        "Shared preferences that shape notification policy across all built-in skills"
+      ],
+      outputs: [
+        "Unified follow-through insights across inbox, meetings, and Slack",
+        "Daily deduped commitment work items from sent mail, inbox asks, calendar context, People, and memory",
+        "Travel logistics briefs and updates for upcoming trips",
+        "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
+      ],
+      fields:
+        ~w(team_id timezone wakeup_interval_ms morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
+      simple_fields: ~w(team_id timezone wakeup_interval_ms cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "team_id" => "",
+        "timezone_offset_hours" => "-5",
+        "wakeup_interval_ms" => "600000",
+        "morning_brief_hour_local" => "7",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "12"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "gmail",
+          label: "Gmail",
+          description: "Needed for follow-through loops and travel logistics.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "calendar",
+          label: "Google Calendar",
+          description:
+            "Needed for meeting context, follow-through timing, and trip corroboration.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "channels",
+          label: "Slack channels and threads",
+          description:
+            "Needed to find channel commitments and their thread replies that may need a follow-up.",
+          required?: false
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "dms",
+          label: "Slack Personal DMs",
+          description: "Needed to detect private unanswered replies and direct follow-ups.",
+          required?: false
+        }
+      ],
+      suggestions: [
+        "Use this when you want one assistant persona instead of separate travel and follow-through automations.",
+        "Keep the timezone aligned to your working day so briefs and travel logistics land when you can still react.",
+        "Start on the balanced profile. It gives follow-through enough coverage and keeps travel logistics active without flooding you."
+      ]
+    },
+    %{
+      id: "prompt_agent",
+      label: "Custom Automation",
+      category: "Flexible",
+      summary:
+        "General-purpose automation that reviews selected topics, reasons over connected context, and uses only the actions you allow.",
+      inputs: [
+        "Direct messages from the dashboard",
+        "Events published to the topics you subscribe to",
+        "Results from the approved action list below"
+      ],
+      outputs: [
+        "Assistant responses",
+        "Actions using the approved action list",
+        "Recent context limited to the amount you choose"
+      ],
+      fields: ~w(prompt subscriptions tools memory_limit),
+      simple_fields: ~w(prompt subscriptions tools cost_profile),
+      defaults: %{},
+      requirements: [],
+      suggestions: [
+        "Start with a narrow prompt and only 2-3 context areas so the automation does not drown in noise.",
+        "Keep the action list short. Every extra action expands what the automation can affect.",
+        "Use the recent context limit to control how much history the automation can revisit."
+      ]
+    },
+    %{
+      id: "github_product_planner",
+      label: "Project Manager",
+      category: "Product",
+      summary:
+        "Reviews one project, recommends the next 2-3 tickets from goals, repository activity, and open tasks, then saves them for review.",
+      inputs: [
+        "Project context, goals, open tasks, saved project notes, and attached repository activity",
+        "GitHub repository metadata, README, root structure, recent commits, open issues, and open pull requests",
+        "The base branch you want reviewed, usually `main`",
+        "A scheduled weekly review, explicit requests, and GitHub repo events"
+      ],
+      outputs: [
+        "Saved recommendations with titles, summaries, first milestones, and evidence",
+        "New project tasks and ticket notes ready for review",
+        "Phone push notifications for roadmap moves that deserve same-day attention",
+        "A recurring product review grounded in the current goals, task list, and selected repository"
+      ],
+      fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
+      simple_fields: ~w(repo_full_name base_branch feature_limit cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "repo_full_name" => "",
+        "base_branch" => "main",
+        "feature_limit" => "3",
+        "wakeup_interval_ms" => "604800000"
+      },
+      requirements: [
+        %{
+          kind: :provider,
+          provider: "github",
+          label: "GitHub",
+          description:
+            "Recommended for private repositories and higher GitHub API limits. Public repos can run without it.",
+          required?: false
+        }
+      ],
+      suggestions: [
+        "Point this at one product repository, not a monorepo grab bag, so the recommendations stay coherent.",
+        "Keep `feature_limit` at 2 or 3. A PM pass should force prioritization instead of becoming a backlog dump.",
+        "Use the default weekly cadence first, then rely on explicit invocations or repo events when the project needs another pass."
+      ]
+    },
+    %{
+      id: "personal_assistant_agent",
+      label: "Personal Assistant",
+      category: "Workflow",
+      summary:
+        "Reviews Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a phone prep brief the day before the trip.",
+      inputs: [
+        "Travel confirmation emails from Gmail",
+        "Calendar events that corroborate destination and timing",
+        "Recurring checks for upcoming trips and email changes"
+      ],
+      outputs: [
+        "Persisted travel itineraries with normalized flight and hotel items",
+        "Phone day-before travel briefs",
+        "Phone follow-up updates when the itinerary materially changes"
+      ],
+      fields:
+        ~w(email_scan_limit event_scan_limit lookback_hours min_confidence timezone_offset_hours wakeup_interval_ms),
+      simple_fields: ~w(timezone_offset_hours cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "email_scan_limit" => "25",
+        "event_scan_limit" => "25",
+        "lookback_hours" => "720",
+        "min_confidence" => "0.8",
+        "timezone_offset_hours" => "-5",
+        "wakeup_interval_ms" => "1800000"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "gmail",
+          label: "Gmail",
+          description: "Required to find flight and hotel confirmations.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "calendar",
+          label: "Google Calendar",
+          description: "Required to corroborate trip timing and destination context.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Keep the timezone aligned to your working day so day-before travel briefs land when you still have time to react.",
+        "Use the balanced profile first. It keeps enough coverage for travel confirmations without flooding you.",
+        "Use selective notifications if you only want confirmed travel briefs and material change alerts."
+      ]
+    },
+    %{
+      id: "inbox_calendar_advisor",
+      label: "Chief of Staff",
+      category: "Workflow",
+      summary:
+        "Runs the focused Chief of Staff stack for Gmail, Calendar, and Slack follow-through, then sends recurring chief-of-staff briefs from the same automation.",
+      inputs: [
+        "Gmail threads where you promised something, agreed on deadlines, or owe a reply",
+        "Calendar meetings likely to create follow-up work, especially customer, investor, hiring, and planning meetings",
+        "Slack channel, thread, and DM messages where commitments were made and may still be unresolved",
+        "Recent sent email and Slack follow-up evidence used to verify whether follow-through already happened"
+      ],
+      outputs: [
+        "Phone notifications for unresolved commitments",
+        "Post-meeting and post-thread reminders when owners and next steps are still missing",
+        "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action",
+        "Morning brief, end-of-day review, and weekly review summaries sent to your phone"
+      ],
+      fields:
+        ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
+      simple_fields: ~w(team_id timezone_offset_hours cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "wakeup_interval_ms" => "900000",
+        "email_scan_limit" => "14",
+        "event_scan_limit" => "12",
+        "prep_window_hours" => "36",
+        "team_id" => "",
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.72",
+        "timezone" => "",
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "7",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "12"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "gmail",
+          label: "Gmail",
+          description: "Needed to inspect recent inbox activity.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "calendar",
+          label: "Google Calendar",
+          description: "Needed to inspect important meetings and infer missing follow-ups.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "channels",
+          label: "Slack Channels",
+          description: "Needed to find explicit promises and follow-ups in channel context.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "dms",
+          label: "Slack Personal DMs",
+          description:
+            "Needed to detect private unanswered replies and unresolved commitments in direct messages.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Use this when you want one Chief of Staff assistant for follow-through and recurring briefs without the travel skill pack.",
+        "Use focused review depth so the automation surfaces only the clearest unresolved commitments.",
+        "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
+        "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
+        "Use selective notifications if you only want phone alerts for the clearest action-ready items.",
+        "Choose a named timezone when possible so morning and end-of-day briefs keep landing at the right local time through daylight-saving changes."
+      ]
+    },
+    %{
+      id: "slack_followthrough_agent",
+      label: "Slack Follow-through",
+      category: "Workflow",
+      summary:
+        "Finds Slack commitments and unanswered replies, then surfaces the ones that are clear and still actionable.",
+      inputs: [
+        "Slack channel and thread messages where commitments or deadlines were explicitly stated",
+        "Personal DM and group DM messages that indicate you owe a reply or promised a follow-up",
+        "Recent follow-up evidence in the same channel/thread to verify whether the loop is already closed"
+      ],
+      outputs: [
+        "Action-ready unresolved commitment summaries with urgency, evidence, and a next action",
+        "Structured records with commitment, person, source, deadline, status, evidence, and next_action",
+        "Phone notifications for Slack commitments that need same-day attention"
+      ],
+      fields:
+        ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
+      simple_fields: ~w(team_id cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "team_id" => "",
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.75",
+        "wakeup_interval_ms" => "900000"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "channels",
+          label: "Slack Channels",
+          description: "Needed to inspect channel context and detect stated commitments.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "dms",
+          label: "Slack Personal DMs",
+          description: "Needed to review direct messages and private follow-ups.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Use focused Slack review depth so only the clearest unresolved commitments are surfaced.",
+        "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per automation.",
+        "Use selective notifications if you only want phone alerts for explicit Slack commitments."
+      ]
+    },
+    %{
+      id: "codebase_advisor",
+      label: "Delivery Automation",
+      category: "Engineering",
+      summary:
+        "Walks a repository file by file and writes concrete review recommendations to a markdown report.",
+      inputs: [
+        "Files discovered under the selected codebase path",
+        "Include and ignore patterns that define which files are reviewed",
+        "A review cadence that controls how quickly batches run"
+      ],
+      outputs: [
+        "A `RECOMMENDATIONS.md` report that accumulates review findings",
+        "Progress notes as each file review completes",
+        "Structured code health, reliability, and testing feedback"
+      ],
+      fields: ~w(codebase_path output_path file_patterns ignore_patterns wakeup_interval_ms),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "codebase_path" => "",
+        "output_path" => "",
+        "file_patterns" => "**/*.ex,**/*.exs,**/*.js,**/*.ts,**/*.py,**/*.go",
+        "ignore_patterns" => "deps/**,_build/**,node_modules/**,.git/**,*.min.js,vendor/**",
+        "wakeup_interval_ms" => "3600000"
+      },
+      requirements: [
+        %{
+          kind: :directory,
+          field: "codebase_path",
+          label: "Codebase path",
+          description: "Maraithon must be able to read this directory.",
+          required?: true
+        },
+        %{
+          kind: :parent_directory,
+          field: "output_path",
+          label: "Recommendations output path",
+          description: "The parent directory must exist so Maraithon can write the report.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Start on one repository root and tighten the ignore patterns before widening the review surface.",
+        "Use a slower check interval for large repositories so reviews do not pile up too quickly.",
+        "Point the output path into a tracked workspace if you want to review the markdown report in git."
+      ]
+    },
+    %{
+      id: "repo_planner",
+      label: "Repo Planner",
+      category: "Planning",
+      summary:
+        "Indexes repository entry points, then turns requested work into implementation plans and optional plan files.",
+      inputs: [
+        "Repository entry points and source files under the chosen codebase path",
+        "Direct planning requests sent to the running automation",
+        "File patterns, ignore patterns, and plan-writing preferences"
+      ],
+      outputs: [
+        "Implementation plans grounded in the indexed codebase",
+        "Optional markdown plan files under the output path",
+        "Indexing and planning progress notes"
+      ],
+      fields:
+        ~w(codebase_path output_path file_patterns ignore_patterns wakeup_interval_ms write_plan_files),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "codebase_path" => "",
+        "output_path" => "",
+        "file_patterns" => "**/*.ex,**/*.exs,**/*.js,**/*.ts,**/*.py,**/*.go,**/*.rs",
+        "ignore_patterns" =>
+          "deps/**,_build/**,node_modules/**,.git/**,*.min.js,vendor/**,dist/**,build/**",
+        "wakeup_interval_ms" => "30000",
+        "write_plan_files" => "true"
+      },
+      requirements: [
+        %{
+          kind: :directory,
+          field: "codebase_path",
+          label: "Codebase path",
+          description: "Maraithon must be able to index this directory.",
+          required?: true
+        },
+        %{
+          kind: :parent_directory,
+          field: "output_path",
+          label: "Plan output path",
+          description: "The parent directory must exist when plan files are enabled.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Let the planner finish indexing before sending the first planning request.",
+        "Keep plan-writing enabled if you want saved plan files that can be reviewed outside the UI.",
+        "Short check intervals feel responsive, but they also cause the planner to re-check for work more often."
+      ]
+    },
+    %{
+      id: "watchdog_summarizer",
+      label: "Health Monitor",
+      category: "Monitoring",
+      summary:
+        "Writes concise monitoring updates and can optionally check one endpoint on a fixed cadence.",
+      inputs: [
+        "Scheduled checks on the chosen interval",
+        "Optional HTTP checks against a single URL",
+        "Current activity and timing context"
+      ],
+      outputs: [
+        "Short monitoring updates",
+        "Optional endpoint check notes",
+        "A low-touch monitoring loop with lightweight launch details"
+      ],
+      fields: ~w(check_url wakeup_interval_ms),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "check_url" => "",
+        "wakeup_interval_ms" => "1800000"
+      },
+      requirements: [],
+      suggestions: [
+        "Leave the URL blank if you only want monitoring updates.",
+        "A 30-minute check interval is a good default for passive monitoring.",
+        "Use this template when you want lightweight status notes, not deep analysis."
+      ]
+    }
+  ]
+
+  @behavior_spec_aliases %{
+    "founder_followthrough_agent" => "inbox_calendar_advisor"
+  }
+
+  @cost_profiles %{
+    "ai_chief_of_staff" => %{
+      # R1 (SPEC 04): 10-15 min supervised wakeup, not hourly. Lean is
+      # explicitly allowed to stretch to 15 min per GOALS.md; thorough runs
+      # at the 5-minute floor.
+      "lean" => %{
+        "wakeup_interval_ms" => "900000",
+        "follow_email_scan_limit" => "8",
+        "follow_event_scan_limit" => "6",
+        "follow_prep_window_hours" => "24",
+        "follow_channel_scan_limit" => "40",
+        "follow_dm_scan_limit" => "20",
+        "follow_lookback_hours" => "24",
+        "follow_max_insights_per_cycle" => "3",
+        "follow_min_confidence" => "0.8",
+        "travel_email_scan_limit" => "12",
+        "travel_event_scan_limit" => "10",
+        "travel_lookback_hours" => "336",
+        "travel_min_confidence" => "0.86",
+        "travel_wakeup_interval_ms" => "3600000",
+        "budget_llm_calls" => "180",
+        "budget_tool_calls" => "320"
+      },
+      "balanced" => %{
+        "wakeup_interval_ms" => "600000",
+        "follow_email_scan_limit" => "14",
+        "follow_event_scan_limit" => "12",
+        "follow_prep_window_hours" => "36",
+        "follow_channel_scan_limit" => "80",
+        "follow_dm_scan_limit" => "50",
+        "follow_lookback_hours" => "48",
+        "follow_max_insights_per_cycle" => "5",
+        "follow_min_confidence" => "0.72",
+        "travel_email_scan_limit" => "25",
+        "travel_event_scan_limit" => "25",
+        "travel_lookback_hours" => "720",
+        "travel_min_confidence" => "0.8",
+        "travel_wakeup_interval_ms" => "3600000",
+        "budget_llm_calls" => "300",
+        "budget_tool_calls" => "520"
+      },
+      "thorough" => %{
+        "wakeup_interval_ms" => "300000",
+        "follow_email_scan_limit" => "24",
+        "follow_event_scan_limit" => "18",
+        "follow_prep_window_hours" => "48",
+        "follow_channel_scan_limit" => "120",
+        "follow_dm_scan_limit" => "80",
+        "follow_lookback_hours" => "72",
+        "follow_max_insights_per_cycle" => "7",
+        "follow_min_confidence" => "0.66",
+        "travel_email_scan_limit" => "40",
+        "travel_event_scan_limit" => "40",
+        "travel_lookback_hours" => "1080",
+        "travel_min_confidence" => "0.74",
+        "travel_wakeup_interval_ms" => "3600000",
+        "budget_llm_calls" => "520",
+        "budget_tool_calls" => "850"
+      }
+    },
+    "prompt_agent" => %{
+      "lean" => %{
+        "memory_limit" => "20",
+        "budget_llm_calls" => "80",
+        "budget_tool_calls" => "120"
+      },
+      "balanced" => %{
+        "memory_limit" => "50",
+        "budget_llm_calls" => "200",
+        "budget_tool_calls" => "300"
+      },
+      "thorough" => %{
+        "memory_limit" => "90",
+        "budget_llm_calls" => "400",
+        "budget_tool_calls" => "600"
+      }
+    },
+    "github_product_planner" => %{
+      "lean" => %{
+        "feature_limit" => "2",
+        "wakeup_interval_ms" => "1209600000",
+        "budget_llm_calls" => "30",
+        "budget_tool_calls" => "10"
+      },
+      "balanced" => %{
+        "feature_limit" => "3",
+        "wakeup_interval_ms" => "604800000",
+        "budget_llm_calls" => "60",
+        "budget_tool_calls" => "20"
+      },
+      "thorough" => %{
+        "feature_limit" => "3",
+        "wakeup_interval_ms" => "259200000",
+        "budget_llm_calls" => "120",
+        "budget_tool_calls" => "40"
+      }
+    },
+    "personal_assistant_agent" => %{
+      "lean" => %{
+        "email_scan_limit" => "12",
+        "event_scan_limit" => "10",
+        "lookback_hours" => "336",
+        "min_confidence" => "0.86",
+        "wakeup_interval_ms" => "3600000",
+        "budget_llm_calls" => "60",
+        "budget_tool_calls" => "120"
+      },
+      "balanced" => %{
+        "email_scan_limit" => "25",
+        "event_scan_limit" => "25",
+        "lookback_hours" => "720",
+        "min_confidence" => "0.8",
+        "wakeup_interval_ms" => "1800000",
+        "budget_llm_calls" => "120",
+        "budget_tool_calls" => "220"
+      },
+      "thorough" => %{
+        "email_scan_limit" => "40",
+        "event_scan_limit" => "40",
+        "lookback_hours" => "1080",
+        "min_confidence" => "0.74",
+        "wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "240",
+        "budget_tool_calls" => "420"
+      }
+    },
+    "inbox_calendar_advisor" => %{
+      "lean" => %{
+        "email_scan_limit" => "8",
+        "event_scan_limit" => "6",
+        "prep_window_hours" => "24",
+        "channel_scan_limit" => "40",
+        "dm_scan_limit" => "20",
+        "lookback_hours" => "24",
+        "max_insights_per_cycle" => "3",
+        "min_confidence" => "0.8",
+        "budget_llm_calls" => "120",
+        "budget_tool_calls" => "220"
+      },
+      "balanced" => %{
+        "email_scan_limit" => "14",
+        "event_scan_limit" => "12",
+        "prep_window_hours" => "36",
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.72",
+        "budget_llm_calls" => "240",
+        "budget_tool_calls" => "420"
+      },
+      "thorough" => %{
+        "email_scan_limit" => "24",
+        "event_scan_limit" => "18",
+        "prep_window_hours" => "48",
+        "channel_scan_limit" => "120",
+        "dm_scan_limit" => "80",
+        "lookback_hours" => "72",
+        "max_insights_per_cycle" => "7",
+        "min_confidence" => "0.66",
+        "budget_llm_calls" => "420",
+        "budget_tool_calls" => "750"
+      }
+    },
+    "slack_followthrough_agent" => %{
+      # R1 (SPEC 04): sub-agent cadence is 15 min, not hourly.
+      "lean" => %{
+        "channel_scan_limit" => "40",
+        "dm_scan_limit" => "20",
+        "lookback_hours" => "24",
+        "max_insights_per_cycle" => "3",
+        "min_confidence" => "0.82",
+        "wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "90",
+        "budget_tool_calls" => "180"
+      },
+      "balanced" => %{
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.75",
+        "wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "180",
+        "budget_tool_calls" => "320"
+      },
+      "thorough" => %{
+        "channel_scan_limit" => "120",
+        "dm_scan_limit" => "80",
+        "lookback_hours" => "72",
+        "max_insights_per_cycle" => "7",
+        "min_confidence" => "0.68",
+        "wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "320",
+        "budget_tool_calls" => "550"
+      }
+    }
+  }
+
+  @behavior_spec_by_id Map.new(@behavior_specs, &{&1.id, &1})
+
+  # Behavior ids that have been superseded or pulled from the public
+  # library. They are still recognised by the runtime so existing
+  # Existing automations keep working, they just don't show up as new templates.
+  # The library currently surfaces three flagship automations: the Chief of
+  # Staff, the Project Manager, and the Delivery Automation.
+  @hidden_library_ids ~w(
+    inbox_calendar_advisor
+    prompt_agent
+    personal_assistant_agent
+    slack_followthrough_agent
+    repo_planner
+    watchdog_summarizer
+  )
+
+  def behavior_specs, do: @behavior_specs
+
+  @doc """
+  Specs to surface in the in-app library and automation builder. Hides
+  any behavior whose id is in `@hidden_library_ids`.
+  """
+  def library_specs do
+    Enum.reject(@behavior_specs, &(&1.id in @hidden_library_ids))
+  end
+
+  def behavior_spec(id) when is_binary(id) do
+    id
+    |> resolve_behavior_id()
+    |> then(&Map.get(@behavior_spec_by_id, &1, hd(@behavior_specs)))
+  end
+
+  def cost_profile_options do
+    [
+      %{
+        id: "lean",
+        label: "Lean",
+        description: "Quiet mode. Fewer checks and fewer notifications."
+      },
+      %{
+        id: "balanced",
+        label: "Balanced",
+        description: "Default. Good coverage without turning into a firehose."
+      },
+      %{
+        id: "thorough",
+        label: "Thorough",
+        description: "Broader review for fast-moving work and more proactive coverage."
+      }
+    ]
+  end
+
+  def visible_fields_for_mode(%{} = spec, "advanced"), do: spec.fields
+
+  def visible_fields_for_mode(%{} = spec, _mode) do
+    case Map.get(spec, :simple_fields) do
+      fields when is_list(fields) and fields != [] -> fields
+      _ -> spec.fields
+    end
+  end
+
+  def hidden_fields_for_mode(%{} = spec, mode) do
+    visible = MapSet.new(visible_fields_for_mode(spec, mode))
+    Enum.reject(spec.fields, &MapSet.member?(visible, &1))
+  end
+
+  def default_launch_params, do: launch_params_for_behavior("prompt_agent")
+
+  def launch_params_for_behavior(id) when is_binary(id) do
+    id
+    |> base_launch_params_for_behavior()
+    |> apply_cost_profile()
+  end
+
+  def normalize_launch_params(params) when is_map(params) do
+    behavior =
+      case Map.get(params, "behavior", @launch_defaults["behavior"]) do
+        value when is_binary(value) and value != "" -> value
+        _ -> @launch_defaults["behavior"]
+      end
+
+    defaults = launch_params_for_behavior(behavior)
+
+    normalized =
+      Enum.reduce(defaults, %{}, fn {key, default}, acc ->
+        value =
+          case Map.get(params, key, default) do
+            nil -> default
+            value -> to_string(value)
+          end
+
+        Map.put(acc, key, String.trim(value))
+      end)
+
+    apply_cost_profile(normalized)
+  end
+
+  def normalize_launch_params(_params), do: default_launch_params()
+
+  defp base_launch_params_for_behavior(id) do
+    spec = behavior_spec(id)
+
+    @launch_defaults
+    |> Map.merge(spec.defaults)
+    |> Map.put("behavior", id)
+  end
+
+  defp apply_cost_profile(%{"builder_mode" => "advanced"} = launch), do: launch
+
+  defp apply_cost_profile(%{"behavior" => behavior} = launch) do
+    resolved_behavior = resolve_behavior_id(behavior)
+    profile = normalize_cost_profile(Map.get(launch, "cost_profile"))
+    overrides = get_in(@cost_profiles, [resolved_behavior, profile]) || %{}
+
+    Map.merge(launch, overrides)
+    |> Map.put("cost_profile", profile)
+  end
+
+  defp apply_cost_profile(launch), do: launch
+
+  defp normalize_cost_profile(profile) when profile in ["lean", "balanced", "thorough"],
+    do: profile
+
+  defp normalize_cost_profile(_profile), do: "balanced"
+
+  def launch_params_from_agent(%Agent{} = agent) do
+    config = agent.config || %{}
+    budget = config["budget"] || %{}
+    behavior = agent.behavior
+
+    launch_params_for_behavior(behavior)
+    |> Map.merge(%{
+      "behavior" => behavior,
+      "builder_mode" => "advanced",
+      "project_id" => agent.project_id || "",
+      "name" => config["name"] || "",
+      "prompt" => config["prompt"] || "",
+      "subscriptions" => Enum.join(config["subscribe"] || [], ","),
+      "tools" => Enum.join(config["tools"] || [], ","),
+      "memory_limit" => stringify(config["memory_limit"]),
+      "budget_llm_calls" => stringify(budget["llm_calls"] || 500),
+      "budget_tool_calls" => stringify(budget["tool_calls"] || 1000),
+      "config_json" => extra_config_json(config, behavior),
+      "codebase_path" =>
+        config["codebase_path"] || launch_params_for_behavior(behavior)["codebase_path"],
+      "output_path" =>
+        config["output_path"] || launch_params_for_behavior(behavior)["output_path"],
+      "file_patterns" => Enum.join(config["file_patterns"] || [], ","),
+      "ignore_patterns" => Enum.join(config["ignore_patterns"] || [], ","),
+      "wakeup_interval_ms" => stringify(config["wakeup_interval_ms"]),
+      "check_url" => config["check_url"] || "",
+      "repo_full_name" => config["repo_full_name"] || "",
+      "base_branch" =>
+        config["base_branch"] || launch_params_for_behavior(behavior)["base_branch"],
+      "feature_limit" =>
+        stringify(
+          config["feature_limit"] || launch_params_for_behavior(behavior)["feature_limit"]
+        ),
+      "email_scan_limit" => stringify(config["email_scan_limit"]),
+      "event_scan_limit" => stringify(config["event_scan_limit"]),
+      "prep_window_hours" => stringify(config["prep_window_hours"]),
+      "max_insights_per_cycle" => stringify(config["max_insights_per_cycle"]),
+      "min_confidence" => stringify(config["min_confidence"]),
+      "team_id" => config["team_id"] || "",
+      "channel_scan_limit" => stringify(config["channel_scan_limit"]),
+      "dm_scan_limit" => stringify(config["dm_scan_limit"]),
+      "lookback_hours" => stringify(config["lookback_hours"]),
+      "timezone" =>
+        Timezones.selected_value(
+          config["timezone"] || config["timezone_name"],
+          config["timezone_offset_hours"]
+        ),
+      "timezone_offset_hours" => stringify(config["timezone_offset_hours"]),
+      "morning_brief_hour_local" => stringify(config["morning_brief_hour_local"]),
+      "end_of_day_brief_hour_local" => stringify(config["end_of_day_brief_hour_local"]),
+      "weekly_review_day_local" => stringify(config["weekly_review_day_local"]),
+      "weekly_review_hour_local" => stringify(config["weekly_review_hour_local"]),
+      "brief_max_items" => stringify(config["brief_max_items"]),
+      "write_plan_files" => stringify(Map.get(config, "write_plan_files", true))
+    })
+  end
+
+  def build_start_params(launch, user_id) when is_binary(user_id) do
+    launch = normalize_launch_params(launch)
+    behavior = launch["behavior"]
+    resolved_behavior = resolve_behavior_id(behavior)
+
+    cond do
+      behavior == "" ->
+        {:error, "Choose a template before creating the automation."}
+
+      is_nil(Map.get(@behavior_spec_by_id, resolved_behavior)) ->
+        {:error, "Unknown behavior: #{behavior}"}
+
+      true ->
+        with {:ok, llm_calls} <-
+               parse_positive_integer(launch["budget_llm_calls"], "Review limit"),
+             {:ok, tool_calls} <-
+               parse_positive_integer(launch["budget_tool_calls"], "Action limit"),
+             {:ok, extra_config} <- parse_optional_config_json(launch["config_json"]),
+             {:ok, config} <- build_behavior_config(resolved_behavior, launch, user_id) do
+          {:ok,
+           %{
+             "user_id" => user_id,
+             "project_id" => empty_to_nil(launch["project_id"]),
+             "behavior" => behavior,
+             "config" => Map.merge(config, extra_config),
+             "budget" => %{"llm_calls" => llm_calls, "tool_calls" => tool_calls}
+           }}
+        end
+    end
+  end
+
+  def build_start_params(_launch, _user_id), do: {:error, "User is required"}
+
+  defp build_behavior_config("prompt_agent", launch, _user_id) do
+    with {:ok, prompt} <- require_present(launch["prompt"], "Instructions"),
+         {:ok, memory_limit} <-
+           parse_positive_integer(launch["memory_limit"], "Recent context window") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "prompt" => prompt,
+         "subscribe" => parse_csv(launch["subscriptions"]),
+         "tools" => parse_csv(launch["tools"]),
+         "memory_limit" => memory_limit
+       }}
+    end
+  end
+
+  defp build_behavior_config("codebase_advisor", launch, _user_id) do
+    with {:ok, codebase_path} <- validate_directory(launch["codebase_path"], "Codebase path"),
+         {:ok, output_path} <-
+           validate_output_parent(launch["output_path"], "Recommendations output path"),
+         {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "codebase_path" => codebase_path,
+         "output_path" => output_path,
+         "file_patterns" => parse_csv(launch["file_patterns"]),
+         "ignore_patterns" => parse_csv(launch["ignore_patterns"]),
+         "wakeup_interval_ms" => wakeup_interval_ms
+       }}
+    end
+  end
+
+  defp build_behavior_config("repo_planner", launch, _user_id) do
+    with {:ok, codebase_path} <- validate_directory(launch["codebase_path"], "Codebase path"),
+         {:ok, output_path} <- validate_output_parent(launch["output_path"], "Plan output path"),
+         {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence"),
+         {:ok, write_plan_files} <-
+           parse_boolean(launch["write_plan_files"], "Write plan files") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "codebase_path" => codebase_path,
+         "output_path" => output_path,
+         "file_patterns" => parse_csv(launch["file_patterns"]),
+         "ignore_patterns" => parse_csv(launch["ignore_patterns"]),
+         "wakeup_interval_ms" => wakeup_interval_ms,
+         "write_plan_files" => write_plan_files
+       }}
+    end
+  end
+
+  defp build_behavior_config("watchdog_summarizer", launch, _user_id) do
+    with {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "check_url" => empty_to_nil(launch["check_url"]),
+         "wakeup_interval_ms" => wakeup_interval_ms
+       }}
+      |> drop_nil_values()
+    end
+  end
+
+  defp build_behavior_config("github_product_planner", launch, user_id) do
+    with {:ok, repo_full_name} <- validate_repo_full_name(launch["repo_full_name"]),
+         {:ok, feature_limit} <-
+           parse_integer_in_range(launch["feature_limit"], "Feature limit", 2, 3),
+         {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "repo_full_name" => repo_full_name,
+         "base_branch" => normalize_branch(launch["base_branch"]),
+         "feature_limit" => feature_limit,
+         "wakeup_interval_ms" => wakeup_interval_ms,
+         "subscribe" => ["github:#{repo_full_name}"]
+       }}
+    end
+  end
+
+  defp build_behavior_config("ai_chief_of_staff", launch, user_id) do
+    enabled_skills = Maraithon.Behaviors.AIChiefOfStaff.default_skill_ids()
+
+    with {:ok, timezone_config} <- parse_timezone_config(launch),
+         {:ok, morning_brief_hour_local} <-
+           parse_integer_in_range(launch["morning_brief_hour_local"], "Morning brief hour", 0, 23),
+         {:ok, end_of_day_brief_hour_local} <-
+           parse_integer_in_range(
+             launch["end_of_day_brief_hour_local"],
+             "End-of-day brief hour",
+             0,
+             23
+           ),
+         {:ok, weekly_review_day_local} <-
+           parse_integer_in_range(launch["weekly_review_day_local"], "Weekly review day", 1, 7),
+         {:ok, weekly_review_hour_local} <-
+           parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
+         {:ok, brief_max_items} <-
+           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 30),
+         {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Chief of Staff cadence"),
+         {:ok, follow_email_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_email_scan_limit"],
+             "Chief of Staff follow-through email review limit"
+           ),
+         {:ok, follow_event_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_event_scan_limit"],
+             "Chief of Staff follow-through calendar review limit"
+           ),
+         {:ok, follow_prep_window_hours} <-
+           parse_positive_integer(
+             launch["follow_prep_window_hours"],
+             "Chief of Staff followthrough prep window"
+           ),
+         {:ok, follow_channel_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_channel_scan_limit"],
+             "Chief of Staff Slack channel review limit"
+           ),
+         {:ok, follow_dm_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_dm_scan_limit"],
+             "Chief of Staff Slack DM review limit"
+           ),
+         {:ok, follow_lookback_hours} <-
+           parse_positive_integer(
+             launch["follow_lookback_hours"],
+             "Chief of Staff followthrough lookback"
+           ),
+         {:ok, follow_max_insights_per_cycle} <-
+           parse_positive_integer(
+             launch["follow_max_insights_per_cycle"],
+             "Chief of Staff max insights per cycle"
+           ),
+         {:ok, follow_min_confidence} <-
+           parse_float_in_range(
+             launch["follow_min_confidence"],
+             "Chief of Staff follow-through notification selectivity",
+             0.0,
+             1.0
+           ),
+         {:ok, travel_email_scan_limit} <-
+           parse_positive_integer(
+             launch["travel_email_scan_limit"],
+             "Chief of Staff travel email review limit"
+           ),
+         {:ok, travel_event_scan_limit} <-
+           parse_positive_integer(
+             launch["travel_event_scan_limit"],
+             "Chief of Staff travel calendar review limit"
+           ),
+         {:ok, travel_lookback_hours} <-
+           parse_positive_integer(
+             launch["travel_lookback_hours"],
+             "Chief of Staff travel lookback"
+           ),
+         {:ok, travel_min_confidence} <-
+           parse_float_in_range(
+             launch["travel_min_confidence"],
+             "Chief of Staff travel notification selectivity",
+             0.0,
+             1.0
+           ),
+         {:ok, travel_wakeup_interval_ms} <-
+           parse_duration_ms(
+             launch["travel_wakeup_interval_ms"],
+             "Chief of Staff travel cadence"
+           ) do
+      team_id = empty_to_nil(launch["team_id"])
+      source_scope = SourceScope.resolve(user_id)
+      compact_timezone_config = compact_timezone_config(timezone_config)
+
+      skill_configs = %{
+        "followthrough" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "email_scan_limit" => follow_email_scan_limit,
+              "event_scan_limit" => follow_event_scan_limit,
+              "prep_window_hours" => follow_prep_window_hours,
+              "channel_scan_limit" => follow_channel_scan_limit,
+              "dm_scan_limit" => follow_dm_scan_limit,
+              "lookback_hours" => follow_lookback_hours,
+              "max_insights_per_cycle" => follow_max_insights_per_cycle,
+              "min_confidence" => follow_min_confidence
+            },
+            compact_timezone_config
+          ),
+        "travel_logistics" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "email_scan_limit" => travel_email_scan_limit,
+              "event_scan_limit" => travel_event_scan_limit,
+              "lookback_hours" => travel_lookback_hours,
+              "min_confidence" => travel_min_confidence,
+              "wakeup_interval_ms" => travel_wakeup_interval_ms
+            },
+            compact_timezone_config
+          ),
+        "morning_briefing" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "assistant_behavior" => "ai_chief_of_staff",
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "morning_brief_hour_local" => morning_brief_hour_local,
+              "email_scan_limit" => follow_email_scan_limit,
+              "slack_channel_scan_limit" => follow_channel_scan_limit,
+              "slack_message_scan_limit" => follow_dm_scan_limit,
+              "lookback_hours" => 18
+            },
+            compact_timezone_config
+          ),
+        "commitment_tracker" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "assistant_behavior" => "ai_chief_of_staff",
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "commitment_review_hour_local" => 7,
+              "email_scan_limit" => follow_email_scan_limit,
+              "event_scan_limit" => follow_event_scan_limit,
+              "slack_message_scan_limit" => follow_dm_scan_limit,
+              "local_message_scan_limit" => follow_dm_scan_limit,
+              "lookback_hours" => 24 * 14,
+              "calendar_forward_days" => 14
+            },
+            compact_timezone_config
+          ),
+        "briefing" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "assistant_behavior" => "ai_chief_of_staff",
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "morning_brief_hour_local" => morning_brief_hour_local,
+              "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+              "weekly_review_day_local" => weekly_review_day_local,
+              "weekly_review_hour_local" => weekly_review_hour_local,
+              "brief_max_items" => brief_max_items
+            },
+            compact_timezone_config
+          )
+      }
+
+      {:ok,
+       Map.merge(
+         %{
+           "name" => launch_name(launch),
+           "user_id" => user_id,
+           "enabled_skills" => enabled_skills,
+           "source_policy" => "all_connected",
+           "include_future_sources" => true,
+           "source_scope" => source_scope,
+           "team_id" => team_id,
+           "wakeup_interval_ms" => wakeup_interval_ms,
+           "morning_brief_hour_local" => morning_brief_hour_local,
+           "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+           "weekly_review_day_local" => weekly_review_day_local,
+           "weekly_review_hour_local" => weekly_review_hour_local,
+           "brief_max_items" => brief_max_items,
+           "skill_configs" => skill_configs,
+           "subscribe" =>
+             Enum.uniq(
+               SourceScope.subscriptions(source_scope, user_id) ++
+                 ChiefOfStaffSkills.subscriptions(skill_configs, user_id, enabled_skills)
+             )
+         },
+         compact_timezone_config
+       )}
+      |> drop_nil_values()
+    end
+  end
+
+  defp build_behavior_config("personal_assistant_agent", launch, user_id) do
+    with :ok <- validate_personal_assistant_prereqs(user_id),
+         {:ok, email_scan_limit} <-
+           parse_positive_integer(launch["email_scan_limit"], "Email review limit"),
+         {:ok, event_scan_limit} <-
+           parse_positive_integer(launch["event_scan_limit"], "Calendar review limit"),
+         {:ok, lookback_hours} <-
+           parse_positive_integer(launch["lookback_hours"], "Lookback window"),
+         {:ok, min_confidence} <-
+           parse_float_in_range(launch["min_confidence"], "Notification selectivity", 0.0, 1.0),
+         {:ok, timezone_offset_hours} <-
+           parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
+         {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "email_scan_limit" => email_scan_limit,
+         "event_scan_limit" => event_scan_limit,
+         "lookback_hours" => lookback_hours,
+         "min_confidence" => min_confidence,
+         "timezone_offset_hours" => timezone_offset_hours,
+         "wakeup_interval_ms" => wakeup_interval_ms,
+         "subscribe" => ["email:#{user_id}", "calendar:#{user_id}"]
+       }}
+    end
+  end
+
+  defp build_behavior_config("inbox_calendar_advisor", launch, user_id) do
+    with {:ok, email_scan_limit} <-
+           parse_positive_integer(launch["email_scan_limit"], "Email review limit"),
+         {:ok, event_scan_limit} <-
+           parse_positive_integer(launch["event_scan_limit"], "Calendar review limit"),
+         {:ok, prep_window_hours} <-
+           parse_positive_integer(launch["prep_window_hours"], "Prep window hours"),
+         {:ok, channel_scan_limit} <-
+           parse_positive_integer(launch["channel_scan_limit"], "Channel review limit"),
+         {:ok, dm_scan_limit} <-
+           parse_positive_integer(launch["dm_scan_limit"], "DM review limit"),
+         {:ok, lookback_hours} <-
+           parse_positive_integer(launch["lookback_hours"], "Lookback window"),
+         {:ok, max_insights_per_cycle} <-
+           parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
+         {:ok, min_confidence} <-
+           parse_float_in_range(launch["min_confidence"], "Notification selectivity", 0.0, 1.0),
+         {:ok, timezone_offset_hours} <-
+           parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
+         {:ok, morning_brief_hour_local} <-
+           parse_integer_in_range(launch["morning_brief_hour_local"], "Morning brief hour", 0, 23),
+         {:ok, end_of_day_brief_hour_local} <-
+           parse_integer_in_range(
+             launch["end_of_day_brief_hour_local"],
+             "End-of-day brief hour",
+             0,
+             23
+           ),
+         {:ok, weekly_review_day_local} <-
+           parse_integer_in_range(launch["weekly_review_day_local"], "Weekly review day", 1, 7),
+         {:ok, weekly_review_hour_local} <-
+           parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
+         {:ok, brief_max_items} <-
+           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 30) do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "email_scan_limit" => email_scan_limit,
+         "event_scan_limit" => event_scan_limit,
+         "prep_window_hours" => prep_window_hours,
+         "team_id" => empty_to_nil(launch["team_id"]),
+         "channel_scan_limit" => channel_scan_limit,
+         "dm_scan_limit" => dm_scan_limit,
+         "lookback_hours" => lookback_hours,
+         "max_insights_per_cycle" => max_insights_per_cycle,
+         "min_confidence" => min_confidence,
+         "timezone_offset_hours" => timezone_offset_hours,
+         "morning_brief_hour_local" => morning_brief_hour_local,
+         "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+         "weekly_review_day_local" => weekly_review_day_local,
+         "weekly_review_hour_local" => weekly_review_hour_local,
+         "brief_max_items" => brief_max_items
+       }}
+      |> drop_nil_values()
+    end
+  end
+
+  defp build_behavior_config("slack_followthrough_agent", launch, user_id) do
+    with {:ok, channel_scan_limit} <-
+           parse_positive_integer(launch["channel_scan_limit"], "Channel review limit"),
+         {:ok, dm_scan_limit} <-
+           parse_positive_integer(launch["dm_scan_limit"], "DM review limit"),
+         {:ok, lookback_hours} <-
+           parse_positive_integer(launch["lookback_hours"], "Lookback window"),
+         {:ok, max_insights_per_cycle} <-
+           parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
+         {:ok, min_confidence} <-
+           parse_float_in_range(launch["min_confidence"], "Notification selectivity", 0.0, 1.0),
+         {:ok, wakeup_interval_ms} <-
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "team_id" => empty_to_nil(launch["team_id"]),
+         "channel_scan_limit" => channel_scan_limit,
+         "dm_scan_limit" => dm_scan_limit,
+         "lookback_hours" => lookback_hours,
+         "max_insights_per_cycle" => max_insights_per_cycle,
+         "min_confidence" => min_confidence,
+         "wakeup_interval_ms" => wakeup_interval_ms
+       }}
+      |> drop_nil_values()
+    end
+  end
+
+  defp build_behavior_config("founder_followthrough_agent", launch, user_id) do
+    build_behavior_config("inbox_calendar_advisor", launch, user_id)
+  end
+
+  defp build_behavior_config(behavior, launch, _user_id) do
+    {:ok, %{"name" => launch_name(launch), "prompt" => launch["prompt"], "behavior" => behavior}}
+  end
+
+  defp launch_name(%{"name" => "" = _blank, "behavior" => behavior}) do
+    "#{behavior}-#{System.unique_integer([:positive])}"
+  end
+
+  defp launch_name(%{"name" => name}) when is_binary(name), do: name
+
+  defp require_present("", field_name), do: {:error, "#{field_name} is required"}
+  defp require_present(value, _field_name), do: {:ok, value}
+
+  defp parse_positive_integer(value, field_name) do
+    case Integer.parse(value || "") do
+      {parsed, ""} when parsed > 0 -> {:ok, parsed}
+      _ -> {:error, "#{field_name} must be a positive integer"}
+    end
+  end
+
+  defp parse_duration_ms(value, field_name) do
+    value = value |> to_string() |> String.trim() |> String.downcase()
+
+    cond do
+      value == "" ->
+        {:error, "#{field_name} must be a positive duration such as 30m, 1h, or 1d"}
+
+      match =
+          Regex.run(
+            ~r/^(\d+)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$/,
+            value
+          ) ->
+        [_full, amount, unit] = match
+        {:ok, String.to_integer(amount) * duration_multiplier(unit)}
+
+      true ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 ->
+            {:ok, parsed}
+
+          _ ->
+            {:error, "#{field_name} must be a positive duration such as 30m, 1h, or 1d"}
+        end
+    end
+  end
+
+  defp duration_multiplier(unit) when unit in ["ms"], do: 1
+  defp duration_multiplier(unit) when unit in ["s", "sec", "secs", "second", "seconds"], do: 1_000
+
+  defp duration_multiplier(unit) when unit in ["m", "min", "mins", "minute", "minutes"],
+    do: 60_000
+
+  defp duration_multiplier(unit) when unit in ["h", "hr", "hrs", "hour", "hours"], do: 3_600_000
+  defp duration_multiplier(unit) when unit in ["d", "day", "days"], do: 86_400_000
+  defp duration_multiplier(unit) when unit in ["w", "week", "weeks"], do: 604_800_000
+
+  defp parse_float_in_range(value, field_name, min, max) do
+    case Float.parse(value || "") do
+      {parsed, ""} when parsed >= min and parsed <= max -> {:ok, parsed}
+      _ -> {:error, "#{field_name} must be between #{min} and #{max}"}
+    end
+  end
+
+  defp parse_integer_in_range(value, field_name, min, max) do
+    case Integer.parse(value || "") do
+      {parsed, ""} when parsed >= min and parsed <= max -> {:ok, parsed}
+      _ -> {:error, "#{field_name} must be between #{min} and #{max}"}
+    end
+  end
+
+  defp parse_timezone_config(launch) when is_map(launch) do
+    timezone = launch |> Map.get("timezone", "") |> to_string() |> String.trim()
+
+    cond do
+      timezone != "" ->
+        case Timezones.config_updates(timezone) do
+          %{"timezone_offset_hours" => _offset} = updates ->
+            {:ok, updates}
+
+          _ ->
+            {:error, "Timezone must be one of the listed options"}
+        end
+
+      true ->
+        with {:ok, offset} <-
+               parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14) do
+          {:ok,
+           %{
+             "timezone" => nil,
+             "timezone_name" => nil,
+             "timezone_offset_hours" => offset
+           }}
+        end
+    end
+  end
+
+  defp compact_timezone_config(config) when is_map(config) do
+    config
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp parse_boolean(value, _field_name) when value in ["true", "TRUE", "1"], do: {:ok, true}
+  defp parse_boolean(value, _field_name) when value in ["false", "FALSE", "0"], do: {:ok, false}
+  defp parse_boolean(_value, field_name), do: {:error, "#{field_name} must be true or false"}
+
+  defp parse_optional_config_json(""), do: {:ok, %{}}
+
+  defp parse_optional_config_json(json) do
+    case Jason.decode(json) do
+      {:ok, parsed} when is_map(parsed) ->
+        {:ok, parsed}
+
+      {:ok, _} ->
+        {:error, "Additional config JSON must decode to an object"}
+
+      {:error, _} ->
+        {:error, "Additional config JSON is invalid"}
+    end
+  end
+
+  defp validate_directory(value, field_name) do
+    path = value |> to_string() |> String.trim()
+
+    cond do
+      path == "" ->
+        {:error, "#{field_name} is required"}
+
+      File.dir?(path) ->
+        {:ok, path}
+
+      true ->
+        {:error, "#{field_name} must point to an existing directory"}
+    end
+  end
+
+  defp validate_output_parent(value, field_name) do
+    path = value |> to_string() |> String.trim()
+
+    cond do
+      path == "" ->
+        {:error, "#{field_name} is required"}
+
+      File.dir?(Path.dirname(path)) ->
+        {:ok, path}
+
+      true ->
+        {:error, "#{field_name} parent directory must exist"}
+    end
+  end
+
+  defp validate_repo_full_name(value) do
+    repo_full_name =
+      value
+      |> to_string()
+      |> String.trim()
+
+    case String.split(repo_full_name, "/", parts: 2) do
+      [owner, repo] when owner != "" and repo != "" -> {:ok, repo_full_name}
+      _ -> {:error, "Repository must be in `owner/repo` format"}
+    end
+  end
+
+  defp normalize_branch(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> "main"
+      branch -> branch
+    end
+  end
+
+  defp normalize_branch(_value), do: "main"
+
+  defp parse_csv(""), do: []
+
+  defp parse_csv(values) when is_binary(values) do
+    values
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp parse_csv(_values), do: []
+
+  defp extra_config_json(config, behavior) do
+    extra =
+      config
+      |> Map.drop(known_config_keys(behavior) ++ ["budget", "_last_message"])
+
+    if extra == %{} do
+      ""
+    else
+      Jason.encode!(extra, pretty: true)
+    end
+  end
+
+  defp known_config_keys("prompt_agent"),
+    do: ["name", "prompt", "subscribe", "tools", "memory_limit"]
+
+  defp known_config_keys("codebase_advisor"),
+    do: [
+      "name",
+      "codebase_path",
+      "output_path",
+      "file_patterns",
+      "ignore_patterns",
+      "wakeup_interval_ms"
+    ]
+
+  defp known_config_keys("repo_planner"),
+    do: [
+      "name",
+      "codebase_path",
+      "output_path",
+      "file_patterns",
+      "ignore_patterns",
+      "wakeup_interval_ms",
+      "write_plan_files"
+    ]
+
+  defp known_config_keys("watchdog_summarizer"),
+    do: ["name", "check_url", "wakeup_interval_ms"]
+
+  defp known_config_keys("github_product_planner"),
+    do: [
+      "name",
+      "user_id",
+      "repo_full_name",
+      "base_branch",
+      "feature_limit",
+      "wakeup_interval_ms",
+      "subscribe",
+      "goals_path"
+    ]
+
+  defp known_config_keys("personal_assistant_agent"),
+    do: [
+      "name",
+      "user_id",
+      "email_scan_limit",
+      "event_scan_limit",
+      "lookback_hours",
+      "min_confidence",
+      "timezone_offset_hours",
+      "wakeup_interval_ms",
+      "subscribe"
+    ]
+
+  defp known_config_keys("ai_chief_of_staff"),
+    do: [
+      "name",
+      "user_id",
+      "enabled_skills",
+      "source_policy",
+      "include_future_sources",
+      "source_scope",
+      "team_id",
+      "wakeup_interval_ms",
+      "timezone",
+      "timezone_name",
+      "timezone_offset_hours",
+      "morning_brief_hour_local",
+      "end_of_day_brief_hour_local",
+      "weekly_review_day_local",
+      "weekly_review_hour_local",
+      "brief_max_items",
+      "skill_configs",
+      "subscribe"
+    ]
+
+  defp known_config_keys("inbox_calendar_advisor"),
+    do: [
+      "name",
+      "user_id",
+      "email_scan_limit",
+      "event_scan_limit",
+      "prep_window_hours",
+      "team_id",
+      "channel_scan_limit",
+      "dm_scan_limit",
+      "lookback_hours",
+      "max_insights_per_cycle",
+      "min_confidence",
+      "timezone_offset_hours",
+      "morning_brief_hour_local",
+      "end_of_day_brief_hour_local",
+      "weekly_review_day_local",
+      "weekly_review_hour_local",
+      "brief_max_items"
+    ]
+
+  defp known_config_keys("slack_followthrough_agent"),
+    do: [
+      "name",
+      "user_id",
+      "team_id",
+      "channel_scan_limit",
+      "dm_scan_limit",
+      "lookback_hours",
+      "max_insights_per_cycle",
+      "min_confidence",
+      "wakeup_interval_ms"
+    ]
+
+  defp known_config_keys("founder_followthrough_agent"),
+    do: known_config_keys("inbox_calendar_advisor")
+
+  defp known_config_keys(_behavior), do: ["name", "prompt"]
+
+  defp stringify(nil), do: ""
+  defp stringify(value) when is_boolean(value), do: to_string(value)
+  defp stringify(value), do: to_string(value)
+
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
+
+  defp drop_nil_values({:ok, map}) when is_map(map),
+    do: {:ok, Enum.reject(map, fn {_k, v} -> is_nil(v) end) |> Map.new()}
+
+  defp drop_nil_values(other), do: other
+
+  defp resolve_behavior_id(id) when is_binary(id) do
+    Map.get(@behavior_spec_aliases, id, id)
+  end
+
+  defp validate_personal_assistant_prereqs(user_id) when is_binary(user_id) do
+    excluded = Maraithon.AssistantIdentities.assistant_providers(user_id)
+
+    required_google_scopes =
+      Google.scopes_for(["gmail", "calendar"])
+      |> MapSet.new()
+
+    google_ready? =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.filter(fn token ->
+        google_provider?(token.provider) and token.provider not in excluded
+      end)
+      |> Enum.any?(fn token ->
+        granted = MapSet.new(token.scopes || [])
+        MapSet.subset?(required_google_scopes, granted)
+      end)
+
+    if google_ready? do
+      :ok
+    else
+      {:error,
+       "Connect one Google account with both Gmail and Calendar before launching this automation"}
+    end
+  end
+
+  defp validate_personal_assistant_prereqs(_user_id), do: {:error, "User is required"}
+
+  defp google_provider?(provider) when is_binary(provider) do
+    provider == "google" or String.starts_with?(provider, "google:")
+  end
+
+  defp google_provider?(_provider), do: false
+end

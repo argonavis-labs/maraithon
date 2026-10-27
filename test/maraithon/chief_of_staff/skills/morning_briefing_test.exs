@@ -1,0 +1,2686 @@
+defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
+  use Maraithon.DataCase, async: true
+
+  alias Maraithon.Accounts
+  alias Maraithon.Agents
+  alias Maraithon.Behaviors.SnapshotBudget
+  alias Maraithon.Briefs
+  alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
+  alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.Commitments
+  alias Maraithon.Companion
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm
+  alias Maraithon.LocalBrowserHistory
+  alias Maraithon.LocalCalendar
+  alias Maraithon.LocalFiles
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalNotes
+  alias Maraithon.LocalReminders
+  alias Maraithon.LocalVoiceMemos
+  alias Maraithon.Memory
+  alias Maraithon.Runtime.SnapshotFormat
+  alias Maraithon.SourceFreshness
+  alias Maraithon.Todos
+
+  setup do
+    user_id = "morning-briefing-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{}
+      })
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "444123"})
+
+    %{user_id: user_id, agent: agent}
+  end
+
+  test "fresh tenant commercial briefing defaults do not include org-specific terms" do
+    state = MorningBriefing.init(%{})
+
+    refute "glossier" in state.commercial_thread_terms
+    assert "enterprise" in state.commercial_thread_terms
+    assert "intro" in state.commercial_thread_terms
+  end
+
+  test "configured commercial briefing terms merge with generic defaults" do
+    state = MorningBriefing.init(%{"commercial_thread_terms" => ["glossier"]})
+
+    assert "glossier" in state.commercial_thread_terms
+    assert "enterprise" in state.commercial_thread_terms
+    assert "intro" in state.commercial_thread_terms
+  end
+
+  test "brief input uses the active daylight offset for a named timezone", %{user_id: user_id} do
+    now = ~U[2026-05-15 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -5
+      })
+
+    input =
+      MorningBriefing.build_brief_input(user_id, now, state, %{
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})
+      })
+
+    assert input["timezone"] == "ET"
+    assert input["timezone_offset_hours"] == -4
+  end
+
+  test "brief input surfaces a broken source in connector_health (R6)", %{user_id: user_id} do
+    start_supervised!(%{
+      id: :capturing_telegram_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    start_supervised!(%{
+      id: :capturing_email_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_email_recorder]]}
+    })
+
+    Application.put_env(:maraithon, :connected_accounts,
+      telegram_module: Maraithon.TestSupport.CapturingTelegram,
+      email_module: Maraithon.TestSupport.CapturingEmail
+    )
+
+    on_exit(fn -> Application.delete_env(:maraithon, :connected_accounts) end)
+
+    now = ~U[2026-05-15 14:00:00Z]
+
+    {:ok, _google} =
+      ConnectedAccounts.upsert_manual(user_id, "google:founder@example.com", %{
+        external_account_id: "founder@example.com",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             SourceFreshness.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required",
+               at: now
+             )
+
+    state = MorningBriefing.init(%{"user_id" => user_id})
+
+    input =
+      MorningBriefing.build_brief_input(user_id, now, state, %{
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})
+      })
+
+    connector_health = input["connector_health"]
+    assert is_list(connector_health)
+
+    google_entry =
+      Enum.find(connector_health, fn entry ->
+        (entry[:provider] || entry["provider"]) == "google"
+      end)
+
+    refute is_nil(google_entry)
+    assert (google_entry[:status] || google_entry["status"]) == "reauth_required"
+
+    refute Enum.any?(connector_health, fn entry ->
+             (entry[:provider] || entry["provider"]) == "telegram"
+           end)
+  end
+
+  test "builds a checked input and records an LLM synthesized brief", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    {:ok, _commitment} =
+      Commitments.upsert(user_id, %{
+        "source" => "omnifocus",
+        "source_id" => "of-runner-1",
+        "title" => "Send Sarah the deck",
+        "owed_to" => "Sarah",
+        "project" => "Runner",
+        "due_at" => "2026-05-07T20:00:00Z"
+      })
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_calendar(%{
+        "events" => [
+          %{
+            "event_id" => "evt-1",
+            "summary" => "Runner GTM",
+            "start" => ~U[2026-05-07 16:00:00Z],
+            "end" => ~U[2026-05-07 16:30:00Z],
+            "attendees" => [%{"email" => "sarah@example.com"}]
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_gmail(%{
+        "messages" => [
+          %{
+            "message_id" => "msg-1",
+            "thread_id" => "thread-1",
+            "labels" => ["INBOX", "UNREAD"],
+            "from" => "Instagram <security@mail.instagram.com>",
+            "subject" => "New login to Instagram",
+            "snippet" => "We noticed a new login.",
+            "text_body" => "Instagram reported a new login from an unknown device.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => now
+          },
+          %{
+            "message_id" => "msg-3",
+            "thread_id" => "thread-3",
+            "labels" => [],
+            "from" => "Charlie Feng <charlie@runner.now>",
+            "to" => "Morne <morne@cogniate.ai>, Kent Fenwick <kent@runner.now>",
+            "subject" => "Sample Company Enterprise plan discussion",
+            "snippet" => "Looping Kent for pricing guidance.",
+            "text_body" => "Charlie looped Kent into the Sample Company Enterprise plan discussion.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => DateTime.add(now, -3, :day)
+          },
+          %{
+            "message_id" => "msg-4",
+            "thread_id" => "thread-4",
+            "labels" => [],
+            "from" => "Vanta <vantateam@vanta.com>",
+            "to" => "Kent Fenwick <kent@runner.now>",
+            "subject" => "Vanta enterprise security discount",
+            "snippet" => "Enterprise AI security promotion.",
+            "text_body" =>
+              "A generic enterprise discount marketing email sent to a Runner address.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => now
+          }
+        ],
+        "inbox_messages" => [
+          %{
+            "message_id" => "msg-1",
+            "thread_id" => "thread-1",
+            "labels" => ["INBOX", "UNREAD"],
+            "from" => "Instagram <security@mail.instagram.com>",
+            "subject" => "New login to Instagram",
+            "snippet" => "We noticed a new login.",
+            "text_body" => "Instagram reported a new login from an unknown device.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => now
+          },
+          %{
+            "message_id" => "msg-2",
+            "thread_id" => "thread-2",
+            "labels" => ["INBOX", "UNREAD"],
+            "from" => "SKIMS <no-reply@emails.skims.com>",
+            "subject" => "Dive Into SKIMS Swim",
+            "snippet" => "Limited time offer.",
+            "text_body" =>
+              <<"Promotional retail offer in: ", 70, 114, 97, 110, 231, 97, 105, 115, ".">>,
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => now
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_slack(%{
+        "workspaces" => [
+          %{
+            "team_id" => "T123",
+            "team_name" => "Agora",
+            "key_channels" => [
+              %{
+                "id" => "C123",
+                "name" => "runner-general",
+                "messages" => [
+                  %{"ts" => "1778162400.0", "text" => "Can Kent review the launch note?"}
+                ]
+              }
+            ]
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_news(%{
+        "items" => [
+          %{
+            "source" => "Techmeme",
+            "title" => "OpenAI ships briefing-relevant updates",
+            "summary" => "A concise product update worth scanning.",
+            "url" => "https://example.com/news",
+            "published_at" => DateTime.to_iso8601(now)
+          }
+        ],
+        "feeds" => [%{"name" => "Techmeme", "url" => "https://example.com/feed.xml"}],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    {:ok, _person} =
+      Crm.upsert_person(user_id, %{
+        "first_name" => "Charlie",
+        "last_name" => "Jones",
+        "slack_id" => "UCHARLIE",
+        "preferred_communication_method" => "slack",
+        "relationship" => "Runner teammate",
+        "communication_frequency" => "weekly"
+      })
+
+    {:ok, _memory} =
+      Memory.write(user_id, %{
+        "title" => "Generic retail promotions are briefing noise",
+        "content" =>
+          "Retail promotions should not appear in the morning briefing unless they create a real obligation.",
+        "kind" => "relevance_feedback",
+        "polarity" => "negative",
+        "importance" => 82
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "commercial_counterparty_domain_markers" => ["cogniate"],
+        "commercial_teammate_domains" => ["runner.now"],
+        "slack_key_channels" => ["runner-general"]
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: source_bundle,
+      assistant_cycle_id: "cycle-1"
+    }
+
+    {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["max_tokens"] == 16_000
+    assert params["reasoning_effort"] == "high"
+    assert params["timeout_ms"] == 1_200_000
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+    assert String.valid?(prompt)
+    assert prompt =~ "Français"
+    assert prompt =~ "Brief input JSON"
+    assert prompt =~ "Skill instructions"
+    assert prompt =~ "Email review rule"
+    assert prompt =~ "Treat meeting prep as relationship-first"
+    assert prompt =~ "source pages as the"
+    assert prompt =~ "meeting dossier"
+    assert prompt =~ "services, pricing, operating model"
+    assert prompt =~ "fit hypothesis"
+    assert prompt =~ "second briefing"
+    assert prompt =~ "Fresh external commercial threads from close teammates"
+    assert prompt =~ "Treat gmail.commercial_threads as a coverage list"
+    assert prompt =~ "Inbox and Slack triage contract"
+    assert prompt =~ "Required external meetings are a hard coverage contract"
+    assert prompt =~ "Use display_start and display_end exactly"
+    assert prompt =~ "Keep the JSON executive-grade and complete"
+    assert prompt =~ "if there are ten material items"
+    assert prompt =~ "\"schedule_coverage\""
+    assert prompt =~ "\"required_meetings\""
+    assert prompt =~ "Commercial coverage contract"
+    assert prompt =~ "body_available"
+    assert prompt =~ "meeting_prep"
+    assert prompt =~ "Instagram reported a new login"
+    assert prompt =~ "Promotional retail offer"
+    assert prompt =~ ~s({"title":"...","summary":"...","body":"...","todos":[)
+    assert prompt =~ "Write like a sharp Chief of Staff"
+    assert prompt =~ "This is not a digest"
+    assert prompt =~ "Reference briefing eval"
+    assert prompt =~ "Open Commitments with active/overdue/due-today"
+    assert prompt =~ "draft IDs, action-card IDs, OmniFocus IDs"
+    assert prompt =~ "Manual Decisions / Admin"
+    assert prompt =~ "Do not put raw durable handles in the user-facing body"
+    assert prompt =~ "work_type"
+    assert prompt =~ "## Needs Your Attention"
+    assert prompt =~ "## Decisions / Follow-ups"
+    assert prompt =~ "never include internal scores, thresholds"
+    assert prompt =~ "Today's move:"
+    assert prompt =~ "Instagram"
+    assert prompt =~ "SKIMS"
+    assert prompt =~ "Sample Company Enterprise plan discussion"
+    refute prompt =~ "Vanta enterprise security discount"
+    assert prompt =~ "runner-general"
+    assert prompt =~ "OpenAI ships briefing-relevant updates"
+    assert prompt =~ "mention news only when it affects the operator's company"
+    assert prompt =~ "relationships"
+    assert prompt =~ "Charlie Jones"
+    assert prompt =~ "Runner teammate"
+    assert prompt =~ "deep_memory"
+    assert prompt =~ "Generic retail promotions are briefing noise"
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "title" => "Thursday, May 7 — Check the security alert",
+          "summary" => "One account-security item and one Runner commitment need attention.",
+          "body" =>
+            "## Needs Your Attention\n- 🔴 Check the Instagram login.\n\nProtect the morning block."
+        })
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.source_backed == true
+
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
+    assert brief.title =~ "Check the security alert"
+    assert brief.metadata["source_backed"] == true
+    assert brief.metadata["generation_mode"] == "llm"
+    assert get_in(brief.metadata, ["brief_input", "counts", "gmail_recent_unread"]) == 2
+    assert get_in(brief.metadata, ["brief_input", "counts", "slack_key_threads"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "news_items"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "relationships"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "deep_memory"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "meeting_prep_meetings"]) == 1
+
+    assert get_in(brief.metadata, [
+             "brief_input",
+             "counts",
+             "meeting_prep_required_schedule_meetings"
+           ]) == 1
+
+    assert get_in(brief.metadata, ["brief_input", "counts", "schedule_coverage_required_meetings"]) ==
+             1
+  end
+
+  test "persists model-emitted morning work items through todo intelligence", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-todos"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "title" => "Thursday, May 7 - Review the launch note",
+          "summary" => "One Slack follow-up belongs in open work.",
+          "body" => "## Needs Your Attention\n- Review the Runner launch note.",
+          "todos" => [
+            %{
+              "source" => "slack",
+              "source_item_id" => "C-runner-gtm:1715090400.000100",
+              "title" => "Review Runner launch note",
+              "summary" =>
+                "Charlie is waiting on you to review the Runner launch note before GTM can ship.",
+              "next_action" => "Approve or edit the Runner launch note in #runner-gtm today.",
+              "notes" => "Mentioned in #runner-gtm.",
+              "action_plan" => "Scan claims, check launch timing, then approve or comment.",
+              "dedupe_key" => "morning:slack:runner-launch-note",
+              "metadata" => %{
+                "channel_name" => "runner-gtm",
+                "source_excerpt" =>
+                  "Charlie asked: Can you review the Runner launch note today so GTM can ship?",
+                "commitment_direction" => "pending_reply",
+                "why_it_matters" => "GTM is blocked until the launch note is approved."
+              }
+            }
+          ]
+        })
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.todo_count == 1
+    assert payload.todo_skipped_count == 0
+
+    [todo] = Todos.list_for_user(user_id, source: "slack", limit: 5)
+    assert todo.title == "Review Runner launch note"
+    assert todo.action_plan =~ "Scan claims"
+    assert todo.metadata["origin_skill_id"] == "morning_briefing"
+
+    assert get_in(todo.metadata, ["todo_intelligence", "source"]) ==
+             "chief_of_staff_morning_briefing"
+  end
+
+  test "accepts markdown-fenced model JSON as the real morning brief", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-fenced-json"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    response = %{
+      content: """
+      Here is the briefing JSON:
+
+      ```json
+      {"title":"Thursday, May 7 - Review the launch note","summary":"One checked priority is ready.","body":"## Needs Your Attention\\n- Review the Runner launch note before inbox triage.","todos":[]}
+      ```
+      """
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.generation_mode == "llm"
+    assert payload.error_message == nil
+
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
+    assert brief.title == "Thursday, May 7 - Review the launch note"
+    assert brief.body =~ "Runner launch note"
+    assert brief.metadata["generation_mode"] == "llm"
+    refute brief.body =~ "Only checked data is included"
+  end
+
+  test "quality verifier patches packed-day reference briefing gaps" do
+    brief = %{
+      "title" => "Wednesday, May 27 - Generic morning",
+      "summary" => "A few things are happening.",
+      "body" =>
+        "A short generic brief that misses the operational stack. Leaked handle actc_c154.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-27",
+      "timezone" => "ET",
+      "timezone_offset_hours" => -4,
+      "calendar" => %{
+        "today_events" => [
+          %{
+            "summary" => "Runner Weekly Planning",
+            "start" => "2026-05-27T15:00:00Z",
+            "end" => "2026-05-27T15:45:00Z",
+            "display_start" => "11:00",
+            "display_end" => "11:45",
+            "calendar_name" => "Runner"
+          },
+          %{
+            "summary" => "Sara Franca",
+            "start" => "2026-05-27T15:30:00Z",
+            "end" => "2026-05-27T16:00:00Z",
+            "display_start" => "11:30",
+            "display_end" => "12:00",
+            "calendar_name" => "Runner"
+          },
+          %{
+            "summary" => "Runner Weekly Planning exec",
+            "start" => "2026-05-27T18:45:00Z",
+            "end" => "2026-05-27T19:30:00Z",
+            "display_start" => "14:45",
+            "display_end" => "15:30",
+            "calendar_name" => "Runner"
+          },
+          %{
+            "summary" => "1:1 with Dash",
+            "start" => "2026-05-27T19:00:00Z",
+            "end" => "2026-05-27T20:00:00Z",
+            "display_start" => "15:00",
+            "display_end" => "16:00",
+            "calendar_name" => "Agora"
+          }
+        ]
+      },
+      "commitments" => %{
+        "active_count" => 61,
+        "overdue" => [
+          %{
+            "title" => "Reply to Renat about Represent launch-video concept",
+            "owed_to" => "Renat",
+            "project" => "Runner",
+            "due_at" => "2026-05-20T16:00:00Z",
+            "source_id" => "k2_kp3zotvz",
+            "metadata" => %{"action_card_id" => "actc_c198"}
+          }
+        ],
+        "due_today" => [
+          %{
+            "title" => "Resolve duplicate 11:30 Sara Franca invite",
+            "owed_to" => "Sara Franca",
+            "project" => "Runner",
+            "due_at" => "2026-05-27T15:00:00Z",
+            "source_id" => "mTyUJw8V_S1",
+            "metadata" => %{"action_card_id" => "actc_c154"}
+          }
+        ],
+        "coming_up" => [
+          %{
+            "title" => "Pay TensorBoy first invoice",
+            "owed_to" => "Manav Gupta",
+            "project" => "Runner",
+            "due_at" => "2026-05-28T16:00:00Z",
+            "source_id" => "jZVZNqySITx",
+            "metadata" => %{"action_card_id" => "actc_9deb"}
+          }
+        ]
+      },
+      "open_work" => %{
+        "todos" => [
+          %{
+            "title" => "Resolve duplicate Sara Franca invite",
+            "summary" => "Lock Google Meet and decline Teams before 11am.",
+            "metadata" => %{
+              "action_card_id" => "actc_c154",
+              "work_type" => "draftable",
+              "why_it_matters" => "Avoid joining the wrong 11:30 meeting."
+            }
+          },
+          %{
+            "title" => "Pydantic failed payment",
+            "summary" => "$124 payment failed again.",
+            "metadata" => %{
+              "source_item_id" => "a58koyhpMAm",
+              "work_type" => "payment",
+              "why_it_matters" => "Update the card in Stripe."
+            }
+          }
+        ]
+      },
+      "slack" => %{
+        "key_threads" => [
+          %{
+            "channel" => "growthcrew-x-runner",
+            "summary" => "Brent and Benji want event counts validated.",
+            "metadata" => %{"action_card_id" => "actc_c9c8"}
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert verification["score"] == 10
+    assert "missing_needs_attention" in verification["initial_findings"]
+    assert "missing_schedule_conflicts" in verification["initial_findings"]
+    assert "missing_open_commitments" in verification["initial_findings"]
+    assert "missing_action_stack" in verification["initial_findings"]
+    assert "missing_non_draft_jobs" in verification["initial_findings"]
+    assert "missing_today_move" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert "schedule_conflicts_called_out_with_recommendations" in verification["criteria"]
+    assert "brief_ends_with_today_move_directive" in verification["criteria"]
+
+    assert "prepared_actions_are_named_without_internal_handles" in verification[
+             "criteria"
+           ]
+
+    assert revised["body"] =~ "## Needs Your Attention"
+    refute revised["body"] =~ "Brief shape needs attention"
+    refute revised["body"] =~ "original model"
+    assert revised["body"] =~ "## Schedule Conflicts"
+    assert revised["body"] =~ "Sara Franca"
+    assert revised["body"] =~ "## Open Commitments"
+    assert revised["body"] =~ "Reply to Renat"
+    assert revised["body"] =~ "due May 20, 2026 at 12:00 PM ET"
+    refute revised["body"] =~ "k2_kp3zotvz"
+    refute revised["body"] =~ "2026-05-20T16:00:00Z"
+    assert revised["body"] =~ "## Prepared Actions"
+    assert revised["body"] =~ "Resolve duplicate Sara Franca invite"
+    assert revised["body"] =~ "Lock Google Meet and decline Teams before 11am."
+    refute revised["body"] =~ "actc_"
+    assert revised["body"] =~ "## Manual Decisions / Admin"
+    assert revised["body"] =~ "Pydantic failed payment"
+    assert revised["body"] =~ "Today's move:"
+  end
+
+  test "quality verifier requires recommendations for schedule conflicts" do
+    brief = %{
+      "title" => "Wednesday, May 27 - Collision day",
+      "summary" => "Start with the calendar collision.",
+      "body" =>
+        "This day has a calendar collision.\n\n## Needs Your Attention\n- The Sara meeting conflicts with Runner weekly planning.\n\n## Today's Schedule\n- 11:00 Runner Weekly Planning.\n- 11:30 Sara Franca overlaps Runner Weekly Planning.\n\nToday's move: settle the Sara calendar collision first.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-27",
+      "timezone" => "ET",
+      "timezone_offset_hours" => -4,
+      "calendar" => %{
+        "today_events" => [
+          %{
+            "summary" => "Runner Weekly Planning",
+            "start" => "2026-05-27T15:00:00Z",
+            "end" => "2026-05-27T15:45:00Z",
+            "display_start" => "11:00",
+            "display_end" => "11:45"
+          },
+          %{
+            "summary" => "Sara Franca",
+            "start" => "2026-05-27T15:30:00Z",
+            "end" => "2026-05-27T16:00:00Z",
+            "display_start" => "11:30",
+            "display_end" => "12:00"
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_schedule_conflicts" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert revised["body"] =~ "## Schedule Conflicts"
+    assert revised["body"] =~ "Decide which to attend, move, or leave early."
+  end
+
+  test "quality verifier appends the executive today's move directive" do
+    brief = %{
+      "title" => "Wednesday, May 27 - Operational brief",
+      "summary" => "Start with the Acme renewal.",
+      "body" =>
+        "## Needs Your Attention\n- Review the pending action card for the Acme renewal.\n\nToday's move: review Acme first.\n\n## Context\n- Renewal risk is open.",
+      "todos" => []
+    }
+
+    input = %{
+      "open_work" => %{
+        "todos" => [
+          %{
+            "title" => "Acme renewal reply",
+            "summary" => "Draft the enterprise renewal response before the 10am check-in.",
+            "metadata" => %{
+              "action_card_id" => "actc_acme",
+              "work_type" => "draftable"
+            }
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_today_move" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert String.ends_with?(
+             revised["body"],
+             "Today's move: review or send the prepared actions before inbox triage."
+           )
+
+    refute revised["body"] =~ "actc_"
+  end
+
+  test "quality verifier removes first-person assistant framing from narrative prose" do
+    brief = %{
+      "title" => "Tuesday, May 12 - Follow-through day",
+      "summary" => "Start with the board reply.",
+      "body" =>
+        "I found a follow-through day: the board reply is the real risk.\n\n## Needs Your Attention\n- **Board reply**: Send the answer before the thread goes stale.\n- Suggested reply: \"I can send the updated deck by noon.\"\n\nToday's move: send the board reply before opening routine inbox.",
+      "todos" => []
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, %{}, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "assistant_first_person_copy" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~
+             "The briefing shows a follow-through day: the board reply is the real risk."
+
+    assert revised["body"] =~ "Suggested reply: \"I can send the updated deck by noon.\""
+    refute revised["body"] =~ "I found"
+
+    assert "brief_uses_executive_voice_without_first_person_assistant_framing" in verification[
+             "criteria"
+           ]
+  end
+
+  test "quality verifier surfaces stale or unavailable sources before the final directive" do
+    brief = %{
+      "title" => "Saturday, May 30 - Operational brief",
+      "summary" => "Start with the most important checked item.",
+      "body" =>
+        "## Needs Your Attention\n- Clear the first checked item before inbox triage.\n\nToday's move: clear the first checked item.",
+      "todos" => []
+    }
+
+    input = %{
+      "source_health" => %{
+        "imessage" => %{
+          "source" => "imessage",
+          "status" => "stale",
+          "device_last_seen_at" => "2026-05-30T08:00:00Z",
+          "item_count" => 0
+        },
+        "notes" => %{
+          "source" => "notes",
+          "status" => "error",
+          "fetch_error" => "operation not permitted",
+          "item_count" => 0
+        },
+        "gmail" => %{
+          "status" => "unavailable",
+          "reason" => "oauth_reauth_required"
+        },
+        "calendar" => %{
+          "source" => "calendar",
+          "status" => "ready"
+        }
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_source_gaps" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert "source_gaps_are_visible_when_connectors_are_stale_or_unavailable" in verification[
+             "criteria"
+           ]
+
+    assert revised["body"] =~ "## Source Gaps"
+    assert revised["body"] =~ "**iMessage**: last check is stale"
+    assert revised["body"] =~ "**Notes**: could not be checked for this brief"
+    assert revised["body"] =~ "**Gmail**: needs reconnection or permission"
+    refute revised["body"] =~ "operation not permitted"
+    refute revised["body"] =~ "Google Calendar"
+
+    assert String.ends_with?(
+             revised["body"],
+             "Today's move: clear the first checked item."
+           )
+  end
+
+  test "quality verifier patches dropped required meetings and commercial threads" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "One generic priority.",
+      "body" => "## Needs Your Attention\n- Clear the generic inbox first.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Dana Patel",
+            "display_start" => "12:00 PM PT",
+            "display_end" => "12:30 PM PT",
+            "external_attendees" => [
+              %{"display_name" => "Dana Patel", "email" => "dawn@gmail.com"}
+            ],
+            "crm_context" => [
+              %{
+                "person" => %{
+                  "display_name" => "Dana Patel",
+                  "relationship" => "Runner enterprise design partner"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "commercial_coverage" => %{
+        "required_threads" => [
+          %{
+            "subject" => "Sample Company Enterprise plan discussion",
+            "from" => "Charlie Feng <charlie@runner.now>",
+            "to" => "Kent Fenwick <kent@runner.now>",
+            "body" =>
+              "Charlie looped Kent into Sample Company's Enterprise plan discussion for pricing guidance."
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert "missing_required_commercial_threads" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert "required_external_meetings_are_covered" in verification["criteria"]
+    assert "required_commercial_threads_are_covered" in verification["criteria"]
+
+    assert revised["body"] =~ "## Required Schedule Prep"
+    assert revised["body"] =~ "Dana Patel"
+    assert revised["body"] =~ "12:00 PM PT"
+    assert revised["body"] =~ "ends 12:30 PM PT"
+    assert revised["body"] =~ "Runner enterprise design partner"
+    assert revised["body"] =~ "Carry one decision"
+    assert revised["body"] =~ "Source: saved relationship context"
+    assert revised["body"] =~ "## Decisions / Follow-ups"
+    assert revised["body"] =~ "Sample Company Enterprise plan discussion"
+    assert revised["body"] =~ "Charlie Feng"
+  end
+
+  test "quality verifier requires required meetings to include time and prep context" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "Start with the external call.",
+      "body" =>
+        "This morning has an external meeting.\n\n## Today's Schedule\n- Dana Patel.\n\nToday's move: start with the calendar.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Dana Patel",
+            "display_start" => "12:00 PM PT",
+            "display_end" => "12:30 PM PT",
+            "external_attendees" => [
+              %{"display_name" => "Dana Patel", "email" => "dawn@gmail.com"}
+            ],
+            "crm_context" => [
+              %{
+                "person" => %{
+                  "display_name" => "Dana Patel",
+                  "relationship" => "Runner enterprise design partner"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~ "## Required Schedule Prep"
+    assert revised["body"] =~ "**Dana Patel** at 12:00 PM PT (ends 12:30 PM PT)"
+    assert revised["body"] =~ "Prep: Dana Patel: Runner enterprise design partner."
+
+    assert revised["body"] =~
+             "Carry one decision: confirm the live ask, risk, owner, and next step before the call ends."
+
+    assert revised["body"] =~ "Source: saved relationship context."
+  end
+
+  test "quality verifier requires prep context on the meeting item" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "Start with the external call.",
+      "body" =>
+        "This morning has an external meeting.\n\n## Today's Schedule\n- Dana Patel at 12:00 PM PT.\n\nToday's move: prep the inbox before lower-signal work.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Dana Patel",
+            "display_start" => "12:00 PM PT",
+            "display_end" => "12:30 PM PT",
+            "external_attendees" => [
+              %{"display_name" => "Dana Patel", "email" => "dawn@gmail.com"}
+            ],
+            "crm_context" => [
+              %{
+                "person" => %{
+                  "display_name" => "Dana Patel",
+                  "relationship" => "Runner enterprise design partner"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~ "## Required Schedule Prep"
+    assert revised["body"] =~ "**Dana Patel** at 12:00 PM PT (ends 12:30 PM PT)"
+    assert revised["body"] =~ "Prep: Dana Patel: Runner enterprise design partner."
+    assert revised["body"] =~ "Carry one decision"
+    assert revised["body"] =~ "Source: saved relationship context."
+  end
+
+  test "quality verifier patches source-thin meeting prep without inventing background" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "Start with the external call.",
+      "body" =>
+        "This morning has an external meeting.\n\n## Today's Schedule\n- Partnership review.\n\nToday's move: start with the calendar.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Partnership review with Nolan Park",
+            "display_start" => "2:00 PM ET",
+            "display_end" => "2:30 PM ET",
+            "external_attendees" => [
+              %{"display_name" => "Nolan Park", "email" => "nolan@laterco.com"}
+            ],
+            "data_gaps" => [
+              "No saved relationship context found for Nolan Park. Keep the meeting prep cautious and avoid inventing background."
+            ]
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~ "**Partnership review with Nolan Park** at 2:00 PM ET"
+    assert revised["body"] =~ "External attendees: Nolan Park."
+    assert revised["body"] =~ "Carry one decision"
+    assert revised["body"] =~ "avoid inventing background"
+    refute revised["body"] =~ "likely matters"
+    refute revised["body"] =~ "strategic partner"
+  end
+
+  test "quality verifier accepts required meetings with attached prep context" do
+    brief = %{
+      "title" => "Monday, May 11 - Focused morning",
+      "summary" => "Start with Dana Patel.",
+      "body" =>
+        "This morning has an external meeting.\n\n## Today's Schedule\n- **Dana Patel** at 12:00 PM PT - Prep: Dana Patel: Runner enterprise design partner.\n\nToday's move: start with the Dawn call.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Dana Patel",
+            "display_start" => "12:00 PM PT",
+            "display_end" => "12:30 PM PT",
+            "external_attendees" => [
+              %{"display_name" => "Dana Patel", "email" => "dawn@gmail.com"}
+            ],
+            "crm_context" => [
+              %{
+                "person" => %{
+                  "display_name" => "Dana Patel",
+                  "relationship" => "Runner enterprise design partner"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    refute "missing_required_meetings" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    refute revised["body"] =~ "## Required Schedule Prep"
+    assert revised["body"] =~ "Runner enterprise design partner"
+  end
+
+  test "quality verifier patches omitted message-backed inbox and Slack triage" do
+    brief = %{
+      "title" => "Tuesday, May 12 - Generic morning",
+      "summary" => "A generic priority.",
+      "body" => "## Needs Your Attention\n- Protect the work block before inbox triage.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-12",
+      "gmail" => %{
+        "recent_unread" => [
+          %{
+            "message_id" => "msg-security",
+            "thread_id" => "thread-security",
+            "account" => "kent@runner.now",
+            "from" => "Instagram <security@mail.instagram.com>",
+            "subject" => "Instagram security alert",
+            "body_available" => true,
+            "body_status" => "available",
+            "body" => "Instagram reported a new login from an unknown device."
+          }
+        ],
+        "recent_inbox" => [
+          %{
+            "message_id" => "msg-security",
+            "thread_id" => "thread-security",
+            "account" => "kent@runner.now",
+            "from" => "Instagram <security@mail.instagram.com>",
+            "subject" => "Instagram security alert",
+            "body_available" => true,
+            "body_status" => "available",
+            "body" => "Instagram reported a new login from an unknown device."
+          },
+          %{
+            "message_id" => "msg-retail",
+            "thread_id" => "thread-retail",
+            "account" => "kent@runner.now",
+            "from" => "SKIMS <no-reply@emails.skims.com>",
+            "subject" => "Dive into swim sale",
+            "body_available" => true,
+            "body_status" => "available",
+            "body" => "A promotional swim sale with no obligation."
+          }
+        ],
+        "counts" => %{"recent_unread" => 1, "recent_inbox" => 2}
+      },
+      "slack" => %{
+        "key_threads" => [
+          %{
+            "team_name" => "Runner",
+            "channel_name" => "runner-general",
+            "user" => "Charlie",
+            "ts" => "1778162400.000000",
+            "text" => "Launch is blocked by an outage; can Kent name the owner before noon?"
+          }
+        ],
+        "mentions" => [],
+        "counts" => %{"recent_messages" => 1, "mentions" => 0}
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert "missing_inbox_triage" in verification["initial_findings"]
+    assert "missing_slack_triage" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert "scoped_inbox_triage_covers_body_backed_actionable_email" in verification[
+             "criteria"
+           ]
+
+    assert "scoped_slack_triage_covers_actionable_threads" in verification["criteria"]
+
+    assert revised["body"] =~ "## Inbox Triage"
+    assert revised["body"] =~ "Instagram security alert"
+    assert revised["body"] =~ "Confirm whether the security notice is expected"
+    refute revised["body"] =~ "Dive into swim sale"
+
+    assert revised["body"] =~ "## Slack Triage"
+    assert revised["body"] =~ "#runner-general"
+    assert revised["body"] =~ "Launch is blocked by an outage"
+    assert revised["body"] =~ "Name the owner and the next unblock step"
+    refute revised["body"] =~ "debug"
+  end
+
+  test "quality verifier drops person-only todo cards without memory-jogging context" do
+    weak_todo = %{
+      "source" => "gmail",
+      "title" => "Alex Muller",
+      "summary" => "",
+      "next_action" => "Reply.",
+      "dedupe_key" => "gmail:alex-muller"
+    }
+
+    contextual_todo = %{
+      "source" => "gmail",
+      "title" => "Follow up with Jordan Lee about Contoso pricing",
+      "summary" =>
+        "Jordan Lee at Contoso is waiting on the enterprise pricing answer for the renewal.",
+      "next_action" =>
+        "Reply to Jordan Lee with the renewal price, discount boundary, and concrete ETA.",
+      "dedupe_key" => "gmail:jordan-contoso-pricing",
+      "metadata" => %{
+        "company" => "Contoso",
+        "relationship_context" => "enterprise renewal lead",
+        "why_it_matters" => "Renewal decision is due today."
+      }
+    }
+
+    brief = %{
+      "title" => "Monday, May 11 - Follow-up review",
+      "summary" => "Review relationship follow-ups.",
+      "body" => "## Needs Your Attention\n- Clear the relationship follow-ups first.",
+      "todos" => [weak_todo, contextual_todo]
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, %{}, "llm")
+
+    assert "sparse_person_todo_context" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert revised["todos"] == [contextual_todo]
+  end
+
+  test "quality verifier uses chief-of-staff copy when adding a generic attention section" do
+    brief = %{
+      "title" => "Morning briefing",
+      "summary" => "Short brief.",
+      "body" => "A short generic brief with no attention section.",
+      "todos" => []
+    }
+
+    {revised, verification} =
+      MorningBriefing.verify_quality(brief, %{"date" => "2026-05-07"}, "llm")
+
+    assert "missing_needs_attention" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert revised["body"] =~ "Start with checked priorities"
+    refute revised["body"] =~ "Brief shape needs attention"
+    refute revised["body"] =~ "original model"
+    refute revised["body"] =~ "model output"
+  end
+
+  test "quality verifier scrubs passwords and security answers from the brief body" do
+    brief = %{
+      "title" => "Thursday, August 7 - Family logistics",
+      "summary" => "Submit Jack's form with security answer mapleleaf.",
+      "body" => """
+      ## Next Actions
+      - Submit Jack's Brown Belt grading form and email gojueastwest@hotmail.com with the security answer `mapleleaf`.
+      - Approve the Mercury wires after confirming the amount.
+      """,
+      "todos" => [
+        %{
+          "title" => "Submit grading form",
+          "next_action" => "Send the e-transfer with the security answer mapleleaf today.",
+          "summary" => "Password: hunter2 should never appear."
+        }
+      ]
+    }
+
+    {revised, _verification} =
+      MorningBriefing.verify_quality(brief, %{"date" => "2026-08-07"}, "llm")
+
+    refute revised["body"] =~ "mapleleaf"
+    refute revised["body"] =~ "hunter2"
+    refute revised["summary"] =~ "mapleleaf"
+    refute hd(revised["todos"])["next_action"] =~ "mapleleaf"
+    refute hd(revised["todos"])["summary"] =~ "hunter2"
+    assert revised["body"] =~ "gojueastwest@hotmail.com"
+
+    assert String.contains?(revised["body"], "credential removed") or
+             String.contains?(revised["body"], "confirm security answer")
+  end
+
+  test "quality verifier puts model todo next actions into the primary brief" do
+    brief = %{
+      "title" => "Monday, May 11 - Schedule prep",
+      "summary" => "One external meeting needs prep.",
+      "body" => "## Today's Schedule\n- **Prep for Dana Patel** and Charlie Feng.",
+      "todos" => [
+        %{
+          "source" => "calendar",
+          "title" => "Prep for Dana Patel",
+          "summary" =>
+            "Dana Patel at Sample Studio is evaluating the Runner design partner workflow.",
+          "next_action" => "Review Dawn and Sample Studio context before the meeting.",
+          "dedupe_key" => "calendar:dawn-nguyen-prep",
+          "metadata" => %{
+            "relationship_context" => "Runner design partner evaluator",
+            "why_it_matters" => "Meeting prep affects the partner workflow decision."
+          }
+        }
+      ]
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, %{}, "llm")
+
+    assert "missing_model_todo_next_actions" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert String.starts_with?(
+             revised["body"],
+             "This is a verification-first morning: scan calendar and open work before committing the day.\n\n## Needs Your Attention\n- **Prep for Dana Patel**: Review Dawn and Sample Studio context before the meeting."
+           )
+
+    assert revised["body"] =~ "## Today's Schedule"
+
+    assert "model_todo_next_actions_visible_in_primary_brief" in verification[
+             "criteria"
+           ]
+  end
+
+  test "checked fallback opens with ranked executive attention items" do
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "timezone" => "ET",
+        "timezone_offset_hours" => -4,
+        "calendar" => %{
+          "today_events" => [
+            %{
+              "summary" => "School pickup",
+              "start" => "2026-05-27T15:00:00Z",
+              "end" => "2026-05-27T15:30:00Z",
+              "display_start" => "11:00 AM",
+              "display_end" => "11:30 AM",
+              "calendar_name" => "Family"
+            },
+            %{
+              "summary" => "Runner Weekly Planning",
+              "start" => "2026-05-27T15:00:00Z",
+              "end" => "2026-05-27T15:45:00Z",
+              "display_start" => "11:00 AM",
+              "display_end" => "11:45 AM",
+              "calendar_name" => "Runner"
+            },
+            %{
+              "summary" => "Sara Franca",
+              "start" => "2026-05-27T15:30:00Z",
+              "end" => "2026-05-27T16:00:00Z",
+              "display_start" => "11:30 AM",
+              "display_end" => "12:00 PM",
+              "calendar_name" => "Runner"
+            }
+          ]
+        },
+        "commitments" => %{
+          "active_count" => 2,
+          "overdue" => [
+            %{
+              "title" => "Reply to Renat about Represent launch-video concept",
+              "owed_to" => "Renat",
+              "project" => "Runner",
+              "due_at" => "2026-05-20T16:00:00Z",
+              "source_id" => "k2_kp3zotvz"
+            }
+          ],
+          "due_today" => []
+        },
+        "open_work" => %{
+          "todos" => [
+            %{
+              "title" => "Resolve duplicate Sara Franca invite",
+              "summary" => "Lock Google Meet and decline Teams before the 11:30 call.",
+              "next_action" => "Choose the canonical invite and decline the duplicate.",
+              "priority" => 95,
+              "metadata" => %{
+                "action_card_id" => "actc_c154",
+                "work_type" => "decision"
+              }
+            }
+          ]
+        },
+        "commercial_coverage" => %{
+          "required_threads" => [
+            %{
+              "subject" => "Sample Company Enterprise plan discussion",
+              "from" => "Charlie Feng <charlie@runner.now>",
+              "body" =>
+                "Charlie looped Kent into Sample Company's Enterprise plan discussion for pricing guidance."
+            }
+          ]
+        },
+        "source_health" => %{
+          "imessage" => %{
+            "source" => "imessage",
+            "status" => "stale",
+            "device_last_seen_at" => "2026-05-27T09:00:00Z"
+          },
+          "notes" => %{
+            "source" => "notes",
+            "status" => "error",
+            "fetch_error" => "operation not permitted"
+          }
+        }
+      })
+
+    [temperature_read, attention_section | _rest] = String.split(brief["body"], "\n\n")
+    attention_lines = attention_section |> String.split("\n") |> tl()
+
+    assert brief["title"] == "Wednesday, May 27 - Personal logistics first, then work triage"
+
+    assert temperature_read ==
+             "This is a personal-first day: protect the first family commitment, then clear checked work before inbox drift."
+
+    assert attention_section =~ "## Needs Your Attention"
+    assert length(attention_lines) in 4..6
+    assert attention_section =~ "School pickup"
+    assert attention_section =~ "Schedule conflict"
+    assert attention_section =~ "Reply to Renat"
+    assert attention_section =~ "Resolve duplicate Sara Franca invite"
+    assert attention_section =~ "Choose the canonical invite and decline the duplicate."
+    refute attention_section =~ "actc_"
+    assert attention_section =~ "Sample Company Enterprise plan discussion"
+    assert brief["body"] =~ "## Personal / Family First"
+    assert brief["body"] =~ "due May 20, 2026 at 12:00 PM ET"
+    refute brief["body"] =~ "k2_kp3zotvz"
+    refute brief["body"] =~ "2026-05-20T16:00:00Z"
+    assert brief["body"] =~ "## Source Gaps"
+    assert brief["body"] =~ "**iMessage**: last check is stale"
+    assert brief["body"] =~ "**Notes**: could not be checked for this brief"
+    refute brief["body"] =~ "operation not permitted"
+    assert brief["body"] =~ "## Unknowns"
+    assert brief["body"] =~ "Today's move:"
+  end
+
+  test "checked fallback leads required commercial threads before generic open work" do
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{},
+        "schedule_coverage" => %{},
+        "open_work" => %{
+          "todos" => [
+            %{
+              "title" => "Tidy docs backlog",
+              "summary" => "Clean up internal project notes when there is desk time.",
+              "next_action" => "Batch the notes after higher-priority external decisions.",
+              "priority" => 70
+            }
+          ]
+        },
+        "commercial_coverage" => %{
+          "required_threads" => [
+            %{
+              "subject" => "Sample Company Enterprise plan discussion",
+              "from" => "Charlie Feng <charlie@runner.now>",
+              "body" =>
+                "Charlie looped Kent into Sample Company's Enterprise plan discussion for pricing guidance."
+            }
+          ]
+        }
+      })
+
+    assert brief["title"] == "Wednesday, May 27 - Commercial threads need a decision"
+
+    assert brief["summary"] ==
+             "Start with 1 commercial thread and 1 open follow-up; anything absent here is unknown, not clear."
+
+    [_temperature_read, attention_section | _rest] = String.split(brief["body"], "\n\n")
+
+    {commercial_index, _} =
+      :binary.match(attention_section, "Sample Company Enterprise plan discussion")
+
+    {open_work_index, _} = :binary.match(attention_section, "Tidy docs backlog")
+
+    assert commercial_index < open_work_index
+
+    assert brief["body"] =~
+             "Today's move: decide which commercial thread needs your reply before inbox triage."
+
+    refute brief["body"] =~ "Today's move: clear or explicitly keep the first open follow-up"
+  end
+
+  test "checked fallback links existing open work instead of creating duplicate todo candidates" do
+    existing_todo_id = Ecto.UUID.generate()
+
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{},
+        "schedule_coverage" => %{},
+        "commercial_coverage" => %{},
+        "open_work" => %{
+          "todos" => [
+            %{
+              "id" => existing_todo_id,
+              "title" => "Reply to Maya about launch timing",
+              "summary" => "Maya is waiting on the launch sequencing decision.",
+              "next_action" => "Reply with the launch sequence and timing.",
+              "priority" => 92
+            }
+          ]
+        }
+      })
+
+    assert brief["body"] =~ "Reply to Maya about launch timing"
+    assert brief["linked_todo_ids"] == [existing_todo_id]
+
+    assert [%{"id" => ^existing_todo_id, "title" => "Reply to Maya about launch timing"}] =
+             brief["todos"]
+
+    refute inspect(brief) =~ "morning-fallback"
+    refute inspect(brief) =~ "compact_fallback"
+  end
+
+  test "no-source fallback avoids first-person assistant copy" do
+    brief = MorningBriefing.build_compact_fallback_brief(nil, "provider unavailable")
+
+    assert brief["title"] == "Morning briefing"
+    assert brief["summary"] == "Core sources need a fresh pass before ranking the day."
+    assert brief["body"] =~ "Core sources were not verified for this briefing."
+    assert brief["body"] =~ "Verify calendar, open work, inbox, Slack, and local sources"
+    assert brief["body"] =~ "Calendar, open work, inbox, Slack, and local sources"
+    assert brief["body"] =~ "Today's move: verify the day"
+    refute brief["body"] =~ "No priority has been verified yet"
+    refute brief["body"] =~ "I could not"
+    refute brief["body"] =~ "I "
+    refute brief["body"] =~ "provider unavailable"
+  end
+
+  test "empty fallback uses review-ready priority copy" do
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{},
+        "schedule_coverage" => %{},
+        "commercial_coverage" => %{}
+      })
+
+    assert brief["summary"] ==
+             "No priority is ready to review; check calendar and open work before committing the day."
+
+    refute brief["summary"] =~ "No priority has been verified yet"
+  end
+
+  test "invalid model output records a compact checked fallback briefing",
+       %{
+         user_id: user_id,
+         agent: agent
+       } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    {:ok, _commitment} =
+      Commitments.upsert(user_id, %{
+        "source" => "omnifocus",
+        "source_id" => "of-overdue-1",
+        "title" => "Notify Justin Dean about the Gmail send-bug fix",
+        "owed_to" => "Justin Dean",
+        "project" => "Runner",
+        "due_at" => "2026-05-05T20:00:00Z",
+        "metadata" => %{"next_action" => "Send the email today."}
+      })
+
+    {:ok, [existing_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply to Maya about launch timing",
+          "summary" => "Maya is waiting on the launch sequencing decision.",
+          "next_action" => "Reply with the launch sequence and timing.",
+          "source_item_id" => "gmail-thread-maya-launch",
+          "dedupe_key" => "morning-briefing-existing-open-work",
+          "priority" => 92
+        }
+      ])
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-error"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
+
+    assert payload.generation_mode == "source_fallback"
+    assert payload.error_message =~ "available-context fallback"
+    assert payload.error_message =~ "model_response_invalid"
+    assert payload.todo_count == 0
+    assert payload.linked_todo_ids == [existing_todo.id]
+    refute payload.error_message =~ "model synthesis"
+
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
+
+    assert brief.title == "Thursday, May 7 - Clear open commitments before inbox triage"
+    assert brief.status == "pending"
+    assert brief.error_message =~ "available-context fallback"
+    assert brief.error_message =~ "model_response_invalid"
+    refute brief.error_message =~ "model synthesis"
+    assert brief.metadata["generation_mode"] == "source_fallback"
+    assert brief.metadata["error_message"] =~ "model_response_invalid"
+    assert brief.metadata["linked_todo_ids"] == [existing_todo.id]
+    assert brief.summary =~ "Start with"
+    assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "Only checked data is included"
+    assert brief.body =~ "Today's move:"
+    refute brief.body =~ "full narrative briefing"
+    refute brief.body =~ "model_response_invalid"
+    refute brief.body =~ "model synthesis"
+    refute brief.body =~ "finish_reason"
+
+    todos = Todos.list_for_user(user_id, limit: 20)
+    assert Enum.count(todos) == 1
+    refute Enum.any?(todos, &(&1.dedupe_key =~ "morning-fallback"))
+  end
+
+  test "model provider errors record a compact context fallback briefing", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-provider-error"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_error(
+        :llm_call,
+        {:incomplete_response, %{"reason" => "max_output_tokens"}},
+        state,
+        context
+      )
+
+    assert payload.generation_mode == "source_fallback"
+    assert payload.error_message =~ "available-context fallback"
+    refute payload.error_message =~ "max_output_tokens"
+    refute payload.error_message =~ "model synthesis"
+
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
+    assert brief.title == "Thursday, May 7 - Verify the day before committing it"
+    assert brief.error_message =~ "available-context fallback"
+    refute brief.error_message =~ "max_output_tokens"
+    refute brief.error_message =~ "model synthesis"
+    assert brief.metadata["llm_finish_reason"] == "error"
+    assert brief.metadata["max_tokens_used"] == 16_000
+    assert brief.metadata["reasoning_effort_used"] == "high"
+    assert brief.metadata["llm_request"]["max_tokens"] == 16_000
+    assert brief.metadata["llm_request"]["reasoning_effort"] == "high"
+    assert brief.metadata["generation_mode"] == "source_fallback"
+    assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "Only checked data is included"
+    assert brief.body =~ "Today's move:"
+    refute brief.body =~ "full narrative briefing"
+    refute brief.body =~ "max_output_tokens"
+    refute brief.body =~ "model synthesis"
+    refute brief.body =~ "finish_reason"
+  end
+
+  test "lets skill config override the LLM budget while capping risky intelligence", %{
+    user_id: user_id
+  } do
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "llm_model" => "gpt-5.4",
+        "llm_max_tokens" => 4096,
+        "llm_reasoning_effort" => "xhigh"
+      })
+
+    context = %{
+      agent_id: "agent-llm-config",
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["model"] == "gpt-5.4"
+    assert params["max_tokens"] == 4096
+    assert params["reasoning_effort"] == "high"
+  end
+
+  test "caps oversized morning briefing output budgets", %{user_id: user_id} do
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "llm_max_tokens" => 128_000
+      })
+
+    context = %{
+      agent_id: "agent-llm-max-token-cap",
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["max_tokens"] == 16_000
+  end
+
+  test "bounds oversized connector payloads before building the LLM prompt", %{user_id: user_id} do
+    now = ~U[2026-05-07 14:00:00Z]
+    huge_body = String.duplicate("Important commercial detail. ", 12_000)
+
+    inbox_messages =
+      Enum.map(1..100, fn index ->
+        %{
+          "message_id" => "big-msg-#{index}",
+          "thread_id" => "big-thread-#{index}",
+          "labels" => ["INBOX", "UNREAD"],
+          "from" => "Customer #{index} <customer#{index}@example.com>",
+          "subject" => "Large source payload #{index}",
+          "snippet" => huge_body,
+          "text_body" => huge_body,
+          "body_available" => true,
+          "body_status" => "available",
+          "internal_date" => DateTime.add(now, -index, :minute)
+        }
+      end)
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "messages" => inbox_messages,
+        "inbox_messages" => inbox_messages,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: "agent-large-prompt",
+      user_id: user_id,
+      timestamp: now,
+      source_bundle: source_bundle
+    }
+
+    {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+    [_instructions, input_json] = String.split(prompt, "Brief input JSON:\n", parts: 2)
+    input = Jason.decode!(String.trim(input_json))
+
+    assert {:ok, bytes} = SnapshotBudget.check(state)
+    assert bytes < 128 * 1_024
+    assert {:ok, envelope, ^bytes} = SnapshotFormat.encode(state)
+    assert {:ok, ^state} = SnapshotFormat.decode(envelope)
+    assert state.pending_effect.effect_kind == :morning_briefing
+    assert state.pending_effect.dedupe_key == "morning_briefing:2026-05-07"
+    refute Jason.encode!(state) =~ "Important commercial detail."
+
+    assert String.length(prompt) < 500_000
+    assert length(get_in(input, ["gmail", "recent_inbox"])) == 12
+    assert length(get_in(input, ["gmail", "recent_unread"])) == 12
+
+    first_body = get_in(input, ["gmail", "recent_inbox", Access.at(0), "body"])
+    first_snippet = get_in(input, ["gmail", "recent_inbox", Access.at(0), "snippet"])
+
+    # The final 32 KB projection may omit redundant body/snippet fields while
+    # retaining the message identity and subject; it must never leak the
+    # oversized connector field.
+    assert is_nil(first_body) or String.length(first_body) < 1_600
+    assert String.length(first_snippet) < 500
+    assert String.ends_with?(first_snippet, "…")
+    assert get_in(input, ["gmail", "recent_inbox", Access.at(0), "subject"])
+  end
+
+  test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do
+    now = ~U[2026-05-11 15:00:00Z]
+
+    {:ok, _person} =
+      Crm.upsert_person(user_id, %{
+        "first_name" => "Dawn",
+        "last_name" => "Nguyen",
+        "email" => "dawn@gmail.com",
+        "relationship" => "Runner enterprise design partner",
+        "notes" => "External partner context for executive meeting prep."
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Los_Angeles",
+        "timezone_offset_hours" => -5,
+        "morning_brief_hour_local" => 8
+      })
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_calendar(%{
+        "events" => [
+          %{
+            "event_id" => "evt-dawn",
+            "summary" => "Dana Patel",
+            "start" => ~U[2026-05-11 19:00:00Z],
+            "end" => ~U[2026-05-11 19:30:00Z],
+            "attendees" => [
+              %{"display_name" => "Dana Patel", "email" => "dawn@gmail.com"}
+            ]
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    input =
+      MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+    assert input["timezone"] == "PT"
+
+    assert [
+             %{
+               "summary" => "Dana Patel",
+               "display_start" => "12:00 PM PT",
+               "display_end" => "12:30 PM PT",
+               "display_timezone" => "PT"
+             }
+           ] = input["calendar"]["today_events"]
+
+    assert get_in(input, ["meeting_prep", "counts", "required_schedule_meetings"]) == 1
+    assert get_in(input, ["meeting_prep", "counts", "web_searches"]) == 0
+
+    assert [
+             %{
+               "summary" => "Dana Patel",
+               "display_start" => "12:00 PM PT",
+               "display_end" => "12:30 PM PT",
+               "display_timezone" => "PT"
+             }
+           ] = get_in(input, ["schedule_coverage", "required_meetings"])
+  end
+
+  test "keeps morning briefing on the highest-reasoning path", %{user_id: user_id} do
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "llm_reasoning_effort" => "medium"
+      })
+
+    context = %{
+      agent_id: "agent-llm-minimum-reasoning",
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["reasoning_effort"] == "high"
+  end
+
+  test "does not regenerate when a persisted morning brief already exists", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    {:ok, _brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Thursday morning briefing",
+        "summary" => "Existing checked briefing for the local day.",
+        "body" => "The briefing already exists for this local date.",
+        "status" => "sent",
+        "scheduled_for" => now,
+        "dedupe_key" => "morning_briefing:2026-05-07"
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})
+    }
+
+    assert {:idle, state} = MorningBriefing.handle_wakeup(state, context)
+    assert state.last_generated_keys["morning"] == "2026-05-07"
+  end
+
+  # Generation must never be gated on any single delivery channel: a
+  # false-stale Telegram flag silently killed every morning brief for days
+  # (prod 2026-07-16). Email is the baseline channel, Telegram a bonus.
+  test "generates a morning brief when Telegram is not connected but email is deliverable",
+       %{agent: agent} do
+    user_id = "morning-briefing-no-telegram-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    previous = Application.get_env(:maraithon, :morning_briefing, [])
+
+    Application.put_env(
+      :maraithon,
+      :morning_briefing,
+      Keyword.put(previous, :email_module, __MODULE__.ConfiguredEmail)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :morning_briefing, previous) end)
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      trigger: %{type: :wakeup},
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    assert {:effect, {:llm_call, _params}, pending_state} =
+             MorningBriefing.handle_wakeup(state, context)
+
+    assert pending_state.pending_effect.dedupe_key == "morning_briefing:2026-05-07"
+  end
+
+  test "idles and records an operator event when no delivery channel exists", %{agent: agent} do
+    user_id = "morning-briefing-no-channel-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    previous = Application.get_env(:maraithon, :morning_briefing, [])
+
+    Application.put_env(
+      :maraithon,
+      :morning_briefing,
+      Keyword.put(previous, :email_module, __MODULE__.DisabledEmail)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :morning_briefing, previous) end)
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      trigger: %{type: :wakeup},
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    assert {:idle, _state} = MorningBriefing.handle_wakeup(state, context)
+    assert [] = Briefs.list_recent_for_user(user_id, limit: 1)
+
+    assert [event] =
+             Maraithon.OperatorEvents.list_events(
+               user_id: user_id,
+               event_type: "morning_briefing.generation_blocked"
+             )
+
+    assert event.source_item_id == "morning_briefing:2026-05-07"
+  end
+
+  describe "local source ingestion" do
+    setup %{user_id: user_id} = ctx do
+      device_id = Ecto.UUID.generate()
+
+      now = ~U[2026-05-07 14:00:00Z]
+
+      state =
+        MorningBriefing.init(%{
+          "user_id" => user_id,
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        })
+
+      Map.merge(ctx, %{device_id: device_id, now: now, state: state})
+    end
+
+    test "includes iMessage chats and counts in build_brief_input", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-imsg-1",
+            "local_id" => "p:1",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165550199",
+            "chat_handles" => ["+14165550199"],
+            "chat_display_name" => "Charlie Jones",
+            "chat_style" => "im",
+            "text" => "Can you confirm pricing today?",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"chats" => [chat | _], "counts" => %{"chats" => 1}} = input["imessage"]
+      assert chat["chat_display_name"] == "Charlie Jones"
+      assert chat["latest_snippet"] =~ "Can you confirm pricing"
+      assert chat["latest_is_from_me"] == false
+      refute is_nil(chat["latest_sent_at"])
+    end
+
+    test "includes local notes with snippet, folder, and pinned flag", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "note-1",
+            "local_id" => "n:1",
+            "title" => "Runner Q3 plan",
+            "snippet" => "Heartbeat GA + ambassador push",
+            "folder" => "Work",
+            "is_pinned" => true,
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"items" => [note], "counts" => %{"count" => 1}} = input["notes"]
+      assert note["title"] == "Runner Q3 plan"
+      assert note["snippet"] =~ "Heartbeat GA"
+      assert note["folder"] == "Work"
+      assert note["is_pinned"] == true
+    end
+
+    test "includes recent voice memos with duration and transcript flag", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "memo-1",
+            "local_id" => "v:1",
+            "title" => "Standup recap",
+            "snippet" => "Walks through Runner priorities for the week",
+            "duration_seconds" => 92,
+            "created_at" => DateTime.to_iso8601(DateTime.add(now, -2 * 3_600, :second)),
+            "transcript" => "We need to ship heartbeat GA.",
+            "transcript_engine" => "whisper",
+            "transcript_lang" => "en"
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"items" => [memo], "counts" => %{"count" => 1}} = input["voice_memos"]
+      assert memo["title"] == "Standup recap"
+      assert memo["duration_seconds"] == 92
+      assert memo["has_transcript"] == true
+    end
+
+    test "merges local calendar with Google source bundle when both exist", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalCalendar.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "evt-local-1",
+            "local_id" => "evt:1",
+            "calendar_name" => "Personal",
+            "calendar_color" => "#ffaa00",
+            "title" => "Runner GTM sync",
+            "notes" => "Pricing and rollout cadence",
+            "location" => "Zoom",
+            "start_at" => DateTime.to_iso8601(DateTime.add(now, 2 * 3_600, :second)),
+            "end_at" => DateTime.to_iso8601(DateTime.add(now, 3 * 3_600, :second)),
+            "is_all_day" => false,
+            "is_recurring" => false,
+            "organizer_email" => "charlie@example.com",
+            "attendees_count" => 2,
+            "attendee_emails" => ["kent@example.com", "charlie@example.com"]
+          }
+        ])
+
+      source_bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_calendar(%{
+          "events" => [
+            %{
+              "event_id" => "google-evt-1",
+              "summary" => "FreshBooks discovery",
+              "start" => DateTime.add(now, 2 * 3_600, :second),
+              "end" => DateTime.add(now, 3 * 3_600, :second)
+            }
+          ],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      input =
+        MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+      assert input["calendar"]["preferred_source"] == "local+google"
+      assert [%{"summary" => "Runner GTM sync"} | _] = input["calendar"]["upcoming_local"]
+
+      assert Enum.any?(input["calendar"]["today_events"], fn event ->
+               event["summary"] == "Runner GTM sync"
+             end)
+
+      assert Enum.any?(input["calendar"]["today_events"] || [], fn event ->
+               event["summary"] == "FreshBooks discovery"
+             end)
+    end
+
+    test "falls back to Google calendar when no local events", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      source_bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_calendar(%{
+          "events" => [
+            %{
+              "event_id" => "google-evt-2",
+              "summary" => "Runner standup (Google)",
+              "start" => DateTime.add(now, 2 * 3_600, :second),
+              "end" => DateTime.add(now, 3 * 3_600, :second)
+            }
+          ],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      input =
+        MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+      assert input["calendar"]["preferred_source"] == "google"
+
+      assert Enum.any?(input["calendar"]["today_events"], fn event ->
+               event["summary"] == "Runner standup (Google)"
+             end)
+    end
+
+    test "reports due-soon reminders with priority and due timestamps", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "r-due-1",
+            "local_id" => "r:1",
+            "list_name" => "Work",
+            "title" => "Ship heartbeat docs",
+            "notes" => nil,
+            "priority" => 1,
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, 6 * 3_600, :second)),
+            "is_completed" => false,
+            "has_alarm" => true
+          },
+          %{
+            "guid" => "r-done-1",
+            "local_id" => "r:2",
+            "list_name" => "Work",
+            "title" => "Already done",
+            "is_completed" => true,
+            "completed_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second)),
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"due_soon" => [reminder | _], "counts" => counts} = input["reminders"]
+      assert reminder["title"] == "Ship heartbeat docs"
+      assert reminder["priority"] == 1
+      assert reminder["list_name"] == "Work"
+      assert counts["open"] == 1
+      assert counts["due_today"] == 1
+    end
+
+    test "lists recent files but only with allowlist extensions", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalFiles.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "file-allow",
+            "local_id" => "~/Documents/Runner/spec.md",
+            "path" => "~/Documents/Runner/spec.md",
+            "filename" => "spec.md",
+            "extension" => "md",
+            "mime_type" => "text/markdown",
+            "byte_size" => 1024,
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          },
+          %{
+            "guid" => "file-deny",
+            "local_id" => "~/Downloads/image.png",
+            "path" => "~/Downloads/image.png",
+            "filename" => "image.png",
+            "extension" => "png",
+            "mime_type" => "image/png",
+            "byte_size" => 32_000,
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"items" => files, "counts" => %{"recent_count" => 1}} = input["files"]
+      assert [%{"extension" => "md"}] = files
+    end
+
+    test "groups top hosts from recent browser history", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      visits =
+        for i <- 1..4 do
+          %{
+            "guid" => "visit-#{i}",
+            "local_id" => "v:#{i}",
+            "browser" => "chrome",
+            "url" => "https://news.example.com/article-#{i}",
+            "title" => "Article #{i}",
+            "host" => "news.example.com",
+            "visit_count" => 1,
+            "last_visited_at" => DateTime.to_iso8601(DateTime.add(now, -(i * 600), :second))
+          }
+        end
+
+      other =
+        %{
+          "guid" => "visit-blog",
+          "local_id" => "v:blog",
+          "browser" => "chrome",
+          "url" => "https://blog.example.org/x",
+          "title" => "Blog",
+          "host" => "blog.example.org",
+          "last_visited_at" => DateTime.to_iso8601(DateTime.add(now, -120, :second))
+        }
+
+      {:ok, _} = LocalBrowserHistory.ingest_batch(user_id, device_id, [other | visits])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"top_hosts" => [%{"host" => "news.example.com", "visits" => 4} | _]} =
+               input["browser_history"]
+
+      assert input["browser_history"]["counts"]["visits_last_24h"] == 5
+    end
+
+    test "marks unsynced local sources as error when no device has checked in", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      health = input["source_health"]
+      assert health["imessage"]["status"] == "error"
+      assert health["notes"]["status"] == "error"
+      assert health["voice_memos"]["status"] == "error"
+      assert health["calendar_local"]["status"] == "error"
+      assert health["reminders"]["status"] == "error"
+      assert health["files"]["status"] == "error"
+      assert health["browser_history"]["status"] == "error"
+    end
+
+    test "marks unsynced sources as stale when device last checked in over 2h ago", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      {:ok, %{device: device}} =
+        Companion.Devices.register(user_id, Ecto.UUID.generate(), device_name: "MacBook Pro")
+
+      stale_at = DateTime.add(now, -3 * 3_600, :second)
+
+      Maraithon.Repo.update_all(
+        Ecto.Query.from(d in Companion.Device, where: d.id == ^device.id),
+        set: [last_seen_at: stale_at]
+      )
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert input["source_health"]["imessage"]["status"] == "stale"
+      assert input["source_health"]["notes"]["status"] == "stale"
+    end
+
+    test "marks local sources as connected when data is present even if device is stale", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, %{device: device}} =
+        Companion.Devices.register(user_id, Ecto.UUID.generate(), device_name: "Stale Mac")
+
+      stale_at = DateTime.add(now, -4 * 3_600, :second)
+
+      Maraithon.Repo.update_all(
+        Ecto.Query.from(d in Companion.Device, where: d.id == ^device.id),
+        set: [last_seen_at: stale_at]
+      )
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "note-stale",
+            "local_id" => "n:1",
+            "title" => "Synced before stale",
+            "snippet" => "Still useful data",
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert input["source_health"]["notes"]["status"] == "connected"
+      # iMessage has no rows for this user, device is stale -> stale.
+      assert input["source_health"]["imessage"]["status"] == "stale"
+    end
+
+    test "compact metadata counts all local sources", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      agent: agent
+    } do
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "n-meta-1",
+            "title" => "Note for metadata",
+            "snippet" => "Body",
+            "modified_at" => DateTime.to_iso8601(now)
+          }
+        ])
+
+      {:ok, _} =
+        LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "r-meta-1",
+            "title" => "Reminder for metadata",
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, 60 * 60, :second)),
+            "is_completed" => false
+          }
+        ])
+
+      state =
+        MorningBriefing.init(%{
+          "user_id" => user_id,
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        })
+
+      context = %{
+        agent_id: agent.id,
+        user_id: user_id,
+        timestamp: now,
+        trigger: %{type: :wakeup},
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+        assistant_cycle_id: "cycle-meta"
+      }
+
+      {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+      response = %{
+        content:
+          Jason.encode!(%{
+            "title" => "Day with local sources",
+            "summary" => "Notes and reminders considered.",
+            "body" => "## Needs Your Attention\n- placeholder"
+          })
+      }
+
+      {:emit, {:briefs_recorded, _}, _state} =
+        MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+      [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+      counts = brief.metadata["brief_input"]["counts"]
+      assert counts["notes"] == 1
+      assert counts["reminders_due_soon"] == 1
+    end
+
+    test "prompt now contains the local-source citation rule", %{
+      user_id: user_id,
+      now: now,
+      agent: agent
+    } do
+      state =
+        MorningBriefing.init(%{
+          "user_id" => user_id,
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        })
+
+      context = %{
+        agent_id: agent.id,
+        user_id: user_id,
+        timestamp: now,
+        trigger: %{type: :wakeup},
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+        assistant_cycle_id: "cycle-prompt"
+      }
+
+      {:effect, {:llm_call, params}, _} = MorningBriefing.handle_wakeup(state, context)
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+      assert prompt =~
+               "Prefer first-party local sources over scraped equivalents"
+    end
+
+    test "SourceBundle.put_imessage stores chats, messages, counts and freshness", %{now: now} do
+      bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_imessage(%{
+          "chats" => [%{"chat_key" => "+15555550100", "chat_display_name" => "Sarah"}],
+          "messages" => [%{"guid" => "g1", "text" => "hi"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      assert [%{"chat_key" => "+15555550100"}] = SourceBundle.imessage_chats(bundle)
+      assert [%{"guid" => "g1"}] = SourceBundle.imessage_messages(bundle)
+      assert get_in(SourceBundle.freshness(bundle), ["imessage", "status"]) == "ready"
+    end
+
+    test "SourceBundle.put_notes / put_voice_memos / put_reminders / put_files / put_browser_history populate the bundle",
+         %{now: now} do
+      bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_notes(%{
+          "notes" => [%{"note_id" => "n1", "title" => "t"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_voice_memos(%{
+          "memos" => [%{"memo_id" => "v1", "title" => "m"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_reminders(%{
+          "reminders" => [%{"reminder_id" => "r1", "title" => "r"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_files(%{
+          "files" => [%{"file_id" => "f1", "filename" => "spec.md"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_browser_history(%{
+          "visits" => [%{"host" => "example.com"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_calendar_local(%{
+          "events" => [%{"summary" => "Local meeting"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      assert [%{"note_id" => "n1"}] = SourceBundle.notes(bundle)
+      assert [%{"memo_id" => "v1"}] = SourceBundle.voice_memos(bundle)
+      assert [%{"reminder_id" => "r1"}] = SourceBundle.reminders(bundle)
+      assert [%{"file_id" => "f1"}] = SourceBundle.files(bundle)
+      assert [%{"host" => "example.com"}] = SourceBundle.browser_visits(bundle)
+      assert [%{"summary" => "Local meeting"}] = SourceBundle.calendar_local_events(bundle)
+
+      freshness = SourceBundle.freshness(bundle)
+      assert freshness["notes"]["status"] == "ready"
+      assert freshness["voice_memos"]["status"] == "ready"
+      assert freshness["reminders"]["status"] == "ready"
+      assert freshness["files"]["status"] == "ready"
+      assert freshness["browser_history"]["status"] == "ready"
+      assert freshness["calendar_local"]["status"] == "ready"
+    end
+
+    test "build_brief_input reads SourceBundle local sections when the bundle is populated", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      source_bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_imessage(%{
+          "chats" => [
+            %{
+              "chat_key" => "k1",
+              "chat_display_name" => "Bundle Charlie",
+              "latest_snippet" => "from bundle"
+            }
+          ],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_notes(%{
+          "notes" => [%{"note_id" => "bn", "title" => "Bundle note"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      input =
+        MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+      assert [%{"chat_display_name" => "Bundle Charlie"}] = input["imessage"]["chats"]
+      assert [%{"title" => "Bundle note"}] = input["notes"]["items"]
+    end
+  end
+
+  # SPEC 09 R16: the smoke-brief chunking helpers moved to the shared
+  # Maraithon.TelegramChunking module. This oracle is a verbatim copy of the
+  # algorithm that used to live privately in MorningBriefing
+  # (markdown_chunks/2 + maybe_prefix_parts/1); the shared module must
+  # produce byte-identical output.
+  describe "telegram chunking extraction (SPEC 09 R16)" do
+    defp legacy_markdown_chunks(text, limit) do
+      text
+      |> legacy_chunk_units(limit)
+      |> Enum.reduce([], fn unit, chunks -> legacy_append_chunk(chunks, unit, limit) end)
+      |> Enum.reverse()
+    end
+
+    defp legacy_chunk_units(text, limit) do
+      text
+      |> String.split(~r/\n{2,}/, trim: true)
+      |> Enum.flat_map(fn block ->
+        cond do
+          String.length(block) <= limit ->
+            [block]
+
+          String.contains?(block, "\n") ->
+            block
+            |> String.split("\n", trim: true)
+            |> Enum.flat_map(&legacy_hard_split(&1, limit))
+
+          true ->
+            legacy_hard_split(block, limit)
+        end
+      end)
+    end
+
+    defp legacy_hard_split(text, limit) do
+      if String.length(text) <= limit do
+        [text]
+      else
+        {chunk, rest} = String.split_at(text, limit)
+        [chunk | legacy_hard_split(rest, limit)]
+      end
+    end
+
+    defp legacy_append_chunk([], unit, _limit), do: [unit]
+
+    defp legacy_append_chunk([current | rest], unit, limit) do
+      candidate = current <> "\n\n" <> unit
+
+      if String.length(candidate) <= limit do
+        [candidate | rest]
+      else
+        [unit, current | rest]
+      end
+    end
+
+    defp legacy_prefix_parts([_single] = chunks), do: chunks
+
+    defp legacy_prefix_parts(chunks) do
+      total = length(chunks)
+
+      chunks
+      |> Enum.with_index(1)
+      |> Enum.map(fn {chunk, index} -> "Part #{index}/#{total}\n\n#{chunk}" end)
+    end
+
+    test "Maraithon.TelegramChunking produces byte-identical output to the extracted helpers" do
+      inputs = [
+        {"Morning briefing\n\nShort summary.\n\nBody paragraph.", 3_300},
+        {"Morning briefing\n\n" <>
+           Enum.map_join(1..80, "\n\n", fn index ->
+             "Paragraph #{index}: " <> String.duplicate("substantive detail ", 10)
+           end), 3_300},
+        # A single oversized block with inner newlines (line-level split).
+        {Enum.map_join(1..300, "\n", fn index -> "line #{index} of one giant block" end), 500},
+        # A single line longer than the limit (hard character split).
+        {String.duplicate("x", 1_250), 500},
+        # Multi-blank-line separators and trailing whitespace blocks.
+        {"a\n\n\n\nb\n\n  \n\nc", 4},
+        {"", 3_300}
+      ]
+
+      for {text, limit} <- inputs do
+        legacy = text |> legacy_markdown_chunks(limit) |> legacy_prefix_parts()
+
+        shared =
+          text
+          |> Maraithon.TelegramChunking.chunks(limit)
+          |> Maraithon.TelegramChunking.label_parts()
+
+        assert shared == legacy
+      end
+    end
+
+    test "multi-part output respects the limit and labels every part" do
+      text =
+        Enum.map_join(1..80, "\n\n", fn index ->
+          "Paragraph #{index}: " <> String.duplicate("substantive detail ", 10)
+        end)
+
+      chunks =
+        text
+        |> Maraithon.TelegramChunking.chunks(3_300)
+        |> Maraithon.TelegramChunking.label_parts()
+
+      assert length(chunks) > 1
+
+      total = length(chunks)
+
+      for {chunk, index} <- Enum.with_index(chunks, 1) do
+        assert String.starts_with?(chunk, "Part #{index}/#{total}\n\n")
+      end
+
+      # Every raw chunk fits the limit (the short "Part N/M" label rides on
+      # top with ample headroom under Telegram's 4096 wire cap).
+      raw_chunks = Maraithon.TelegramChunking.chunks(text, 3_300)
+      assert Enum.all?(raw_chunks, &(String.length(&1) <= 3_300))
+
+      # Nothing is lost: rejoining the chunks reproduces the source text.
+      assert Enum.join(raw_chunks, "\n\n") == text
+    end
+  end
+
+  defmodule ConfiguredEmail do
+    def configured?, do: true
+  end
+
+  defmodule DisabledEmail do
+    def configured?, do: false
+  end
+end

@@ -1,0 +1,995 @@
+defmodule Maraithon.AgentsTest do
+  use Maraithon.DataCase, async: true
+
+  alias Maraithon.AgentIsolation
+  alias Maraithon.Agents
+  alias Maraithon.Agents.Agent
+  alias Maraithon.Agents.AgentRun
+  alias Maraithon.Agents.AgentRunStep
+  alias Maraithon.Accounts
+  alias Maraithon.Projects
+  alias Maraithon.Repo
+
+  @valid_attrs %{behavior: "prompt_agent", config: %{prompt: "test"}}
+
+  setup do
+    Repo.delete_all(Agent)
+    :ok
+  end
+
+  describe "list_agents/0" do
+    test "returns empty list when no agents" do
+      assert Agents.list_agents() == []
+    end
+
+    test "returns all agents" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      agents = Agents.list_agents()
+
+      assert length(agents) == 1
+      assert hd(agents).id == agent.id
+    end
+
+    test "filters agents by project" do
+      user_id = "agents-projects@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      {:ok, project} = Projects.create_project(user_id, %{"name" => "Maraithon Product"})
+
+      {:ok, attached} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{user_id: user_id, project_id: project.id}))
+
+      {:ok, _global} = Agents.create_agent(Map.merge(@valid_attrs, %{user_id: user_id}))
+
+      assert [%Agent{id: id}] = Agents.list_agents(user_id: user_id, project_id: project.id)
+      assert id == attached.id
+    end
+  end
+
+  describe "get_agent/1" do
+    test "returns agent when exists" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert Agents.get_agent(agent.id).id == agent.id
+    end
+
+    test "returns nil when agent does not exist" do
+      assert Agents.get_agent(Ecto.UUID.generate()) == nil
+    end
+  end
+
+  describe "get_agent!/1" do
+    test "returns agent when exists" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert Agents.get_agent!(agent.id).id == agent.id
+    end
+
+    test "raises when agent does not exist" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Agents.get_agent!(Ecto.UUID.generate())
+      end
+    end
+  end
+
+  describe "create_agent/1" do
+    test "creates agent with valid attrs" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert agent.behavior == "prompt_agent"
+      assert agent.config == %{prompt: "test"}
+      assert agent.status == "stopped"
+    end
+
+    test "returns error with invalid behavior" do
+      {:error, changeset} = Agents.create_agent(%{behavior: "nonexistent_behavior"})
+
+      assert %{behavior: ["unknown behavior: nonexistent_behavior"]} = errors_on(changeset)
+    end
+
+    test "returns error when behavior is missing" do
+      {:error, changeset} = Agents.create_agent(%{})
+
+      assert %{behavior: ["can't be blank"]} = errors_on(changeset)
+    end
+  end
+
+  describe "update_agent/2" do
+    test "updates agent with valid attrs" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, updated} = Agents.update_agent(agent, %{status: "running"})
+
+      assert updated.status == "running"
+    end
+
+    test "returns error with invalid status" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:error, changeset} = Agents.update_agent(agent, %{status: "invalid"})
+
+      assert %{status: ["is invalid"]} = errors_on(changeset)
+    end
+  end
+
+  describe "delete_agent/1" do
+    test "deletes agent" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, _} = Agents.delete_agent(agent)
+
+      assert Agents.get_agent(agent.id) == nil
+    end
+  end
+
+  describe "marketplace packages" do
+    test "syncs a package manifest, installs it for a user, and soft-removes it" do
+      slug = "test-agent-#{System.unique_integer([:positive])}"
+      user_id = "marketplace@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      manifest = %{
+        "slug" => slug,
+        "name" => "Test Marketplace Agent",
+        "summary" => "A package-backed test agent",
+        "category" => "Test",
+        "version" => "1.0.0",
+        "changelog" => "Adds a package-backed install path.",
+        "behavior" => "prompt_agent",
+        "model" => "mock-v1",
+        "intelligence" => "high",
+        "default_config" => %{
+          "behavior" => "prompt_agent",
+          "prompt" => "Use the model for every semantic decision.",
+          "memory_limit" => "10",
+          "subscriptions" => "",
+          "tools" => "llm.complete",
+          "budget_llm_calls" => "10",
+          "budget_tool_calls" => "20"
+        }
+      }
+
+      assert {:ok, package} = Agents.sync_agent_package_manifest(manifest)
+      assert package.latest_version.model == "mock-v1"
+      assert package.latest_version.changelog == "Adds a package-backed install path."
+
+      assert {:ok, agent} = Agents.install_agent_package(user_id, slug)
+      assert agent.user_id == user_id
+      assert agent.agent_package_id == package.id
+      assert agent.agent_package_version_id == package.latest_version.id
+      assert agent.config["prompt"] == "Use the model for every semantic decision."
+      assert agent.install_status == "setup_required"
+      assert agent.status == "stopped"
+
+      assert [%Agent{id: installed_id}] = Agents.list_agents(user_id: user_id)
+      assert installed_id == agent.id
+
+      assert {:ok, removed} = Agents.remove_agent_installation(agent)
+      assert removed.install_status == "removed"
+      assert Agents.list_agents(user_id: user_id) == []
+
+      assert [%Agent{id: ^installed_id}] =
+               Agents.list_agents(user_id: user_id, include_removed: true)
+    end
+
+    test "accepts manifest-driven packages without behavior-specific modules" do
+      slug = "manifest-agent-#{System.unique_integer([:positive])}"
+
+      manifest = %{
+        "slug" => slug,
+        "name" => "Manifest Agent",
+        "version" => "1.0.0",
+        "behavior" => "manifest_agent",
+        "system_prompt" => "Use the package manifest.",
+        "model" => "gpt-5.4",
+        "intelligence" => "high",
+        "goals" => ["Respond from the dynamic package"],
+        "skill_paths" => ["priv/agents/skills/chief_of_staff/morning_briefing.md"],
+        "tool_allowlist" => ["llm.complete"],
+        "mcp_allowlist" => ["google"]
+      }
+
+      assert {:ok, package} = Agents.sync_agent_package_manifest(manifest)
+      assert package.latest_version.behavior == "manifest_agent"
+
+      assert package.latest_version.skill_paths == [
+               "priv/agents/skills/chief_of_staff/morning_briefing.md"
+             ]
+
+      {:ok, _user} = Accounts.get_or_create_user_by_email("manifest@example.com")
+      assert {:ok, agent} = Agents.install_agent_package("manifest@example.com", slug)
+      assert agent.behavior == "manifest_agent"
+      assert agent.config["agent_package_version_id"] == package.latest_version.id
+      assert agent.install_status == "setup_required"
+      assert agent.status == "stopped"
+    end
+
+    test "accepts atom-keyed package manifests" do
+      slug = "atom-manifest-agent-#{System.unique_integer([:positive])}"
+
+      manifest = %{
+        slug: slug,
+        name: "Atom Manifest Agent",
+        version: "1.0.0",
+        behavior: "manifest_agent",
+        system_prompt: "Use normalized manifest keys.",
+        model: "gpt-5.4",
+        intelligence: "high",
+        goals: ["Run from a normalized manifest"],
+        skill_paths: ["priv/agents/skills/chief_of_staff/morning_briefing.md"],
+        tool_allowlist: ["llm.complete"]
+      }
+
+      assert {:ok, package} = Agents.sync_agent_package_manifest(manifest)
+      assert package.slug == slug
+      assert package.latest_version.model == "gpt-5.4"
+      assert package.latest_version.goals == ["Run from a normalized manifest"]
+    end
+
+    test "returns structured errors for invalid package manifests" do
+      assert {:error, {:invalid_agent_manifest, errors}} =
+               Agents.sync_agent_package_manifest(%{
+                 "name" => "Broken Agent",
+                 "behavior" => "manifest_agent",
+                 "model" => "   "
+               })
+
+      assert {:slug, "is required"} in errors
+      assert {:model, "is required"} in errors
+      assert {:intelligence, "is required"} in errors
+      assert {:skill_paths, "must include at least one Markdown skill path"} in errors
+
+      assert {:error, {:invalid_agent_manifest, skill_errors}} =
+               Agents.sync_agent_package_manifest(%{
+                 "slug" => "broken-skill-#{System.unique_integer([:positive])}",
+                 "name" => "Broken Skill Agent",
+                 "behavior" => "manifest_agent",
+                 "model" => "gpt-5.4",
+                 "intelligence" => "high",
+                 "skill_paths" => ["priv/agents/skills/missing.md"]
+               })
+
+      assert [
+               skill_paths:
+                 "could not load Markdown skills: {:skill_not_found, \"priv/agents/skills/missing.md\"}"
+             ] = skill_errors
+
+      assert {:error, {:invalid_agent_manifest, [manifest: "must be a map"]}} =
+               Agents.sync_agent_package_manifest(nil)
+    end
+
+    test "pauses, resumes, and upgrades installed package agents" do
+      slug = "upgrade-agent-#{System.unique_integer([:positive])}"
+
+      assert {:ok, package} =
+               Agents.sync_agent_package_manifest(%{
+                 "slug" => slug,
+                 "name" => "Upgradeable Agent",
+                 "version" => "1.0.0",
+                 "behavior" => "manifest_agent",
+                 "system_prompt" => "First version.",
+                 "model" => "gpt-5.4",
+                 "intelligence" => "high",
+                 "skill_paths" => ["priv/agents/skills/chief_of_staff/morning_briefing.md"]
+               })
+
+      {:ok, _user} = Accounts.get_or_create_user_by_email("upgrade@example.com")
+      assert {:ok, agent} = Agents.install_agent_package("upgrade@example.com", slug)
+      assert {:ok, paused} = Agents.pause_agent_installation(agent)
+      assert paused.install_status == "paused"
+      assert paused.status == "stopped"
+
+      assert {:ok, resumed} = Agents.resume_agent_installation(paused)
+      assert resumed.install_status == "enabled"
+
+      assert {:ok, version_2} =
+               Agents.create_agent_package_version(%{
+                 agent_package_id: package.id,
+                 version: "2.0.0",
+                 behavior: "manifest_agent",
+                 system_prompt: "Second version.",
+                 model: "gpt-5.4",
+                 intelligence: "high",
+                 skill_paths: ["priv/agents/skills/chief_of_staff/morning_briefing.md"],
+                 published_at: DateTime.utc_now()
+               })
+
+      assert {:ok, upgraded} = Agents.upgrade_agent_installation(resumed, version_2)
+      assert upgraded.agent_package_version_id == version_2.id
+      assert upgraded.config["agent_package_version_id"] == version_2.id
+    end
+
+    test "publishes and deprecates packages and package versions" do
+      slug = "admin-agent-#{System.unique_integer([:positive])}"
+
+      assert {:ok, package} =
+               Agents.sync_agent_package_manifest(%{
+                 "slug" => slug,
+                 "name" => "Admin Agent",
+                 "version" => "1.0.0",
+                 "behavior" => "manifest_agent",
+                 "system_prompt" => "Use the manifest.",
+                 "model" => "gpt-5.4",
+                 "intelligence" => "high",
+                 "skill_paths" => ["priv/agents/skills/chief_of_staff/morning_briefing.md"],
+                 "version_status" => "draft"
+               })
+
+      version = package.latest_version
+      assert version.status == "draft"
+
+      assert {:ok, deprecated_package} = Agents.deprecate_agent_package(package)
+      assert deprecated_package.status == "deprecated"
+
+      assert {:ok, published_package} = Agents.publish_agent_package(deprecated_package)
+      assert published_package.status == "published"
+
+      assert {:ok, published_version} = Agents.publish_agent_package_version(version)
+      assert published_version.status == "published"
+      assert published_version.published_at
+
+      reloaded_package = Agents.get_agent_package_by_slug(slug, preload: [:latest_version])
+      assert reloaded_package.latest_version_id == published_version.id
+
+      assert {:ok, deprecated_version} = Agents.deprecate_agent_package_version(published_version)
+      assert deprecated_version.status == "deprecated"
+    end
+  end
+
+  describe "agent runs" do
+    test "records run and step observability" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:ok, %AgentRun{} = run} =
+               Agents.start_agent_run(agent, %{
+                 trigger_type: "message",
+                 trigger: %{"type" => "message"},
+                 resolved_model: "gpt-5.4",
+                 intelligence: "high",
+                 generation_mode: "llm"
+               })
+
+      assert {:ok, step} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 step_type: "llm_call",
+                 status: "requested",
+                 resolved_model: "gpt-5.4",
+                 intelligence: "high",
+                 generation_mode: "llm"
+               })
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "completed",
+                 finish_reason: "stop"
+               })
+
+      assert completed_step.completed_at
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(run.id, %{
+                 finish_reason: "stop",
+                 generation_mode: "llm"
+               })
+
+      assert completed_run.status == "completed"
+      assert completed_run.completed_at
+
+      assert {:error, {:run_step_not_requested, "completed"}} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "failed",
+                 error: "late_result"
+               })
+
+      assert {:error, {:run_not_running, "completed"}} =
+               Agents.fail_agent_run(run.id, %{error: "late_result"})
+
+      assert Repo.get!(AgentRunStep, step.id).status == "completed"
+      assert Repo.get!(AgentRun, run.id).status == "completed"
+      assert Repo.get!(AgentRun, run.id).finish_reason == "stop"
+
+      assert [listed] = Agents.list_agent_runs(agent.id, preload: [:steps])
+      assert listed.id == run.id
+      assert [%{id: step_id}] = listed.steps
+      assert step_id == step.id
+    end
+
+    test "canonicalizes string and agreeing mixed keys for Run and RunStep creation" do
+      {:ok, string_agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:ok, string_run} =
+               Agents.start_agent_run(string_agent, %{
+                 "status" => "running",
+                 "trigger_type" => "message",
+                 "generation_mode" => "llm",
+                 "unknown_provider_fact" => "ignored"
+               })
+
+      assert string_run.status == "running"
+      assert string_run.trigger_type == "message"
+      assert string_run.generation_mode == "llm"
+
+      assert {:ok, string_step} =
+               Agents.record_agent_run_step(string_run.id, string_agent.id, %{
+                 "sequence" => 7,
+                 "step_type" => "llm_call",
+                 "status" => "requested",
+                 "generation_mode" => "llm"
+               })
+
+      assert string_step.sequence == 7
+      assert string_step.status == "requested"
+      assert string_step.generation_mode == "llm"
+
+      {:ok, mixed_agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:ok, mixed_run} =
+               Agents.start_agent_run(mixed_agent, %{
+                 :status => "running",
+                 "status" => "running",
+                 :trigger_type => "schedule",
+                 "resolved_model" => "gpt-5.4"
+               })
+
+      assert mixed_run.status == "running"
+      assert mixed_run.trigger_type == "schedule"
+      assert mixed_run.resolved_model == "gpt-5.4"
+
+      assert {:ok, mixed_step} =
+               Agents.record_agent_run_step(mixed_run.id, mixed_agent.id, %{
+                 :status => "requested",
+                 "status" => "requested",
+                 :step_type => "llm_call",
+                 "generation_mode" => "llm"
+               })
+
+      assert mixed_step.status == "requested"
+      assert mixed_step.step_type == "llm_call"
+      assert mixed_step.generation_mode == "llm"
+
+      {:ok, runtime_agent} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{status: "running"}))
+
+      assert {:ok, runtime_run} =
+               Agents.start_runtime_agent_run(runtime_agent, %{
+                 :status => "running",
+                 "status" => "running",
+                 "trigger_type" => "runtime"
+               })
+
+      assert runtime_run.status == "running"
+      assert runtime_run.trigger_type == "runtime"
+    end
+
+    test "settles string and agreeing mixed Run and RunStep terminal attrs" do
+      new_run = fn ->
+        {:ok, agent} = Agents.create_agent(@valid_attrs)
+        {:ok, run} = Agents.start_agent_run(agent)
+        {agent, run}
+      end
+
+      {complete_agent, complete_run} = new_run.()
+
+      {:ok, complete_step} =
+        Agents.record_agent_run_step(complete_run.id, complete_agent.id, %{
+          "step_type" => "llm_call"
+        })
+
+      {fail_agent, fail_run} = new_run.()
+
+      {:ok, fail_step} =
+        Agents.record_agent_run_step(fail_run.id, fail_agent.id, %{
+          "step_type" => "llm_call"
+        })
+
+      {_direct_agent, direct_run} = new_run.()
+      {mixed_agent, mixed_run} = new_run.()
+
+      {:ok, mixed_step} =
+        Agents.record_agent_run_step(mixed_run.id, mixed_agent.id, %{
+          "step_type" => "llm_call"
+        })
+
+      %{rows: [[window_start]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(complete_step.id, %{
+                 "status" => "completed",
+                 "finish_reason" => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(complete_run.id, %{
+                 "finish_reason" => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, failed_step} =
+               Agents.update_agent_run_step(fail_step.id, fail_agent.id, fail_run.id, %{
+                 "status" => "failed",
+                 "error" => "provider_failed",
+                 "finish_reason" => "error"
+               })
+
+      assert {:ok, failed_run} =
+               Agents.fail_agent_run(fail_run.id, %{
+                 "status" => "completed",
+                 "error" => "provider_failed",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, direct_completed_run} =
+               Agents.update_agent_run(direct_run.id, %{
+                 "status" => "completed",
+                 "finish_reason" => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, mixed_completed_step} =
+               Agents.update_agent_run_step(mixed_step.id, %{
+                 :status => "completed",
+                 "status" => "completed",
+                 :finish_reason => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, mixed_cancelled_run} =
+               Agents.complete_agent_run(mixed_run.id, %{
+                 :status => "cancelled",
+                 "status" => "cancelled",
+                 :finish_reason => "cancelled",
+                 "generation_mode" => "llm"
+               })
+
+      %{rows: [[window_end]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert completed_run.status == "completed"
+      assert completed_run.finish_reason == "stop"
+      assert completed_run.generation_mode == "llm"
+      assert failed_run.status == "failed"
+      assert failed_run.error == "provider_failed"
+      assert failed_run.generation_mode == "llm"
+      assert direct_completed_run.status == "completed"
+      assert direct_completed_run.finish_reason == "stop"
+      assert mixed_cancelled_run.status == "cancelled"
+      assert mixed_cancelled_run.finish_reason == "cancelled"
+      assert completed_step.finish_reason == "stop"
+      assert completed_step.generation_mode == "llm"
+      assert failed_step.status == "failed"
+      assert failed_step.error == "provider_failed"
+      assert mixed_completed_step.finish_reason == "stop"
+
+      for terminal <- [
+            completed_step,
+            completed_run,
+            failed_step,
+            failed_run,
+            direct_completed_run,
+            mixed_completed_step,
+            mixed_cancelled_run
+          ] do
+        assert DateTime.compare(terminal.completed_at, window_start) in [:eq, :gt]
+        assert DateTime.compare(terminal.completed_at, window_end) in [:eq, :lt]
+      end
+
+      assert {:error, {:run_step_not_requested, "completed"}} =
+               Agents.update_agent_run_step(complete_step.id, %{
+                 "status" => "failed",
+                 "finish_reason" => "late"
+               })
+
+      assert {:error, {:run_not_running, "completed"}} =
+               Agents.complete_agent_run(complete_run.id, %{"finish_reason" => "late"})
+
+      persisted_step = Repo.get!(AgentRunStep, complete_step.id)
+      persisted_run = Repo.get!(AgentRun, complete_run.id)
+      assert persisted_step.finish_reason == "stop"
+      assert persisted_step.generation_mode == "llm"
+      assert persisted_step.updated_at == completed_step.updated_at
+      assert persisted_step.completed_at == completed_step.completed_at
+      assert persisted_run.finish_reason == "stop"
+      assert persisted_run.generation_mode == "llm"
+      assert persisted_run.updated_at == completed_run.updated_at
+      assert persisted_run.completed_at == completed_run.completed_at
+    end
+
+    test "rejects conflicting or invalid top-level Run and RunStep keys without mutation" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.start_agent_run(agent, %{:status => "running", "status" => "completed"})
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.start_agent_run(agent, %{42 => "invalid", "status" => "running"})
+
+      assert Repo.aggregate(AgentRun, :count) == 0
+      {:ok, run} = Agents.start_agent_run(agent)
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 :status => "requested",
+                 "status" => "completed",
+                 "step_type" => "llm_call"
+               })
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 {"invalid", :key} => true,
+                 "step_type" => "llm_call"
+               })
+
+      assert Repo.aggregate(AgentRunStep, :count) == 0
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{"step_type" => "llm_call"})
+
+      stored_run = Repo.get!(AgentRun, run.id)
+      stored_step = Repo.get!(AgentRunStep, step.id)
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.complete_agent_run(run.id, %{
+                 :finish_reason => "stop",
+                 "finish_reason" => "length"
+               })
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.fail_agent_run(run.id, %{42 => "invalid", "error" => "failed"})
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.update_agent_run(run.id, %{
+                 :status => "completed",
+                 "status" => "failed"
+               })
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.update_agent_run_step(step.id, %{
+                 :status => "completed",
+                 "status" => "failed"
+               })
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.update_agent_run_step(step.id, agent.id, run.id, %{
+                 42 => "invalid",
+                 "status" => "completed"
+               })
+
+      assert Repo.get!(AgentRun, run.id) == stored_run
+      assert Repo.get!(AgentRunStep, step.id) == stored_step
+      assert Repo.aggregate(AgentRun, :count) == 1
+      assert Repo.aggregate(AgentRunStep, :count) == 1
+    end
+
+    test "creation only admits running Runs and requested RunSteps" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:error, :invalid_agent_run_status} =
+               Agents.start_agent_run(agent, %{status: "completed"})
+
+      assert Repo.aggregate(AgentRun, :count) == 0
+      assert {:ok, run} = Agents.start_agent_run(agent)
+
+      assert {:error, :invalid_agent_run_step_status} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 step_type: "llm_call",
+                 status: "completed"
+               })
+
+      assert Repo.aggregate(AgentRunStep, :count) == 0
+    end
+
+    test "rejects caller completed_at when creating Runs and RunSteps" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      forged_completed_at = ~U[2001-02-03 04:05:06.000000Z]
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_agent_run(agent, %{completed_at: forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_agent_run(agent, %{"completed_at" => forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_agent_run(agent, %{
+                 :completed_at => forged_completed_at,
+                 "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+                 42 => "invalid"
+               })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_runtime_agent_run(agent, %{
+                 :completed_at => forged_completed_at,
+                 "completed_at" => forged_completed_at
+               })
+
+      assert Repo.aggregate(AgentRun, :count) == 0
+      assert {:ok, run} = Agents.start_agent_run(agent)
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 step_type: "llm_call",
+                 completed_at: forged_completed_at
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 "step_type" => "llm_call",
+                 "completed_at" => forged_completed_at
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 :completed_at => forged_completed_at,
+                 "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+                 42 => "invalid",
+                 "step_type" => "llm_call"
+               })
+
+      assert Repo.aggregate(AgentRunStep, :count) == 0
+    end
+
+    test "rejects caller completed_at on Run and RunStep updates without mutation" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, run} = Agents.start_agent_run(agent)
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{
+          step_type: "llm_call",
+          status: "requested"
+        })
+
+      forged_completed_at = ~U[2001-02-03 04:05:06.000000Z]
+      stored_run = Repo.get!(AgentRun, run.id)
+      stored_step = Repo.get!(AgentRunStep, step.id)
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.update_agent_run(run.id, %{
+                 completed_at: forged_completed_at,
+                 error: "forged"
+               })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.update_agent_run(run.id, %{
+                 "completed_at" => forged_completed_at,
+                 "error" => "forged"
+               })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.complete_agent_run(run.id, %{completed_at: forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.complete_agent_run(run.id, %{"completed_at" => forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.fail_agent_run(run.id, %{completed_at: forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.fail_agent_run(run.id, %{"completed_at" => forged_completed_at})
+
+      mixed_run_forgery = %{
+        :completed_at => forged_completed_at,
+        "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+        42 => "invalid",
+        "status" => "completed"
+      }
+
+      for update <- [
+            &Agents.update_agent_run(run.id, &1),
+            &Agents.complete_agent_run(run.id, &1),
+            &Agents.fail_agent_run(run.id, &1)
+          ] do
+        assert {:error, :immutable_agent_run_identity} = update.(mixed_run_forgery)
+      end
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, %{
+                 completed_at: forged_completed_at,
+                 error: "forged"
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, %{
+                 "completed_at" => forged_completed_at,
+                 "error" => "forged"
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, agent.id, run.id, %{
+                 completed_at: forged_completed_at
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, agent.id, run.id, %{
+                 "completed_at" => forged_completed_at
+               })
+
+      mixed_step_forgery = %{
+        :completed_at => forged_completed_at,
+        "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+        42 => "invalid",
+        "status" => "completed"
+      }
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, mixed_step_forgery)
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(
+                 step.id,
+                 agent.id,
+                 run.id,
+                 mixed_step_forgery
+               )
+
+      assert Repo.get!(AgentRun, run.id) == stored_run
+      assert Repo.get!(AgentRunStep, step.id) == stored_step
+
+      %{rows: [[step_window_start]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "completed",
+                 finish_reason: "stop"
+               })
+
+      %{rows: [[step_window_end]]} = Repo.query!("SELECT clock_timestamp()")
+      assert DateTime.compare(completed_step.completed_at, step_window_start) in [:eq, :gt]
+      assert DateTime.compare(completed_step.completed_at, step_window_end) in [:eq, :lt]
+      refute completed_step.completed_at == forged_completed_at
+
+      %{rows: [[run_window_start]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(run.id, %{finish_reason: "stop"})
+
+      %{rows: [[run_window_end]]} = Repo.query!("SELECT clock_timestamp()")
+      assert DateTime.compare(completed_run.completed_at, run_window_start) in [:eq, :gt]
+      assert DateTime.compare(completed_run.completed_at, run_window_end) in [:eq, :lt]
+      refute completed_run.completed_at == forged_completed_at
+    end
+
+    test "rejects Run and RunStep reparenting while preserving terminal provider fields" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, other_agent} = Agents.create_agent(@valid_attrs)
+      {:ok, run} = Agents.start_agent_run(agent)
+      {:ok, other_run} = Agents.start_agent_run(other_agent)
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{
+          step_type: "llm_call",
+          status: "requested"
+        })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.update_agent_run(run.id, %{
+                 "agent_id" => other_agent.id,
+                 "status" => "completed",
+                 "finish_reason" => "forged"
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, %{
+                 agent_run_id: other_run.id,
+                 status: "completed",
+                 finish_reason: "forged"
+               })
+
+      assert {:error, :run_step_not_owned} =
+               Agents.update_agent_run_step(
+                 step.id,
+                 other_agent.id,
+                 other_run.id,
+                 %{status: "completed", finish_reason: "forged"}
+               )
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "completed",
+                 resolved_model: "gpt-5.4",
+                 intelligence: "high",
+                 finish_reason: "stop",
+                 generation_mode: "llm"
+               })
+
+      assert completed_step.agent_id == agent.id
+      assert completed_step.agent_run_id == run.id
+      assert completed_step.sequence == step.sequence
+      assert completed_step.finish_reason == "stop"
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(run.id, %{
+                 resolved_model: "gpt-5.4",
+                 intelligence: "high",
+                 finish_reason: "stop",
+                 generation_mode: "llm"
+               })
+
+      assert completed_run.agent_id == agent.id
+      assert completed_run.finish_reason == "stop"
+      assert completed_run.generation_mode == "llm"
+    end
+  end
+
+  describe "count_by_status/1" do
+    test "counts agents by status" do
+      Agents.create_agent(Map.put(@valid_attrs, :status, "running"))
+      Agents.create_agent(Map.put(@valid_attrs, :status, "running"))
+      Agents.create_agent(Map.put(@valid_attrs, :status, "stopped"))
+
+      assert Agents.count_by_status("running") == 2
+      assert Agents.count_by_status("stopped") == 1
+      assert Agents.count_by_status("degraded") == 0
+    end
+  end
+
+  describe "list_resumable_agents/0" do
+    test "returns agents with running or degraded status" do
+      {:ok, running} = Agents.create_agent(Map.put(@valid_attrs, :status, "running"))
+      {:ok, degraded} = Agents.create_agent(Map.put(@valid_attrs, :status, "degraded"))
+      Agents.create_agent(Map.put(@valid_attrs, :status, "stopped"))
+
+      resumable = Agents.list_resumable_agents()
+      ids = Enum.map(resumable, & &1.id)
+
+      assert length(resumable) == 2
+      assert running.id in ids
+      assert degraded.id in ids
+    end
+  end
+
+  describe "runtime recovery fence" do
+    test "excludes an Agent from effect admission until recovery finishes" do
+      {:ok, agent} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{status: "running"}))
+
+      assert {:ok, recovering} = Agents.begin_runtime_agent_recovery(agent.id)
+      assert recovering.status == "recovering"
+      assert Repo.get!(Agent, agent.id).status == "recovering"
+      assert {:error, :agent_recovering} = Agents.claim_agent_start(agent.id)
+
+      assert {:ok, running} = Agents.finish_runtime_agent_recovery(agent.id)
+      assert running.status == "running"
+    end
+  end
+
+  describe "claim_agent_start/1" do
+    test "atomically admits only one explicitly consented start transition" do
+      user_id = "claim-start-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, agent} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{status: "stopped", user_id: user_id}))
+
+      {:ok, _binding} = AgentIsolation.grant_binding_consent(agent, binding_consent(agent))
+
+      assert {:ok, claimed} = Agents.claim_agent_start(agent.id)
+      assert claimed.status == "running"
+      assert {:error, :already_running} = Agents.claim_agent_start(agent.id)
+      assert Repo.get!(Agent, agent.id).status == "running"
+    end
+  end
+
+  describe "mark_running/1" do
+    test "updates status to running and sets started_at" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, running} = Agents.mark_running(agent)
+
+      assert running.status == "running"
+      assert running.started_at != nil
+    end
+  end
+
+  describe "mark_stopped/1" do
+    test "updates status to stopped and sets stopped_at" do
+      {:ok, agent} = Agents.create_agent(Map.put(@valid_attrs, :status, "running"))
+      {:ok, stopped} = Agents.mark_stopped(agent)
+
+      assert stopped.status == "stopped"
+      assert stopped.stopped_at != nil
+    end
+  end
+
+  describe "mark_degraded/1" do
+    test "updates status to degraded" do
+      {:ok, agent} = Agents.create_agent(Map.put(@valid_attrs, :status, "running"))
+      {:ok, degraded} = Agents.mark_degraded(agent)
+
+      assert degraded.status == "degraded"
+    end
+  end
+end

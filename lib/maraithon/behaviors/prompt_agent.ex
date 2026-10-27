@@ -1,0 +1,623 @@
+defmodule Maraithon.Behaviors.PromptAgent do
+  @moduledoc """
+  A generic, prompt-driven agent behavior.
+
+  Instead of writing Elixir code, define agent behavior through a prompt.
+  The agent subscribes to event streams and processes them through the LLM.
+
+  Config:
+    - name: Agent name (for identification)
+    - prompt: The system prompt defining who the agent is and how it thinks
+    - subscribe: List of PubSub topics to subscribe to
+    - tools: List of tool names the agent can use
+    - memory_limit: Max events to remember (default: 50)
+
+  Example:
+    %{
+      "name" => "guardian",
+      "prompt" => "You are a code guardian. Watch for issues and speak up.",
+      "subscribe" => ["repo:acme/widgets", "alerts:errors"],
+      "tools" => ["read_file", "search_files", "http_get"],
+      "memory_limit" => 100
+    }
+  """
+
+  @behaviour Maraithon.Behaviors.Behavior
+
+  @default_memory_limit 50
+  @empty_user_memory_guidance "Use current context and confirmed preferences until a long-term user profile is ready."
+  @empty_open_loops_guidance "No saved open work is waiting in Maraithon. Only create or mention follow-up when current connected context provides a concrete next move."
+
+  alias Maraithon.LLM
+  alias Maraithon.Tools.ActionHelpers
+
+  require Logger
+
+  @impl true
+  def init(config) do
+    name = config["name"] || "unnamed_agent"
+    prompt = config["prompt"] || "You are a helpful assistant."
+    subscribe = config["subscribe"] || []
+    tools = config["tools"] || []
+    memory_limit = config["memory_limit"] || @default_memory_limit
+
+    Logger.info("PromptAgent initializing",
+      name: name,
+      subscriptions: length(subscribe),
+      tools: length(tools)
+    )
+
+    %{
+      name: name,
+      prompt: prompt,
+      subscriptions: subscribe,
+      allowed_tools: tools,
+      memory_limit: memory_limit,
+
+      # Memory - rolling buffer of events
+      memory: [],
+
+      # Current processing state
+      processing_event: nil,
+      pending_tool_call: nil,
+
+      # Stats
+      events_seen: 0,
+      actions_taken: 0,
+
+      # Track last processed to avoid duplicates
+      last_processed_message: nil
+    }
+  end
+
+  @impl true
+  def handle_wakeup(state, context) do
+    last_message = Map.get(context, :last_message)
+    timestamp = Map.get(context, :timestamp)
+    last_message_metadata = Map.get(context, :last_message_metadata, %{})
+    last_message_id = Map.get(context, :last_message_id)
+    pubsub_event = Map.get(context, :event)
+
+    # Check for new events: message, pubsub event, or just a wakeup
+    cond do
+      # Direct message to agent
+      last_message && last_message != state.last_processed_message ->
+        event = %{
+          type: :message,
+          content: last_message,
+          timestamp: timestamp,
+          source: "direct",
+          metadata: last_message_metadata,
+          message_id: last_message_id
+        }
+
+        state = %{state | last_processed_message: last_message}
+        process_event(state, event, context)
+
+      # PubSub event
+      pubsub_event != nil ->
+        event = %{
+          type: :pubsub,
+          topic: event_field(pubsub_event, :topic),
+          content: event_field(pubsub_event, :payload),
+          timestamp: timestamp,
+          source: event_field(pubsub_event, :topic)
+        }
+
+        process_event(state, event, context)
+
+      # Regular wakeup - check if we should do something proactive
+      true ->
+        maybe_proactive_action(state, context)
+    end
+  end
+
+  @impl true
+  def handle_effect_result({:llm_call, response}, state, context) do
+    handle_llm_response(response, state, context)
+  end
+
+  def handle_effect_result({:tool_call, result}, state, context) do
+    handle_tool_result(result, state, context)
+  end
+
+  @impl true
+  def next_wakeup(_state) do
+    # Wake up periodically to allow proactive behavior
+    # But not too often - we're mostly event-driven
+    {:relative, :timer.minutes(5)}
+  end
+
+  # ===========================================================================
+  # Event Processing
+  # ===========================================================================
+
+  defp process_event(state, event, context) do
+    # Add event to memory
+    state = add_to_memory(state, event)
+    state = %{state | processing_event: event, events_seen: state.events_seen + 1}
+
+    Logger.info("Processing event",
+      agent: state.name,
+      event_type: event.type,
+      source: event.source
+    )
+
+    # Build prompt and ask LLM what to do
+    prompt = build_thinking_prompt(state, event, context)
+
+    params = llm_params(prompt, 2_000)
+
+    {:effect, {:llm_call, params}, state}
+  end
+
+  defp maybe_proactive_action(state, context) do
+    # If we have memory and haven't acted recently, maybe do something proactive
+    if length(state.memory) > 0 do
+      prompt = build_proactive_prompt(state, context)
+
+      params = llm_params(prompt, 1_000)
+
+      {:effect, {:llm_call, params}, state}
+    else
+      {:idle, state}
+    end
+  end
+
+  # ===========================================================================
+  # LLM Response Handling
+  # ===========================================================================
+
+  defp handle_llm_response(response, state, _context) do
+    content = response.content
+
+    # Parse the response to see if the agent wants to take action
+    case parse_action(content, state.allowed_tools) do
+      {:tool_call, tool, args} ->
+        Logger.info("Agent requesting tool call",
+          agent: state.name,
+          tool: tool,
+          args: inspect(args)
+        )
+
+        state = %{state | pending_tool_call: %{tool: tool, args: args}}
+        {:effect, {:tool_call, tool, args}, state}
+
+      {:respond, message} ->
+        Logger.info("Agent responding",
+          agent: state.name,
+          message: String.slice(message, 0, 100)
+        )
+
+        state = %{state | processing_event: nil, actions_taken: state.actions_taken + 1}
+
+        {:emit,
+         {:agent_response,
+          %{
+            agent: state.name,
+            response: message,
+            event_type: get_in(state, [:processing_event, :type]),
+            correlation_id: get_in(state, [:processing_event, :metadata, "correlation_id"]),
+            message_id: get_in(state, [:processing_event, :message_id])
+          }}, state}
+
+      :observe ->
+        # Agent chose to just observe, not act
+        Logger.debug("Agent observing", agent: state.name)
+        state = %{state | processing_event: nil}
+        {:idle, state}
+    end
+  end
+
+  defp handle_tool_result(tool_result, state, context) do
+    tool_call = state.pending_tool_call
+    prompt = build_tool_result_prompt(state, tool_call, tool_result, context)
+    params = llm_params(prompt, 1_500)
+    state = %{state | pending_tool_call: nil}
+    {:effect, {:llm_call, params}, state}
+  end
+
+  @impl true
+  def handle_effect_error(:tool_call, reason, state, _context) do
+    tool_call = state.pending_tool_call || %{}
+    correlation_id = get_in(state, [:processing_event, :metadata, "correlation_id"])
+    message_id = get_in(state, [:processing_event, :message_id])
+
+    Logger.warning("Tool call failed",
+      agent: state.name,
+      tool: Map.get(tool_call, :tool),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
+
+    state = %{state | pending_tool_call: nil, processing_event: nil}
+
+    {:emit,
+     {:agent_error,
+      %{
+        agent: state.name,
+        error: ActionHelpers.safe_error(reason),
+        correlation_id: correlation_id,
+        message_id: message_id
+      }}, state}
+  end
+
+  def handle_effect_error(:llm_call, reason, state, _context) do
+    state = %{state | pending_tool_call: nil, processing_event: nil}
+
+    {:emit, {:agent_error, %{agent: state.name, error: ActionHelpers.safe_error(reason)}}, state}
+  end
+
+  # ===========================================================================
+  # Prompt Building
+  # ===========================================================================
+
+  defp llm_params(prompt, max_tokens) do
+    %{
+      "messages" => [
+        %{"role" => "user", "content" => prompt}
+      ],
+      "max_tokens" => max_tokens,
+      "temperature" => 0.7,
+      "reasoning_effort" => "none"
+    }
+    |> maybe_put_model(LLM.chat_model())
+  end
+
+  defp maybe_put_model(params, nil), do: params
+  defp maybe_put_model(params, ""), do: params
+  defp maybe_put_model(params, model), do: Map.put(params, "model", model)
+
+  defp build_thinking_prompt(state, event, context) do
+    memory_context = format_memory(state.memory)
+    recent_events_text = format_recent_events(Map.get(context, :recent_events, []))
+    tools_list = format_tools(state.allowed_tools)
+    user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+    deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
+    open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
+
+    """
+    #{state.prompt}
+
+    ## Approved Actions
+    #{tools_list}
+
+    ## Recent Events You've Seen
+    #{memory_context}
+
+    ## Recent Connected Activity
+    #{recent_events_text}
+
+    ## Confirmed User Memory
+    #{user_memory_text}
+
+    ## Related Long-Term Memory
+    #{deep_memory_text}
+
+    ## Open Loops
+    #{open_loops_text}
+
+    ## Current Event
+    Type: #{event.type}
+    Source: #{event.source}
+    Content:
+    ```
+    #{format_content(event.content)}
+    ```
+
+    ## Instructions
+    Based on your purpose and what you've observed, decide what to do:
+
+    1. If you want to use a tool, respond with:
+       ACTION: tool_name
+       ARGS: {"param": "value"}
+
+    2. If you want to respond/communicate, respond with:
+       RESPOND: Your message here
+
+    3. If you just want to observe and remember this event, respond with:
+       OBSERVE
+
+    Think about whether this event requires action based on who you are and your purpose.
+    """
+  end
+
+  defp build_proactive_prompt(state, context) do
+    memory_context = format_memory(state.memory)
+    timestamp = Map.get(context, :timestamp) || DateTime.utc_now()
+    recent_events_text = format_recent_events(Map.get(context, :recent_events, []))
+    user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+    deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
+    open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
+
+    """
+    #{state.prompt}
+
+    ## Recent Events You've Seen
+    #{memory_context}
+
+    ## Recent Connected Activity
+    #{recent_events_text}
+
+    ## Confirmed User Memory
+    #{user_memory_text}
+
+    ## Related Long-Term Memory
+    #{deep_memory_text}
+
+    ## Open Loops
+    #{open_loops_text}
+
+    ## Current Time
+    #{DateTime.to_iso8601(timestamp)}
+
+    ## Instructions
+    You're doing a periodic check-in. Based on what you've observed recently,
+    is there anything you should proactively communicate or do?
+
+    If yes, respond with RESPOND: or ACTION:
+    If nothing needs attention right now, respond with OBSERVE
+    """
+  end
+
+  defp build_tool_result_prompt(state, tool_call, result, context) do
+    recent_events_text = format_recent_events(Map.get(context, :recent_events, []))
+    user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+    deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
+    open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
+
+    """
+    #{state.prompt}
+
+    ## Recent Connected Activity
+    #{recent_events_text}
+
+    ## Confirmed User Memory
+    #{user_memory_text}
+
+    ## Related Long-Term Memory
+    #{deep_memory_text}
+
+    ## Open Loops
+    #{open_loops_text}
+
+    ## Tool Result
+    You called: #{tool_call.tool}
+    With args: #{Jason.encode!(tool_call.args)}
+
+    Result:
+    ```
+    #{format_content(result)}
+    ```
+
+    ## Instructions
+    Based on this result, what do you want to do?
+
+    - RESPOND: Share findings or answer
+    - ACTION: Run another approved action
+    - OBSERVE: Done processing, nothing to communicate
+    """
+  end
+
+  # ===========================================================================
+  # Helpers
+  # ===========================================================================
+
+  defp add_to_memory(state, event) do
+    memory = [event | state.memory] |> Enum.take(state.memory_limit)
+    %{state | memory: memory}
+  end
+
+  defp format_memory([]), do: "(No recent events)"
+
+  defp format_memory(memory) do
+    memory
+    |> Enum.reverse()
+    # Show last 10 in prompt
+    |> Enum.take(10)
+    |> Enum.map(fn event ->
+      time = if event[:timestamp], do: DateTime.to_iso8601(event.timestamp), else: "unknown"
+      "- [#{time}] #{event.source}: #{truncate(format_content(event.content), 200)}"
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp format_tools([]), do: "(No actions available)"
+  defp format_tools(tools), do: Enum.join(tools, ", ")
+
+  defp format_recent_events([]), do: "No recent connected activity."
+
+  defp format_recent_events(events) when is_list(events) do
+    events
+    |> Enum.take(10)
+    |> Enum.map_join("\n", fn event ->
+      source = Map.get(event, :source) || Map.get(event, "source") || "connected app"
+      event_type = Map.get(event, :event_type) || Map.get(event, "event_type") || "event"
+      occurred_at = Map.get(event, :occurred_at) || Map.get(event, "occurred_at") || "unknown"
+      payload = Map.get(event, :payload) || Map.get(event, "payload") || %{}
+
+      "- [#{occurred_at}] #{source} #{event_type}: #{truncate(format_content(payload), 260)}"
+    end)
+  end
+
+  defp format_recent_events(_events), do: "No recent connected activity."
+
+  defp format_user_memory(%{"summary" => summary, "profile" => profile}) do
+    format_user_memory(%{summary: summary, profile: profile})
+  end
+
+  defp format_user_memory(%{summary: summary, profile: profile}) when is_map(profile) do
+    summary_text =
+      case normalize_optional_text(summary) do
+        nil -> @empty_user_memory_guidance
+        value -> value
+      end
+
+    details =
+      profile
+      |> Enum.map(fn {key, value} ->
+        case normalize_optional_text(value) do
+          nil -> nil
+          normalized -> "- #{key}: #{normalized}"
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
+    if details == "" do
+      summary_text
+    else
+      summary_text <> "\n" <> details
+    end
+  end
+
+  defp format_user_memory(_memory), do: @empty_user_memory_guidance
+
+  defp format_deep_memory(%{memories: memories}) when is_list(memories) do
+    format_deep_memory(%{"memories" => memories})
+  end
+
+  defp format_deep_memory(%{"memories" => memories}) when is_list(memories) do
+    case memories do
+      [] ->
+        "No relevant long-term memories matched this context."
+
+      _ ->
+        memories
+        |> Enum.take(8)
+        |> Enum.map_join("\n", fn memory ->
+          title = Map.get(memory, :title) || Map.get(memory, "title")
+          kind = Map.get(memory, :kind) || Map.get(memory, "kind") || "memory"
+
+          summary =
+            Map.get(memory, :summary) || Map.get(memory, "summary") ||
+              Map.get(memory, :content) || Map.get(memory, "content")
+
+          "- [#{kind}] #{title}: #{summary}"
+        end)
+    end
+  end
+
+  defp format_deep_memory(_memory), do: "No relevant long-term memories matched this context."
+
+  defp format_open_loops(%{buckets: buckets} = snapshot) when is_map(buckets) do
+    snapshot
+    |> Map.delete(:buckets)
+    |> Map.put("buckets", buckets)
+    |> format_open_loops()
+  end
+
+  defp format_open_loops(%{"buckets" => buckets} = snapshot) when is_map(buckets) do
+    totals = Map.get(snapshot, "totals") || Map.get(snapshot, :totals) || %{}
+    total = Map.get(totals, "open_todos") || Map.get(totals, :open_todos) || 0
+
+    if total == 0 do
+      @empty_open_loops_guidance
+    else
+      rendered =
+        [
+          format_open_loop_bucket("Overdue", bucket_value(buckets, :overdue)),
+          format_open_loop_bucket("Today", bucket_value(buckets, :today)),
+          format_open_loop_bucket("Upcoming", bucket_value(buckets, :upcoming)),
+          format_open_loop_bucket("No Due Date", bucket_value(buckets, :no_due_date)),
+          format_open_loop_bucket("Monitor", bucket_value(buckets, :monitor))
+        ]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("\n")
+
+      if rendered == "" do
+        @empty_open_loops_guidance
+      else
+        rendered
+      end
+    end
+  end
+
+  defp format_open_loops(_snapshot), do: @empty_open_loops_guidance
+
+  defp format_open_loop_bucket(_label, []), do: ""
+
+  defp format_open_loop_bucket(label, todos) do
+    rendered =
+      todos
+      |> Enum.take(6)
+      |> Enum.map_join("\n", fn todo ->
+        title = Map.get(todo, :title) || Map.get(todo, "title")
+        next_action = Map.get(todo, :next_action) || Map.get(todo, "next_action")
+        "- #{title}: #{next_action}"
+      end)
+
+    "#{label}:\n#{rendered}"
+  end
+
+  defp bucket_value(buckets, key) do
+    Map.get(buckets, key) || Map.get(buckets, to_string(key)) || []
+  end
+
+  defp format_content(content) when is_binary(content), do: content
+  defp format_content(content) when is_map(content), do: Jason.encode!(content, pretty: true)
+  defp format_content(content), do: inspect(content)
+
+  defp event_field(event, key) when is_map(event) do
+    Map.get(event, key) || Map.get(event, to_string(key))
+  end
+
+  defp truncate(str, max) when byte_size(str) <= max, do: str
+  defp truncate(str, max), do: String.slice(str, 0, max) <> "..."
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_optional_text(_value), do: nil
+
+  defp parse_action(content, allowed_tools) do
+    content
+    |> String.trim()
+    |> parse_contract_action(allowed_tools)
+  end
+
+  defp parse_contract_action("ACTION:" <> _rest = content, allowed_tools),
+    do: parse_tool_action(content, allowed_tools)
+
+  defp parse_contract_action("RESPOND:" <> message, _allowed_tools),
+    do: {:respond, String.trim(message)}
+
+  defp parse_contract_action("OBSERVE" <> _rest, _allowed_tools), do: :observe
+
+  defp parse_contract_action(_content, _allowed_tools), do: :observe
+
+  defp parse_tool_action(content, allowed_tools) do
+    # Extract tool name and args
+    lines = String.split(content, "\n")
+
+    action_line = Enum.find(lines, fn l -> String.starts_with?(l, "ACTION:") end)
+    args_line = Enum.find(lines, fn l -> String.starts_with?(l, "ARGS:") end)
+
+    if action_line do
+      tool = String.replace_prefix(action_line, "ACTION:", "") |> String.trim()
+
+      args =
+        if args_line do
+          args_str = String.replace_prefix(args_line, "ARGS:", "") |> String.trim()
+
+          case Jason.decode(args_str) do
+            {:ok, parsed} -> parsed
+            {:error, _} -> %{}
+          end
+        else
+          %{}
+        end
+
+      if tool in allowed_tools do
+        {:tool_call, tool, args}
+      else
+        {:respond, "Action unavailable: #{tool} is not enabled for this agent."}
+      end
+    else
+      :observe
+    end
+  end
+end

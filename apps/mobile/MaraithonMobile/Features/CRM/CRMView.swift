@@ -1,0 +1,58 @@
+/// People loads the independent projection only while this tab is visible.
+import SwiftData
+import SwiftUI
+import PeopleNetworkKit
+import AssistantProgressKit
+
+struct CRMView: View {
+    @Environment(SessionStore.self) private var sessionStore
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
+    @State private var managing = false
+    @State private var selectedTodo: TodoItem?
+    @State private var reviewingPerson: LifeWorkContext.PersonReference?
+    @State private var path: [String] = []
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            if let token = sessionStore.user?.sessionToken {
+                PeopleNetworkPage(
+                    loadNetwork: { days, query, focus in
+                        try await MobileAPIClient().peopleNetwork(sessionToken: token, days: days, query: query, focus: focus)
+                    },
+                    loadPerson: { days, id in
+                        try await MobileAPIClient().networkPerson(sessionToken: token, days: days, id: id)
+                    },
+                    path: $path,
+                    openTodo: showTodo,
+                    managePerson: showPerson
+                )
+                .id(sessionStore.user?.id)
+            }
+        }
+        .tint(Runner.Palette.accent)
+        .onChange(of: sessionStore.user?.id) { _, _ in
+            path = []
+        }
+        .sheet(isPresented: $managing) {
+            CRMManageView()
+        }
+        .sheet(item: $reviewingPerson) { person in LifeContextSheet(person: person) }
+        .sheet(item: $selectedTodo) { todo in
+            NavigationStack { TodoDetailView(todo: todo) }
+        }
+    }
+
+    private func showPerson(_ id: String?) {
+        if let id { reviewingPerson = .init(personID: id) } else { managing = true }
+    }
+
+    private func showTodo(_ id: String) {
+        if let uuid = UUID(uuidString: id),
+           let todo = try? modelContext.fetch(FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == uuid })).first {
+            selectedTodo = todo
+        } else if let url = URL(string: "https://maraithon.com/todos/\(id)") {
+            openURL(url)
+        }
+    }
+}

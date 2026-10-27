@@ -1,0 +1,218 @@
+defmodule Maraithon.Delegations.Scope do
+  @moduledoc "Derives a reviewable grant from a todo, a verified identity, and source evidence."
+  alias Maraithon.{Repo, Crm, AssistantIdentities}
+  alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Connectors.Gmail
+  alias Maraithon.Delegations.Preferences
+  alias Maraithon.Todos.{Todo, Workflow}
+
+  def preview(%Todo{} = todo, attrs, opts \\ []) do
+    actor = Map.get(attrs, "actor", "as_user")
+    kind = Map.get(attrs, "kind", "information")
+
+    with true <-
+           actor in ~w(as_user as_assistant) and kind in ~w(information scheduling coordination),
+         true <- todo.status in ~w(open snoozed),
+         %ConnectedAccount{status: "connected"} = account <- account(todo),
+         {:ok, source, identity} <- source(todo, account, actor, opts),
+         {:ok, scope} <- build(todo, source, identity, attrs, Preferences.get(todo.user_id)) do
+      # Editable form values are explicit user input at submission. This hash
+      # protects the derived source and identity the user actually reviewed.
+      {:ok, Map.put(scope, "scope_hash", hash(Map.drop(scope, ~w(outcome instruction to cc))))}
+    else
+      {:error, _} = error -> error
+      {:pending, _} = pending -> pending
+      _ -> {:error, :delegation_source_unavailable}
+    end
+  end
+
+  @doc "Apply explicit form edits to completed, server-owned evidence without another source scan."
+  def reviewed(%Todo{} = todo, scope, attrs) do
+    with true <- attrs["actor"] == scope["actor"] and attrs["kind"] == scope["kind"],
+         true <- todo.status in ~w(open snoozed),
+         %ConnectedAccount{status: "connected", id: id} <- account(todo),
+         true <- id == scope["source_account_id"],
+         true <- todo_fingerprint(todo) == scope["todo_fingerprint"],
+         {:ok, updated} <-
+           build(
+             todo,
+             Map.delete(scope, "scope_hash"),
+             scope["identity"],
+             attrs,
+             Preferences.get(todo.user_id)
+           ) do
+      {:ok,
+       Map.put(updated, "scope_hash", hash(Map.drop(updated, ~w(outcome instruction to cc))))}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :scope_changed}
+    end
+  end
+
+  def hash(value) do
+    value
+    |> Maraithon.AssistantHarness.PromptStability.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  def todo_fingerprint(todo),
+    do:
+      hash(
+        Map.take(todo, [
+          :id,
+          :source,
+          :source_account_id,
+          :source_item_id,
+          :title,
+          :summary,
+          :next_action,
+          :workflow,
+          :status,
+          :counterparty_person_id
+        ])
+      )
+
+  defp account(%{source_account_id: id, user_id: user_id}) when is_integer(id),
+    do: Repo.get_by(ConnectedAccount, id: id, user_id: user_id)
+
+  defp account(_), do: nil
+
+  defp source(%{source: "gmail"} = todo, account, actor, _opts) do
+    with {:ok, identity} <- AssistantIdentities.gmail_snapshot(todo.user_id, actor, account.id),
+         {:ok, token} <-
+           Maraithon.Connectors.GmailAccess.for_account(todo.user_id, account.id),
+         {:ok, message} <- Gmail.fetch_message(token, todo.source_item_id, access_token: true),
+         false <- "DRAFT" in message.labels do
+      source_email =
+        account.metadata["account_email"] || account.metadata["email"] ||
+          account.external_account_id
+
+      to = counterparties(message, [identity["email"], source_email])
+      thread = if identity["account_id"] == account.id, do: message.thread_id
+
+      {:ok,
+       %{
+         "provider" => "gmail",
+         "source_account_id" => account.id,
+         "source_user_email" => source_email,
+         "source_message_id" => message.message_id,
+         "source_thread_id" => message.thread_id,
+         "thread_id" => thread,
+         "subject" => message.subject,
+         "internet_message_id" => message.internet_message_id,
+         "to" => to,
+         "cc" => [],
+         "evidence" => [
+           %{"source" => "gmail", "account_id" => account.id, "id" => message.message_id}
+         ]
+       }, identity}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :source_is_not_sent_mail}
+    end
+  end
+
+  defp source(%{source: "slack"} = todo, account, actor, opts),
+    do: Maraithon.Delegations.SlackIdentity.preview(todo, account, actor, opts)
+
+  defp source(_, _, _, _), do: {:error, :unsupported_delegation_source}
+
+  defp build(todo, source, identity, attrs, prefs) do
+    workflow = Workflow.current(todo)
+    owner_id = if workflow["owner"]["kind"] == "person", do: workflow["owner"]["id"]
+    person = Crm.get_person_for_user(todo.user_id, todo.counterparty_person_id || owner_id)
+    to = Map.get(attrs, "to", source["to"])
+    cc = Map.get(attrs, "cc", source["cc"])
+    outcome = Map.get(attrs, "outcome", workflow["outcome"])
+    instruction = Map.get(attrs, "instruction", "")
+    gmail? = source["provider"] == "gmail"
+
+    first_send_cc =
+      if gmail? and identity["actor"] == "as_assistant" and
+           identity["cc_user_on_first_send"] == true,
+         do: [source["source_user_email"]],
+         else: []
+
+    valid_destination =
+      if gmail?,
+        do:
+          valid_emails?(to, false) and valid_emails?(cc, true) and
+            valid_emails?(first_send_cc, true),
+        else: to == source["to"] and cc == []
+
+    if valid_destination and text?(outcome, 2_000, false) and text?(instruction, 2_000, true) do
+      {:ok,
+       Map.merge(source, %{
+         "actor" => identity["actor"],
+         "kind" => Map.get(attrs, "kind", "information"),
+         "identity" => identity,
+         "outcome" => outcome,
+         "instruction" => instruction,
+         "to" => Enum.uniq(to),
+         "cc" => Enum.uniq(cc),
+         "first_send_cc" => first_send_cc,
+         "policy_version" => 1,
+         "todo_fingerprint" => todo_fingerprint(todo),
+         "workflow_revision" => workflow["revision"],
+         "task_owner" => workflow["owner"],
+         "counterparty_id" => person && person.id,
+         "counterparty_label" =>
+           (person && person.display_name) || todo.counterparty_label || Enum.join(to, ", "),
+         "facts" => String.slice(todo.summary || "", 0, 8_000),
+         "limits" =>
+           Map.take(
+             prefs,
+             ~w(sends_per_7d reminders_per_cycle model_calls_per_turn micro_usd_per_30d user_micro_usd_per_day)
+           ),
+         "allowed" =>
+           ~w(reply ask answer_from_evidence follow_up propose_computed_times book_agreed_time),
+         "reserved" =>
+           ~w(new_recipients money contracts credentials unrelated_information attachments)
+       })}
+    else
+      {:error, :invalid_delegation_scope}
+    end
+  end
+
+  def valid_emails?(values, allow_empty) do
+    is_list(values) and (allow_empty or values != []) and length(values) <= 20 and
+      Enum.all?(
+        values,
+        &(is_binary(&1) and byte_size(&1) <= 320 and
+            Regex.match?(~r/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/, &1))
+      )
+  end
+
+  @doc "All granted observers remain allowed on replies, even after the first-message copy."
+  def email_participants(scope),
+    do: Enum.uniq(scope["to"] ++ scope["cc"] ++ (scope["first_send_cc"] || []))
+
+  @doc "Only the first proven send copies the user unless they explicitly added a permanent Cc."
+  def email_cc(scope, first_send?) do
+    copies = scope["cc"] ++ if(first_send?, do: scope["first_send_cc"] || [], else: [])
+    to = MapSet.new(scope["to"], &String.downcase/1)
+
+    copies
+    |> Enum.uniq_by(&String.downcase/1)
+    |> Enum.reject(&MapSet.member?(to, String.downcase(&1)))
+  end
+
+  @doc "Only the bound mailbox and actor are self here; another connected Kent address can reply."
+  def counterparties(message, own_addresses) do
+    own = own_addresses |> Enum.filter(&is_binary/1) |> MapSet.new(&String.downcase/1)
+
+    others =
+      Gmail.message_participants(message)
+      |> Enum.reject(&MapSet.member?(own, String.downcase(&1["identifier"]["email"])))
+
+    from = addresses(others, "from")
+    if from == [], do: addresses(others, "to"), else: from
+  end
+
+  defp addresses(people, role),
+    do: for(p <- people, p["role"] == role, do: p["identifier"]["email"])
+
+  defp text?(s, max, empty),
+    do: is_binary(s) and byte_size(s) <= max and (empty or String.trim(s) != "")
+end

@@ -1,0 +1,71 @@
+name: Contribution checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contribution-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Phoenix compile and assets
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: '26.2.2'
+          elixir-version: '1.16.2'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-otp26-elixir116-${{ hashFiles('mix.lock') }}
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Compile Phoenix
+        run: make build
+      - name: Build static assets
+        run: |
+          mix assets.setup
+          mix assets.build
+          make build-static
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Gitleaks
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --output gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum --check --strict
+          mkdir -p gitleaks-bin
+          tar -xzf gitleaks.tar.gz -C gitleaks-bin gitleaks
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: Scan reachable history
+        run: gitleaks git . --log-opts=--all --redact=100 --no-banner

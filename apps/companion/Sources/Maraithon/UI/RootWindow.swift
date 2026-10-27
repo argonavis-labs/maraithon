@@ -1,0 +1,460 @@
+import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
+
+/// The single window that hosts the whole app. Renders either the workspace
+/// shell (custom sidebar plus content, signed in) or the centered Connect
+/// screen (signed out). The shell is styled after the web workspace, not
+/// the stock macOS split view, so both apps read as one product.
+///
+/// v4: when the user explicitly skipped Full Disk Access during
+/// onboarding, or a live source reports that Full Disk Access is blocking
+/// sync, the main split view is overlaid with a persistent banner across
+/// the top. Clicking the banner short-circuits to System Settings the
+/// same way the onboarding screen does.
+struct RootWindow: View {
+    @Environment(AppEnvironment.self) private var env
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var selection: SidebarItem? = RootWindow.initialSelection()
+    @State private var requestedTodoID: String? = RootWindow.initialTodoID()
+    /// Bumped by the sidebar's "Find a task" row; the task list consumes it
+    /// by focusing search and resetting it to zero.
+    @State private var searchRequestToken = 0
+    @State private var quickTodoShown = false
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw: String = AppearanceMode.system.rawValue
+
+    var body: some View {
+        Group {
+            switch env.deviceAuth.state {
+            case .signedIn:
+                if env.onboarding.current != .done {
+                    OnboardingView(flow: env.onboarding)
+                } else {
+                    HStack(spacing: 0) {
+                        SidebarView(selection: $selection) {
+                            selection = .todos
+                            searchRequestToken += 1
+                        }
+                        VStack(spacing: 0) {
+                            let blockedSourceNames = env.sources
+                                .fullDiskAccessBlockedSources()
+                                .map(\.displayName)
+                            if env.onboarding.isFullDiskAccessSkipped || !blockedSourceNames.isEmpty {
+                                FullDiskAccessRequiredBanner(blockedSourceNames: blockedSourceNames)
+                            } else if let installHint = FullDiskAccessInstallHint.current() {
+                                TemporaryFullDiskAccessAppBanner(installHint: installHint)
+                            }
+                            detailView(for: selection)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            case .signedOut, .connecting, .awaitingApproval, .error:
+                ConnectView()
+            }
+        }
+        .background(Tokens.Palette.background)
+        .focusedSceneValue(\.quickTodoAction,
+            env.deviceAuth.currentToken != nil && env.onboarding.current == .done && !quickTodoShown
+                ? { quickTodoShown = true } : nil)
+        .background {
+            QuickTodoPresenter(isPresented: $quickTodoShown, store: env.todos)
+                .frame(width: 0, height: 0)
+        }
+        .onChange(of: quickTodoShown) { _, shown in env.todos.quickCapturePresented = shown }
+        .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme)
+        .animation(.default, value: env.deviceAuth.state)
+        .animation(.default, value: env.onboarding.current)
+        .onAppear {
+            BatterySettings.shared.bind(sources: env.sources, eventLog: env.eventLog)
+            refreshPermissionsIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            refreshPermissionsIfNeeded()
+        }
+        .onChange(of: env.deviceAuth.state) { _, newState in
+            // Re-enter onboarding if the user signs out mid-flow before
+            // ever completing it. Users who already finished onboarding
+            // do not get re-prompted (the persisted flag wins).
+            switch newState {
+            case .signedOut, .error:
+                quickTodoShown = false
+                env.todos.clear()
+                env.onboarding.reset()
+            default:
+                break
+            }
+        }
+    }
+
+    /// DEBUG builds can open on another pane for design review via
+    /// `MARAITHON_START_PANE` (`people`, `recall`, `logs`, `source:<id>`).
+    private static func initialSelection() -> SidebarItem? {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["MARAITHON_START_PANE"] {
+        case "people": return .people
+        case "recall": return .recall
+        case "logs": return .logs
+        case let value? where value.hasPrefix("source:"): return .source(id: String(value.dropFirst("source:".count)))
+        default: return .todos
+        }
+        #else
+        return .todos
+        #endif
+    }
+
+    /// DEBUG builds can open straight into one todo's workspace for design
+    /// review via `MARAITHON_START_TODO=<todo id>`.
+    private static func initialTodoID() -> String? {
+        #if DEBUG
+        let value = ProcessInfo.processInfo.environment["MARAITHON_START_TODO"] ?? ""
+        return value.isEmpty ? nil : value
+        #else
+        return nil
+        #endif
+    }
+
+    private func refreshPermissionsIfNeeded() {
+        let ranGlobalRefresh = refreshFullDiskAccessIfNeeded()
+        if !ranGlobalRefresh {
+            env.sources.syncUserRecoverablePermissionBlockedSources()
+        }
+    }
+
+    private func refreshFullDiskAccessIfNeeded() -> Bool {
+        let needsRefresh = env.onboarding.isFullDiskAccessSkipped
+            || !env.sources.fullDiskAccessBlockedSources().isEmpty
+
+        guard needsRefresh else {
+            return false
+        }
+
+        if FullDiskAccessProbe.isGranted() {
+            env.onboarding.recordFullDiskAccessGranted()
+            env.sources.syncFullDiskAccessBlockedSources()
+        } else {
+            env.eventLog.info("root_window.fda_probe_still_blocked", source: .ui)
+            env.sources.recheckFullDiskAccessBlockedSources()
+            return true
+        }
+        return false
+    }
+
+    @ViewBuilder
+    private func detailView(for selection: SidebarItem?) -> some View {
+        switch selection {
+        case .todos:
+            TodosView(initialTodoID: requestedTodoID, searchRequestToken: $searchRequestToken)
+        case .people:
+            PeopleView { id in
+                requestedTodoID = id
+                env.todos.filter = .active
+                env.todos.query = ""
+                self.selection = .todos
+            }
+        case .recall:
+            RecallView()
+        case .source(let id) where id == "imessage":
+            IMessageDetailView()
+        case .source(let id) where id == "contacts":
+            ContactsDetailView()
+        case .source(let id) where id == "notes":
+            NotesDetailView()
+        case .source(let id) where id == "voice_memos":
+            VoiceMemosDetailView()
+        case .source(let id) where id == "reminders":
+            RemindersDetailView()
+        case .source(let id) where id == "calendar":
+            CalendarDetailView()
+        case .source(let id) where id == "files":
+            FilesDetailView()
+        case .source(let id) where id == "browser_history":
+            BrowserHistoryDetailView()
+        case .source:
+            UnavailableSourceDetailView()
+        case .logs:
+            LogsView()
+        case .diagnostics:
+            DiagnosticsView()
+        case .none:
+            ContentUnavailableView(
+                "Pick a source",
+                systemImage: "sidebar.left",
+                description: Text("Choose a source from the sidebar to see assistant context and recent checks.")
+            )
+        }
+    }
+}
+
+enum SidebarItem: Hashable {
+    case todos
+    case people
+    case recall
+    case source(id: String)
+    case logs
+    case diagnostics
+}
+
+/// Non-blocking DEBUG-only reminder shown while the developer is running a
+/// temporary app copy. macOS privacy grants are tied to the exact bundle
+/// copy, so a green state today can still regress on the next rebuild.
+struct TemporaryFullDiskAccessAppBanner: View {
+    let installHint: FullDiskAccessInstallHint.Detail
+
+    @Environment(AppEnvironment.self) private var env
+
+    var body: some View {
+        HStack(spacing: Tokens.Spacing.small) {
+            Image(systemName: "app.dashed")
+                .foregroundStyle(StatusTone.attention.color)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(Self.titleText)
+                    .font(Tokens.Typography.bodyMedium)
+                    .foregroundStyle(Tokens.Palette.foreground)
+                Text(Self.detailText(stableAppInstalled: installHint.stableAppInstalled))
+                    .font(Tokens.Typography.small)
+                    .foregroundStyle(Tokens.Palette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if installHint.stableAppInstalled {
+                Button(FullDiskAccessInstallHint.switchToStableAppButtonTitle) {
+                    switchToStableApp(installHint.stableAppURL)
+                }
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
+            } else if installHint.canInstallStableApp {
+                Button(FullDiskAccessInstallHint.installStableAppButtonTitle) {
+                    installStableApp(installHint.stableAppURL)
+                }
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
+            }
+        }
+        .padding(.horizontal, Tokens.Spacing.medium)
+        .padding(.vertical, Tokens.Spacing.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.Palette.foreground3)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Tokens.Palette.border)
+                .frame(height: Tokens.Stroke.hairline)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    static let titleText = "Use one app copy for Full Disk Access"
+
+    static func detailText(stableAppInstalled: Bool) -> String {
+        if stableAppInstalled {
+            return "Open \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), grant Full Disk Access once, and reloads will keep using that permission."
+        }
+
+        return "Install \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), grant Full Disk Access once, and reloads will keep using that permission."
+    }
+
+    private func switchToStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.switchToStableDevelopmentApp(
+            appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.temporary_app_banner.open_stable_app"
+        )
+        #endif
+    }
+
+    private func installStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.installStableDevelopmentApp(
+            to: appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.temporary_app_banner.install_stable_app"
+        )
+        #endif
+    }
+}
+
+/// Persistent inline banner shown above the main detail pane when Full
+/// Disk Access is blocking local-source sync.
+struct FullDiskAccessRequiredBanner: View {
+    let blockedSourceNames: [String]
+
+    @Environment(AppEnvironment.self) private var env
+
+    var body: some View {
+        HStack(spacing: Tokens.Spacing.small) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(StatusTone.attention.color)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Full Disk Access required")
+                    .font(Tokens.Typography.bodyMedium)
+                    .foregroundStyle(Tokens.Palette.foreground)
+                Text(Self.detailText(blockedSourceNames: blockedSourceNames))
+                    .font(Tokens.Typography.small)
+                    .foregroundStyle(Tokens.Palette.mutedForeground)
+                if let installHint = FullDiskAccessInstallHint.current() {
+                    Text(installHint.message)
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(Tokens.Palette.cautionText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let reminder = FullDiskAccessInstallHint.stableGrantReminder {
+                    Text(reminder)
+                        .font(Tokens.Typography.small)
+                        .foregroundStyle(Tokens.Palette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            if let installHint = FullDiskAccessInstallHint.current(),
+               installHint.stableAppInstalled {
+                Button(FullDiskAccessInstallHint.switchToStableAppButtonTitle) {
+                    switchToStableApp(installHint.stableAppURL)
+                }
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
+            } else if let installHint = FullDiskAccessInstallHint.current(),
+                      installHint.canInstallStableApp {
+                Button(FullDiskAccessInstallHint.installStableAppButtonTitle) {
+                    installStableApp(installHint.stableAppURL)
+                }
+                .buttonStyle(RunnerButtonStyle(.primary, compact: true))
+            } else if FullDiskAccessInstallHint.stableGrantReminder != nil {
+                Button(FullDiskAccessInstallHint.revealStableAppButtonTitle) {
+                    revealStableApp()
+                }
+                .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+            }
+            Button("Check again") {
+                checkAgain()
+            }
+            .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+            if FullDiskAccessInstallHint.current() == nil ||
+                FullDiskAccessInstallHint.current()?.canInstallStableApp == false {
+                Button("Open System Settings") {
+                    openFullDiskAccess()
+                }
+                .buttonStyle(RunnerButtonStyle(.secondary, compact: true))
+            }
+        }
+        .padding(.horizontal, Tokens.Spacing.medium)
+        .padding(.vertical, Tokens.Spacing.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.Palette.foreground3)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Tokens.Palette.border)
+                .frame(height: Tokens.Stroke.hairline)
+        }
+        .accessibilityElement(children: .combine)
+        .task {
+            await pollFullDiskAccessGrant()
+        }
+    }
+
+    static func detailText(blockedSourceNames: [String]) -> String {
+        let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
+        let verb = blockedSourceNames.count == 1 ? "needs" : "need"
+        return "\(subject) \(verb) one macOS Full Disk Access grant for \(grantTargetCopy). Enable that exact app once; the rest of the app can keep checking."
+    }
+
+    static var grantTargetCopy: String {
+        #if DEBUG
+        "the Maraithon app at \(FullDiskAccessInstallHint.exactStableDevelopmentAppDisplayPath())"
+        #else
+        "Maraithon"
+        #endif
+    }
+
+    private static func readableList(_ values: [String], fallback: String) -> String {
+        let names = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        switch names.count {
+        case 0:
+            return fallback
+        case 1:
+            return names[0]
+        case 2:
+            return "\(names[0]) and \(names[1])"
+        default:
+            let prefix = names.dropLast().joined(separator: ", ")
+            return "\(prefix), and \(names[names.count - 1])"
+        }
+    }
+
+    private func openFullDiskAccess() {
+        let urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+        guard let url = URL(string: urlString) else {
+            env.eventLog.warning(
+                "root_window.fda_banner.url_invalid",
+                source: .ui,
+                payload: ["url": urlString]
+            )
+            return
+        }
+        env.eventLog.info("root_window.fda_banner.open_settings", source: .ui)
+        #if canImport(AppKit)
+        NSWorkspace.shared.open(url)
+        #endif
+    }
+
+    private func switchToStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.switchToStableDevelopmentApp(
+            appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.fda_banner.open_stable_app"
+        )
+        #endif
+    }
+
+    private func installStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.installStableDevelopmentApp(
+            to: appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.fda_banner.install_stable_app"
+        )
+        #endif
+    }
+
+    private func revealStableApp() {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.revealStableDevelopmentApp(
+            eventLog: env.eventLog,
+            eventName: "root_window.fda_banner.reveal_stable_app"
+        )
+        #endif
+    }
+
+    private func checkAgain() {
+        if verifyFullDiskAccessGrant() {
+            return
+        }
+
+        env.eventLog.info("root_window.fda_banner_check_still_blocked", source: .ui)
+        env.sources.recheckFullDiskAccessBlockedSources()
+    }
+
+    @MainActor
+    private func verifyFullDiskAccessGrant() -> Bool {
+        guard FullDiskAccessProbe.isGranted() else {
+            return false
+        }
+
+        env.onboarding.recordFullDiskAccessGranted()
+        env.sources.syncFullDiskAccessBlockedSources()
+        return true
+    }
+
+    private func pollFullDiskAccessGrant() async {
+        while !Task.isCancelled {
+            if verifyFullDiskAccessGrant() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
+}

@@ -1,0 +1,74 @@
+{
+  "spec_id": "voice-aware-gmail-slack-drafts",
+  "slug": "voice-aware-gmail-slack-drafts",
+  "title": "Voice-Aware Gmail and Slack Drafts Specification",
+  "stage": "done",
+  "spec_path": "../specs/voice-aware-gmail-slack-drafts.md",
+  "created_at": "2026-05-25T02:39:51Z",
+  "approved_at": "2026-05-25T02:39:51Z",
+  "started_at": "2026-05-25T02:39:51Z",
+  "completed_at": "2026-05-25T02:54:48Z",
+  "updated_at": "2026-05-25T02:54:48Z",
+  "summary": "Implemented channel-specific user voice memory, sanitized Gmail and Slack draft generation, draft_message tool exposure, assistant prompt guidance, insight draft integration, and focused/full verification.",
+  "next_action": "Ready for review in the voice-aware-gmail-slack-drafts worktree.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Implementation complete and mix precommit passed.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "6. Backend and Tool Changes",
+      "7. Prompt and Style Contract",
+      "9. Test Plan and Validation Matrix",
+      "10. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/voice-aware-gmail-slack-drafts.md",
+      "lib/maraithon/memory/user_voice.ex",
+      "lib/maraithon/drafts.ex",
+      "lib/maraithon/tools/draft_message.ex",
+      "lib/maraithon/capabilities.ex",
+      "lib/maraithon/tools/input_schemas.ex",
+      "lib/maraithon/telegram_assistant/toolbox.ex",
+      "lib/maraithon/assistant_harness.ex",
+      "lib/maraithon/insight_notifications/actions.ex",
+      "test/maraithon/drafts_test.exs",
+      "test/maraithon/tools_test.exs",
+      "test/maraithon/assistant_harness_test.exs",
+      "test/maraithon_web/live/people_live_test.exs"
+    ],
+    "notes": "Slack remains draft-only and never posts through draft_message. Gmail drafts are saved only when save_to_provider is true."
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "mix precommit passed: 1922 tests, 0 failures; assistant_eval passed with 60 passed, 0 failed."
+  },
+  "history": [
+    {
+      "at": "2026-05-25T02:39:51Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial spec created from user request and repo inspection."
+    },
+    {
+      "at": "2026-05-25T02:39:51Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began immediately per user request."
+    },
+    {
+      "at": "2026-05-25T02:54:48Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implementation and required project verification completed."
+    }
+  ]
+}

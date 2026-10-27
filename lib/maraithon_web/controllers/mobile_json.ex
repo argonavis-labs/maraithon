@@ -1,0 +1,374 @@
+defmodule MaraithonWeb.MobileJSON do
+  @moduledoc false
+
+  alias Maraithon.ActionCards
+  alias Maraithon.Accounts.{User, UserSession}
+  alias Maraithon.Briefs.Brief
+  alias Maraithon.Crm
+  alias Maraithon.Crm.Person
+  alias Maraithon.Crm.RelationshipPresentation
+  alias Maraithon.Goals
+  alias Maraithon.Goals.{Goal, GoalLink, ProgressUpdate, ReviewRun}
+  alias Maraithon.Todos.{ActivityEvent, PublicMetadata, SourceActions, Todo, UserFacingCopy}
+  alias Maraithon.Todos.Brief, as: TodoBrief
+  alias MaraithonWeb.ApiErrorCopy
+
+  def user(%User{} = user, %UserSession{} = session) do
+    %{
+      id: user.id,
+      email: user.email,
+      is_admin: user.is_admin,
+      confirmed_at: json_value(user.confirmed_at),
+      session_expires_at: json_value(session.expires_at)
+    }
+  end
+
+  def user(%User{} = user, expires_at) do
+    %{
+      id: user.id,
+      email: user.email,
+      is_admin: user.is_admin,
+      confirmed_at: json_value(user.confirmed_at),
+      session_expires_at: json_value(expires_at)
+    }
+  end
+
+  def todo(%Todo{} = todo, opts \\ []) do
+    proposal = Maraithon.ChiefOfStaff.Skills.DelegationProposals.current(todo)
+    opts = Keyword.put(opts, :delegation_proposal, proposal)
+    todo = UserFacingCopy.polish_attrs(todo)
+
+    base = %{
+      id: todo.id,
+      source: todo.source,
+      account_category: Maraithon.AccountCategories.for_todo(todo, opts[:account_categories]),
+      kind: todo.kind,
+      attention_mode: todo.attention_mode,
+      workflow: Maraithon.Todos.Workflow.current(todo),
+      delegation: delegation(todo, opts),
+      can_delegate: Maraithon.Delegations.available?(todo),
+      delegation_proposal: proposal,
+      title: todo.title,
+      summary: todo.summary,
+      next_action: todo.next_action,
+      due_at: json_value(todo.due_at),
+      notes: todo.notes,
+      action_plan: todo.action_plan,
+      owner_label: todo.owner_label,
+      priority: todo.priority,
+      status: todo.status,
+      agent_actionability: todo.agent_actionability,
+      agent_action_label: todo.agent_action_label,
+      decision: Maraithon.Todos.DecisionSignals.needs_decision?(todo),
+      snoozed_until: json_value(todo.snoozed_until),
+      closed_at: json_value(todo.closed_at),
+      source_occurred_at: json_value(todo.source_occurred_at),
+      metadata: public_todo_metadata(todo.metadata || %{}),
+      brief: TodoBrief.public(todo),
+      related_people: related_people(todo, opts),
+      inserted_at: json_value(todo.inserted_at),
+      updated_at: json_value(todo.updated_at)
+    }
+
+    if include_action_card?(todo, opts) do
+      Map.put(base, :action_card, action_card(todo, opts))
+    else
+      base
+    end
+  end
+
+  defp delegation(todo, opts) do
+    row =
+      case Keyword.fetch(opts, :delegations_by_todo_id) do
+        {:ok, rows} -> Map.get(rows, todo.id)
+        :error -> Maraithon.Delegations.for_todo(todo.user_id, todo.id)
+      end
+
+    Maraithon.Delegations.summary(row)
+  end
+
+  defp include_action_card?(%Todo{status: status}, opts) do
+    Keyword.get(opts, :include_card, false) and
+      (not Keyword.get(opts, :open_cards_only, false) or status in ["open", "snoozed"])
+  end
+
+  def brief(%Brief{} = brief) do
+    %{
+      id: brief.id,
+      cadence: brief.cadence,
+      local_date: get_in(brief.metadata || %{}, ["brief_input", "date"]),
+      title: brief.title,
+      summary: brief.summary,
+      body: brief.body,
+      calendar_end_times: Maraithon.Briefs.CalendarTiming.end_times(brief),
+      status: brief.status,
+      scheduled_for: json_value(brief.scheduled_for),
+      sent_at: json_value(brief.sent_at),
+      linked_todo_ids: brief_linked_todo_ids(brief),
+      inserted_at: json_value(brief.inserted_at)
+    }
+  end
+
+  def goal(%Goal{} = goal, opts \\ []) do
+    base = Goals.serialize_goal(goal)
+
+    if Keyword.get(opts, :include_detail, false) do
+      base
+      |> Map.put(
+        :progress_updates,
+        goal_association(goal, :progress_updates)
+        |> Enum.map(&goal_progress_update(&1, include_evidence: true))
+      )
+      |> Map.put(
+        :links,
+        goal_association(goal, :links)
+        |> Enum.map(&goal_link/1)
+      )
+      |> Map.put(
+        :review_runs,
+        goal_association(goal, :review_runs)
+        |> Enum.map(&goal_review_run/1)
+      )
+    else
+      base
+    end
+  end
+
+  def goal_progress_update(%ProgressUpdate{} = progress_update, opts \\ []) do
+    Goals.serialize_progress(progress_update, opts)
+  end
+
+  def goal_link(%GoalLink{} = link), do: Goals.serialize_link(link)
+
+  def goal_review_run(%ReviewRun{} = review_run), do: Goals.serialize_review_run(review_run)
+
+  defp goal_association(%Goal{} = goal, field) do
+    case Map.get(goal, field) do
+      values when is_list(values) -> values
+      _other -> []
+    end
+  end
+
+  defp brief_linked_todo_ids(%Brief{metadata: %{"linked_todo_ids" => ids}}) when is_list(ids) do
+    Enum.filter(ids, &is_binary/1)
+  end
+
+  defp brief_linked_todo_ids(_brief), do: []
+
+  def todo_activity_event(%ActivityEvent{} = event) do
+    %{
+      id: event.id,
+      event_type: event.event_type,
+      actor_type: event.actor_type,
+      actor_id: event.actor_id,
+      actor_label: event.actor_label,
+      todo_id: event.todo_id,
+      todo_title: event.todo_title,
+      todo_source: event.todo_source,
+      metadata: event.metadata || %{},
+      occurred_at: json_value(event.occurred_at),
+      inserted_at: json_value(event.inserted_at)
+    }
+  end
+
+  def person(%Person{} = person) do
+    %{
+      id: person.id,
+      first_name: person.first_name,
+      last_name: person.last_name,
+      display_name: person.display_name,
+      contact_details: person.contact_details || %{},
+      preferred_communication_method: person.preferred_communication_method,
+      relationship: person.relationship,
+      communication_frequency: person.communication_frequency,
+      interaction_count: person.interaction_count,
+      network_rank: person.network_rank || 0,
+      relationship_health: RelationshipPresentation.health_level(person.relationship_strength),
+      relationship_warmth: RelationshipPresentation.warmth_level(person.affinity_score),
+      last_interaction_at: json_value(person.last_interaction_at),
+      status: person.status,
+      notes: person.notes,
+      metadata: public_person_metadata(person.metadata || %{}),
+      enrichment: person_enrichment(person.metadata || %{}),
+      top_connections: person_top_connections(person.metadata || %{}),
+      inserted_at: json_value(person.inserted_at),
+      updated_at: json_value(person.updated_at)
+    }
+  end
+
+  def public_person_metadata(metadata), do: PublicMetadata.person(metadata)
+
+  # Web enrichment is stored as a structured map; the generic metadata
+  # filter only passes scalars, so serialize the curated shape explicitly.
+  defp person_enrichment(metadata) do
+    case Map.get(metadata, "enrichment") do
+      %{} = enrichment ->
+        %{
+          sources:
+            enrichment
+            |> Map.get("sources", [])
+            |> Enum.map(fn source ->
+              %{
+                title: source["title"],
+                url: source["url"],
+                snippet: source["snippet"]
+              }
+            end),
+          page_excerpt: enrichment["page_excerpt"],
+          fetched_at: enrichment["fetched_at"]
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  defp person_top_connections(metadata) do
+    case get_in(metadata, ["graph_signals", "top_connections"]) do
+      connections when is_list(connections) ->
+        Enum.map(connections, fn connection ->
+          %{
+            person_id: connection["person_id"],
+            name: connection["name"],
+            weight: connection["weight"]
+          }
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  @doc """
+  Serializes a reconnect suggestion (from `Crm.reconnect_suggestions/2`):
+  the full person plus the reconnect reasoning the mobile People tab leads with.
+  """
+  def reconnect_suggestion(%{person: %Person{} = suggestion_person} = suggestion) do
+    %{
+      person: person(suggestion_person),
+      category: suggestion[:category],
+      headline: suggestion[:headline],
+      reason: suggestion[:reason],
+      suggested_action: suggestion[:suggested_action],
+      days_since_last: suggestion[:days_since_last],
+      cadence_days: suggestion[:cadence_days],
+      communication_score: suggestion[:communication_score],
+      network_rank: suggestion[:network_rank] || 0,
+      next_meeting_at: suggestion[:next_meeting_at],
+      next_meeting_title: suggestion[:next_meeting_title],
+      overdue: suggestion[:overdue] || false,
+      open_work:
+        suggestion
+        |> Map.get(:open_work, [])
+        |> Enum.map(fn item -> %{id: to_string(item.id), title: item.title} end),
+      goals:
+        suggestion
+        |> Map.get(:goals, [])
+        |> Enum.map(fn item -> %{id: to_string(item.id), title: item.title} end)
+    }
+  end
+
+  def error(reason) do
+    ApiErrorCopy.mobile(reason)
+  end
+
+  defp action_card(%Todo{} = todo, opts) do
+    card =
+      ActionCards.for_todo(
+        todo,
+        Keyword.put_new(opts, :include_disconnected, true)
+      )
+
+    %{
+      id: card["id"],
+      kind: card["kind"],
+      headline: card["headline"],
+      decision_prompt: card["decision_prompt"],
+      why_now: card["why_now"],
+      rank_reason: card["rank_reason"],
+      attention_mode: card["attention_mode"],
+      context_items: ActionCards.context_items(card),
+      evidence_excerpt: ActionCards.evidence_excerpt(card),
+      next_best_action: card["next_best_action"],
+      draft_preview: ActionCards.draft_preview(card),
+      prepared_actions: card["prepared_actions"] || [],
+      available_buttons: format_buttons(card["available_buttons"] || []),
+      estimated_effort: card["estimated_effort"],
+      source_context: source_context(card),
+      source_action: SourceActions.for_todo(todo)
+    }
+  end
+
+  # Only actions MobileTodoController.apply_todo_action accepts; anything
+  # else (e.g. more_context, open_dashboard) would 422 when tapped.
+  @supported_todo_actions ~w(done dismiss important helpful not_helpful snooze see_less)
+
+  defp format_buttons(buttons) do
+    buttons
+    |> List.wrap()
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+    |> Enum.filter(&(&1 in @supported_todo_actions))
+    |> Enum.map(fn action -> %{action: action, label: button_label(action)} end)
+  end
+
+  defp button_label(action) do
+    case action do
+      "done" -> "Done"
+      "dismiss" -> "Dismiss"
+      "snooze" -> "Snooze"
+      "important" -> "Keep active"
+      "not_important" -> "Less useful"
+      "not_helpful" -> "Less useful"
+      "helpful" -> "Helpful"
+      "keep_active" -> "Keep active"
+      "see_less" -> "Show less"
+      "more_context" -> "More context"
+      "open_dashboard" -> "Open Maraithon"
+      other -> other |> String.replace("_", " ") |> String.capitalize()
+    end
+  end
+
+  defp source_context(card) when is_map(card) do
+    ActionCards.source_health_note(card)
+  end
+
+  defp source_context(_card), do: nil
+
+  def public_todo_metadata(metadata), do: PublicMetadata.todo(metadata)
+
+  defp related_people(%Todo{user_id: user_id, id: todo_id}, opts)
+       when is_binary(user_id) and is_binary(todo_id) do
+    case Keyword.fetch(opts, :related_people_by_todo_id) do
+      {:ok, people_by_todo_id} when is_map(people_by_todo_id) ->
+        people_by_todo_id
+        |> Map.get(todo_id, [])
+        |> Enum.map(&related_person/1)
+
+      _other ->
+        user_id
+        |> Crm.people_for_resource("todo", todo_id, limit: 5)
+        |> Enum.map(&related_person/1)
+    end
+  end
+
+  defp related_people(_todo, _opts), do: []
+
+  defp related_person(%Person{} = person) do
+    %{
+      id: person.id,
+      display_name: person.display_name,
+      relationship: person.relationship
+    }
+  end
+
+  defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+
+  defp json_value(%NaiveDateTime{} = value) do
+    value
+    |> DateTime.from_naive!("Etc/UTC")
+    |> DateTime.to_iso8601()
+  end
+
+  defp json_value(value), do: value
+end

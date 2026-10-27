@@ -1,0 +1,202 @@
+name: Deploy Maraithon test app
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "apps/**"
+      - "docs/**"
+      - "test/**"
+      - "**/*.md"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Operation
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - validate-todo
+          - diagnose-runtime
+          - delegation-eval-preflight
+          - delegation-eval-start
+          - delegation-eval-status
+          - delegation-eval-review
+          - delegation-eval-calendar
+          - delegation-eval-memory
+          - delegation-eval-diagnose
+          - delegation-eval-resume
+          - restore-spending-pause
+          - reset-rebuild-kent
+          - replay-gmail
+          - replay-slack
+      delegation_eval_job_id:
+        description: Controlled eval job UUID for detailed status, memory verification or initial throttle recovery
+        required: false
+        type: string
+      delegation_eval_execution_id:
+        description: Cloud Run eval or migration execution ID for redacted failure diagnostics
+        required: false
+        type: string
+      delegation_eval_review_public_key:
+        description: Base64 PEM public key for encrypted inspection of the controlled proposal review
+        required: false
+        type: string
+      delegation_eval_scenario:
+        description: Controlled Gmail scenario to start
+        required: false
+        default: information_reply
+        type: choice
+        options:
+          - information_reply
+          - proposed_information_reply
+          - schedule_and_book
+          - requested_scheduling
+          - accepted_slot_becomes_busy
+          - durable_memory
+      delegation_eval_actor:
+        description: Controlled sender
+        required: false
+        default: as_user
+        type: choice
+        options:
+          - as_user
+          - as_assistant
+      gmail_replay_lower:
+        description: Gmail replay lower Unix second (inclusive)
+        required: false
+        type: string
+      gmail_replay_upper:
+        description: Gmail replay upper Unix second (exclusive)
+        required: false
+        type: string
+      slack_replay_lower:
+        description: Slack replay lower Unix second (inclusive)
+        required: false
+        type: string
+      slack_replay_upper:
+        description: Slack replay upper Unix second (exclusive)
+        required: false
+        type: string
+
+# Only the newest push matters for a manually tested single-user app.
+concurrency:
+  group: maraithon-test-app-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  operate:
+    # Cloud infrastructure stays stopped until the maintainer explicitly opts in.
+    if: github.repository == 'argonavis-labs/maraithon' && vars.MARAITHON_DEPLOY_ENABLED == 'true'
+    name: ${{ inputs.operation || 'deploy' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/530299883343/locations/global/workloadIdentityPools/github/providers/maraithon-github
+          service_account: admin-deployer@maraithon.iam.gserviceaccount.com
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: maraithon
+
+      - name: Deploy
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
+        run: make deploy
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_GCP_RUNTIME_SERVICE: maraithon-runtime
+          MARAITHON_AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY: ${{ vars.AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY }}
+
+      - name: Validate todo outcome learning
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'validate-todo'
+        run: scripts/monorepo/validate-todo-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+
+      - name: Restore the normal spending pause
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'restore-spending-pause'
+        run: |
+          gcloud run services update maraithon --project maraithon --region us-central1 \
+            --update-env-vars LLM_DEVELOPMENT_SPENDING=false --quiet
+          gcloud run jobs update maraithon-todo-validation --project maraithon --region us-central1 \
+            --update-env-vars LLM_DEVELOPMENT_SPENDING=false --quiet
+          gcloud run services describe maraithon --project maraithon --region us-central1 \
+            --format=json | jq -e '
+              select([.spec.template.spec.containers[0].env[] |
+                select(.name == "LLM_DEVELOPMENT_SPENDING") | .value] == ["false"]) |
+              .status.latestReadyRevisionName as $ready |
+              select([.status.traffic[] | select(.percent > 0) |
+                {revisionName, percent}] == [{revisionName: $ready, percent: 100}]) |
+              {serving_revision: $ready, development_spending: false}'
+          gcloud run jobs describe maraithon-todo-validation --project maraithon --region us-central1 \
+            --format=json | jq -e '
+              [.spec.template.spec.template.spec.containers[0].env[] |
+                select(.name == "LLM_DEVELOPMENT_SPENDING") | .value] == ["false"]'
+          echo "LLM_DEVELOPMENT_SPENDING=false"
+
+      - name: Diagnose runtime coordination
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'diagnose-runtime'
+        run: scripts/monorepo/diagnose-runtime-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_SERVICE: maraithon
+
+      - name: Reset and rebuild Kent's operator intelligence
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'reset-rebuild-kent'
+        run: scripts/monorepo/reset-rebuild-operator-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_OPERATOR_USER: kent@runner.now
+          MARAITHON_RESET_CONFIRMATION: RESET_AND_REBUILD_KENT
+
+      - name: Run or inspect the controlled delegation eval
+        if: github.event_name == 'workflow_dispatch' && startsWith(inputs.operation, 'delegation-eval-')
+        run: scripts/monorepo/delegation-eval "${OPERATION}"
+        env:
+          OPERATION: ${{ inputs.operation }}
+          DELEGATION_EVAL_JOB_ID: ${{ inputs.delegation_eval_job_id }}
+          DELEGATION_EVAL_REVIEW_PUBLIC_KEY: ${{ inputs.delegation_eval_review_public_key }}
+          DELEGATION_EVAL_EXECUTION_ID: ${{ inputs.delegation_eval_execution_id }}
+          DELEGATION_EVAL_SCENARIO: ${{ inputs.delegation_eval_scenario }}
+          DELEGATION_EVAL_ACTOR: ${{ inputs.delegation_eval_actor }}
+
+      - name: Replay Kent's Gmail source window
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'
+        run: scripts/monorepo/replay-gmail-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_GMAIL_REPLAY_USER: kent@runner.now
+          MARAITHON_GMAIL_REPLAY_EXPECTED_ACCOUNT_COUNT: "2"
+          MARAITHON_GMAIL_REPLAY_LOWER: ${{ inputs.gmail_replay_lower }}
+          MARAITHON_GMAIL_REPLAY_UPPER: ${{ inputs.gmail_replay_upper }}
+
+      - name: Replay Kent's Slack source window
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-slack'
+        run: scripts/monorepo/replay-slack-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_SLACK_REPLAY_USER: kent@runner.now
+          MARAITHON_SLACK_REPLAY_LOWER: ${{ inputs.slack_replay_lower }}
+          MARAITHON_SLACK_REPLAY_UPPER: ${{ inputs.slack_replay_upper }}

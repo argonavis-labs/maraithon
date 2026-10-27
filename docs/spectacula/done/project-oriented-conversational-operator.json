@@ -1,0 +1,87 @@
+{
+  "spec_id": "project-oriented-conversational-operator",
+  "slug": "project-oriented-conversational-operator",
+  "title": "Project-Oriented Conversational Operator",
+  "stage": "done",
+  "spec_path": "../specs/project-oriented-conversational-operator.md",
+  "created_at": "2026-04-01T22:44:36Z",
+  "started_at": "2026-04-01T22:44:36Z",
+  "completed_at": "2026-04-02T09:52:05Z",
+  "updated_at": "2026-04-02T09:52:05Z",
+  "summary": "Completed the operator-foundation slice: user-owned projects and project items, agent-to-project association, operator events and subscriptions, durable todos, user memory, project-aware conversational context, itemized Telegram todo delivery, and a dashboard for projects, todos, memories, connected accounts, and agent activity.",
+  "next_action": "Implement the follow-on spec for recommendation acceptance, repo grants, coding runs, and PR lifecycle.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md",
+    "docs/spectacula/specs/unified-telegram-operator-chat.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "The re-scoped foundation slice now matches what is actually shipped, and the repo passed `mix precommit` with `987 tests, 0 failures` on 2026-04-02. Recommendation acceptance, repo access grants, and PR automation were split into a separate ready spec so they can be implemented as one coherent next-stage workflow."
+  },
+  "resume_context": {
+    "last_completed_step": "Closed the broad operator spec as a shipped foundation slice and spun the recommendation-to-PR loop into its own ready spec.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Product Direction",
+      "3. Product Model",
+      "5. Proposed Architecture",
+      "9. Phased Delivery Plan",
+      "11. Test Plan and Validation Matrix",
+      "13. Definition of Done For This Foundation Slice"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/project-oriented-conversational-operator.md",
+      "docs/spectacula/specs/project-manager-to-coding-agent-delivery-loop.md",
+      "lib/maraithon/projects.ex",
+      "lib/maraithon/projects/project.ex",
+      "lib/maraithon/projects/project_item.ex",
+      "lib/maraithon/operator_events.ex",
+      "lib/maraithon/agent_subscriptions.ex",
+      "lib/maraithon/user_memory.ex",
+      "lib/maraithon/todos.ex",
+      "lib/maraithon/telegram_assistant/context.ex",
+      "lib/maraithon/telegram_assistant/runner.ex",
+      "lib/maraithon/telegram_assistant/todo_actions.ex",
+      "lib/maraithon_web/live/dashboard_live.ex",
+      "lib/maraithon/behaviors/github_product_planner.ex"
+    ],
+    "notes": "The user-facing decision is now explicit: Maraithon already has the conversational operator foundation and should stop pretending the still-missing recommendation-to-PR workflow is part of the same unfinished slice."
+  },
+  "history": [
+    {
+      "at": "2026-04-01T22:44:36Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Created a new spec for the project-oriented conversational operator model built on connected accounts, specialist agents, projects, and one natural-language assistant."
+    },
+    {
+      "at": "2026-04-01T22:44:36Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Started Phase 1 implementation for project primitives, project-aware agent association, and conversational context exposure."
+    },
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "spec_upgraded",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Split the overbroad v2 draft into a shipped operator foundation spec plus a dedicated follow-on spec for recommendation acceptance, repo grants, coding runs, and PR lifecycle."
+    },
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Marked the conversational operator foundation slice done after final review against the updated canonical spec and a green `mix precommit` gate."
+    }
+  ]
+}

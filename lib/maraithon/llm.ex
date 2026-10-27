@@ -1,0 +1,505 @@
+defmodule Maraithon.LLM do
+  @moduledoc """
+  LLM provider interface and configuration.
+  """
+
+  alias Maraithon.LLM.RequestBudget
+  alias Maraithon.LLM.UserModel
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
+
+  require Logger
+
+  @brief_retry_reserve_ms 60_000
+  @minimum_brief_retry_ms 1_000
+
+  defp runtime_config do
+    Application.get_env(:maraithon, Maraithon.Runtime, [])
+  end
+
+  @doc """
+  Get the configured LLM provider module.
+  """
+  def provider do
+    runtime_config()
+    |> Keyword.get(:llm_provider)
+  end
+
+  @doc """
+  Get the configured provider name.
+  """
+  def provider_name do
+    runtime_config()
+    |> Keyword.get(:llm_provider_name, "unconfigured")
+  end
+
+  @doc """
+  Get the active model.
+  """
+  def model do
+    runtime_config()
+    |> Keyword.get(:llm_model)
+  end
+
+  @doc """
+  Get the active fast/routing model.
+
+  Returns nil when no routing model is configured. Callers should fall back
+  to `complete/1` (which uses the main model) when this is nil.
+  """
+  def routing_model do
+    runtime_config()
+    |> Keyword.get(:llm_routing_model)
+  end
+
+  @doc """
+  Get the active chat-tier model. This is the model used by the user-facing
+  Telegram assistant runner — favors low latency over deep reasoning. The
+  reasoning-tier `model/0` stays for chief of staff and complex agent work.
+
+  Falls back to `model/0` when not configured.
+  """
+  def chat_model do
+    runtime_config()
+    |> Keyword.get(:llm_chat_model)
+    |> case do
+      nil -> model()
+      "" -> model()
+      other -> other
+    end
+  end
+
+  @doc """
+  Get the active fast-tier model — the lowest-latency option for turns that
+  clearly do not need full intelligence (acknowledgements, quick wording).
+
+  Falls back to `chat_model/0` when not configured.
+  """
+  def fast_model do
+    runtime_config()
+    |> Keyword.get(:llm_fast_model)
+    |> case do
+      nil -> chat_model()
+      "" -> chat_model()
+      other -> other
+    end
+  end
+
+  @doc """
+  Get the brief-tier model: the highest-intelligence option, used for
+  per-todo chief-of-staff briefs. Falls back to `model/0` when unset.
+  """
+  def brief_model do
+    runtime_config()
+    |> Keyword.get(:llm_brief_model)
+    |> case do
+      nil -> model()
+      "" -> model()
+      other -> other
+    end
+  end
+
+  @doc """
+  Reasoning effort for brief-tier calls. Defaults to "high".
+  """
+  def brief_reasoning_effort do
+    runtime_config()
+    |> Keyword.get(:llm_brief_reasoning_effort)
+    |> case do
+      value when value in [nil, ""] -> "high"
+      value -> value
+    end
+  end
+
+  @doc """
+  Get the active reasoning/intelligence setting for model calls.
+  """
+  def intelligence do
+    case provider_name() do
+      "openai" -> openai_reasoning_effort()
+      "openrouter" -> openrouter_reasoning_effort()
+      _ -> runtime_config() |> Keyword.get(:llm_intelligence, openai_reasoning_effort())
+    end
+  end
+
+  @doc """
+  Get the active API key.
+  """
+  def api_key do
+    runtime_config()
+    |> Keyword.get(:llm_api_key)
+  end
+
+  def anthropic_model do
+    runtime_config()
+    |> Keyword.get(:anthropic_model, "claude-sonnet-4-20250514")
+  end
+
+  def anthropic_api_key do
+    runtime_config()
+    |> Keyword.get(:anthropic_api_key)
+  end
+
+  def openai_model do
+    runtime_config()
+    |> Keyword.get(:openai_model, "gpt-5.4")
+  end
+
+  def openai_api_key do
+    runtime_config()
+    |> Keyword.get(:openai_api_key)
+  end
+
+  def openai_reasoning_effort do
+    runtime_config()
+    |> Keyword.get(:openai_reasoning_effort, "high")
+  end
+
+  def openrouter_model do
+    runtime_config()
+    |> Keyword.get(:openrouter_model, "meta/muse-spark-1.3-contributor")
+  end
+
+  def openrouter_api_key do
+    runtime_config()
+    |> Keyword.get(:openrouter_api_key)
+  end
+
+  def openrouter_reasoning_effort do
+    runtime_config()
+    |> Keyword.get(:openrouter_reasoning_effort, "high")
+  end
+
+  def openrouter_http_referer do
+    runtime_config()
+    |> Keyword.get(:openrouter_http_referer, "https://maraithon.app")
+  end
+
+  def openrouter_app_title do
+    runtime_config()
+    |> Keyword.get(:openrouter_app_title, "Maraithon")
+  end
+
+  @doc """
+  Complete a model request with the configured provider.
+  """
+  def complete(params) when is_map(params) do
+    complete_in_bucket(params, nil)
+  end
+
+  @doc "Run a caller's durable entry only after local admission, immediately before the provider."
+  def complete_with_admission(params, admitted) when is_map(params) and is_function(admitted, 1),
+    do: complete_in_bucket(params, nil, admitted)
+
+  defp complete_in_bucket(params, bucket, admitted \\ fn request -> request.() end) do
+    case provider() do
+      nil ->
+        {:error,
+         {:llm_provider_not_configured,
+          "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
+
+      module ->
+        params = UserModel.apply(params)
+
+        with :ok <- UserModel.verify_expected(params),
+             {:ok, bounded_params} <- RequestBudget.validate(params) do
+          run_provider_request(module, bounded_params, &module.complete/1, bucket, admitted)
+        end
+    end
+  end
+
+  @doc """
+  Complete a request using the routing/fast model when configured.
+
+  This is for cheap, latency-sensitive calls such as intent classification.
+  Falls back to the primary model when no routing model is configured or
+  when the caller already pinned a model in the params.
+  Routing capacity stays separate from background reasoning even when both
+  tiers use the same model.
+  """
+  def complete_routing(params) when is_map(params) do
+    params =
+      case routing_model() do
+        nil -> params
+        routing -> Map.put_new(params, "model", routing)
+      end
+
+    complete_in_bucket(params, :chat)
+  end
+
+  @doc """
+  Complete a request using the chat-tier model. Used by the Telegram
+  assistant chat runner so user-facing answers stay fast. Reasoning-heavy
+  callers should keep using `complete/1`. Uses chat capacity even when the
+  caller pins a model or the chat and primary models are identical.
+  """
+  def complete_chat(params) when is_map(params) do
+    params
+    |> Map.put_new("model", chat_model())
+    |> complete_in_bucket(:chat)
+  end
+
+  @doc """
+  Complete a request on the brief tier: the highest-intelligence model at
+  brief reasoning effort. Used for per-todo chief-of-staff briefs where depth
+  matters more than latency.
+
+  If the brief model rejects the request (unknown model, unsupported
+  reasoning effort), the call retries once on the primary model at "high".
+  When both tiers resolve to the same target, transient provider, network, or
+  timeout failures still receive one retry. The first call reserves a bounded
+  part of the caller's deadline for that recovery attempt.
+  """
+  def complete_brief(params) when is_map(params) do
+    primary = model()
+    brief = brief_model()
+    deadline = System.monotonic_time(:millisecond) + request_timeout_ms(params)
+
+    brief_params =
+      params
+      |> Map.put_new("model", brief)
+      |> Map.put_new("reasoning_effort", brief_reasoning_effort())
+      |> Map.put("timeout_ms", first_brief_attempt_timeout(deadline))
+
+    case complete(brief_params) do
+      {:ok, _response} = ok ->
+        ok
+
+      {:error, reason} = error ->
+        fallback_params =
+          params
+          |> Map.put("model", primary)
+          |> Map.put("reasoning_effort", "high")
+
+        if distinct_brief_target?(brief_params, fallback_params) or transient_failure?(reason) do
+          retry_brief(fallback_params, error, reason, deadline)
+        else
+          error
+        end
+    end
+  end
+
+  @doc false
+  def transient_failure?(:timeout), do: true
+  def transient_failure?(:llm_timeout), do: true
+  def transient_failure?(:provider_error), do: true
+  def transient_failure?(:network_error), do: true
+  def transient_failure?({:llm_timeout, _timeout_ms}), do: true
+  def transient_failure?({:provider_error, _detail}), do: true
+  def transient_failure?({:network_error, _detail}), do: true
+  def transient_failure?({:invalid_response, _detail}), do: true
+
+  def transient_failure?({:api_error, status})
+      when is_integer(status) and status >= 500 and status <= 599,
+      do: true
+
+  def transient_failure?({:api_error, status, _detail})
+      when is_integer(status) and status >= 500 and status <= 599,
+      do: true
+
+  def transient_failure?(_reason), do: false
+
+  @doc """
+  Stream-complete a request, calling on_chunk for each output_text delta.
+
+  Falls back to `complete/1` when the configured provider does not
+  implement `stream_complete/2` or when the streaming feature is disabled.
+  """
+  def stream_complete(params, on_chunk) when is_map(params) and is_function(on_chunk, 1) do
+    stream_complete_in_bucket(params, on_chunk, nil)
+  end
+
+  defp stream_complete_in_bucket(params, on_chunk, bucket) do
+    cond do
+      not stream_replies_enabled?() ->
+        complete_in_bucket(params, bucket)
+
+      is_nil(provider()) ->
+        complete_in_bucket(params, bucket)
+
+      function_exported?(provider(), :stream_complete, 2) ->
+        with {:ok, bounded_params} <- RequestBudget.validate(UserModel.apply(params)) do
+          module = provider()
+
+          run_provider_request(
+            module,
+            bounded_params,
+            &module.stream_complete(&1, on_chunk),
+            bucket
+          )
+        end
+
+      true ->
+        complete_in_bucket(params, bucket)
+    end
+  end
+
+  @doc """
+  Stream-complete via the chat-tier model.
+  """
+  def stream_complete_chat(params, on_chunk)
+      when is_map(params) and is_function(on_chunk, 1) do
+    params
+    |> Map.put_new("model", chat_model())
+    |> stream_complete_in_bucket(on_chunk, :chat)
+  end
+
+  defp stream_replies_enabled? do
+    runtime_config()
+    |> Keyword.get(:openai_stream_replies, true)
+  end
+
+  defp run_provider_request(module, params, fun, bucket, admitted \\ fn request -> request.() end)
+       when is_function(fun, 1) do
+    timeout_ms =
+      case params["timeout_ms"] do
+        value when is_integer(value) and value > 0 -> min(value, 300_000)
+        _value -> 120_000
+      end
+
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    bucket = bucket || rate_limit_bucket(params)
+
+    request = fn bounded ->
+      admitted.(fn -> fun.(bounded) |> tap(&record_provider_rate_limit(&1, bucket)) end)
+    end
+
+    if provider_backpressure_enabled?(module) do
+      with_provider_slot(bucket, deadline, params, request)
+    else
+      request.(params)
+    end
+  end
+
+  defp retry_brief(params, original_error, original_reason, deadline) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+    if remaining_ms >= @minimum_brief_retry_ms do
+      Logger.info("Retrying brief model call",
+        model: params["model"],
+        failure_code: Maraithon.Redaction.error_class(original_reason)
+      )
+
+      case complete(Map.put(params, "timeout_ms", remaining_ms)) do
+        {:ok, _response} = ok -> ok
+        {:error, _retry_reason} -> original_error
+      end
+    else
+      original_error
+    end
+  end
+
+  defp first_brief_attempt_timeout(deadline) do
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 1)
+
+    if remaining_ms >= @brief_retry_reserve_ms + @minimum_brief_retry_ms do
+      remaining_ms - @brief_retry_reserve_ms
+    else
+      remaining_ms
+    end
+  end
+
+  defp distinct_brief_target?(brief_params, fallback_params) do
+    brief_params["model"] != fallback_params["model"] or
+      brief_params["reasoning_effort"] != fallback_params["reasoning_effort"]
+  end
+
+  defp request_timeout_ms(params) do
+    case params["timeout_ms"] do
+      value when is_integer(value) and value > 0 -> min(value, 300_000)
+      _value -> 120_000
+    end
+  end
+
+  defp provider_backpressure_enabled?(Maraithon.LLM.OpenAIProvider), do: true
+  defp provider_backpressure_enabled?(Maraithon.LLM.AnthropicProvider), do: true
+  defp provider_backpressure_enabled?(Maraithon.LLM.OpenRouterProvider), do: true
+
+  defp provider_backpressure_enabled?(_module) do
+    provider_name() in ["openai", "anthropic", "openrouter"]
+  end
+
+  defp with_provider_slot(bucket, deadline, params, fun) when is_function(fun, 1) do
+    checkout_timeout = max(deadline - System.monotonic_time(:millisecond), 1)
+
+    case LLMRateLimiter.checkout_with_timeout(bucket, checkout_timeout) do
+      :ok ->
+        try do
+          remaining = deadline - System.monotonic_time(:millisecond)
+
+          if remaining > 0 do
+            params
+            |> Map.put("timeout_ms", remaining)
+            |> fun.()
+          else
+            {:error, :timeout}
+          end
+        after
+          LLMRateLimiter.checkin(bucket)
+        end
+
+      {:error, _reason} = error ->
+        # A timed-out GenServer.call is still queued. Sender ordering ensures
+        # this compensating checkin runs after any late checkout.
+        LLMRateLimiter.checkin(bucket)
+        error
+    end
+  end
+
+  @doc false
+  def execution_bucket(params) when is_map(params) do
+    case RequestBudget.validate(params) do
+      {:ok, bounded_params} -> rate_limit_bucket(bounded_params)
+      {:error, _reason} -> :default
+    end
+  end
+
+  def execution_bucket(_params), do: :default
+
+  @doc false
+  def rate_limit_bucket(params) when is_map(params) do
+    params_model = params["model"] || params[:model] || model()
+    chat_model = chat_model()
+    routing_model = routing_model()
+    fast_model = fast_model()
+    primary_model = model()
+
+    cond do
+      non_empty(params_model) == nil ->
+        :default
+
+      non_empty(params_model) == non_empty(chat_model) and
+          non_empty(params_model) != non_empty(primary_model) ->
+        :chat
+
+      non_empty(params_model) == non_empty(routing_model) and
+          non_empty(routing_model) != non_empty(primary_model) ->
+        :chat
+
+      non_empty(params_model) == non_empty(fast_model) and
+          non_empty(fast_model) != non_empty(primary_model) ->
+        :chat
+
+      true ->
+        :reasoning
+    end
+  end
+
+  def rate_limit_bucket(_params), do: :default
+
+  defp non_empty(value) when is_binary(value) and byte_size(value) <= 255 do
+    if String.valid?(value) do
+      case String.trim(value) do
+        "" -> nil
+        trimmed -> trimmed
+      end
+    end
+  end
+
+  defp non_empty(_value), do: nil
+
+  defp record_provider_rate_limit({:error, {:rate_limited, retry_after_ms}}, bucket) do
+    LLMRateLimiter.record_rate_limit_async(retry_after_ms, bucket)
+  end
+
+  defp record_provider_rate_limit(_result, _bucket), do: :ok
+end

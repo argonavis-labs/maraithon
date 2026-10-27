@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+prefix=DELEGATION_EVAL=
+case "${1:-}" in
+  delegation-eval-preflight) task=delegation_eval_preflight; prefix=DELEGATION_EVAL_PREFLIGHT= ;;
+  delegation-eval-diagnose)
+    [[ "${DELEGATION_EVAL_EXECUTION_ID:-}" =~ ^maraithon-(todo-validation|migrate)-[a-z0-9]{5}$ ]] || {
+      echo "A controlled eval or migration Cloud Run execution ID is required" >&2; exit 1;
+    }
+    diagnostic_job="${DELEGATION_EVAL_EXECUTION_ID%-*}"
+    # Read only this execution. Emit exception classes and source locations,
+    # never exception messages, inspected arguments or provider response bodies.
+    gcloud logging read \
+      "resource.type=cloud_run_job AND resource.labels.job_name=\"${diagnostic_job}\" AND labels.\"run.googleapis.com/execution_name\"=\"${DELEGATION_EVAL_EXECUTION_ID}\"" \
+      --project maraithon --limit 200 --order=asc --format=json | jq -c '
+        [.[] | .timestamp as $at | (.textPayload // "") | split("\n")[] |
+          [capture("\\*\\* \\((?<exception>[A-Za-z0-9_.]+)\\)")?,
+           capture("ERROR (?<sqlstate>[0-9A-Z]{5}) \\((?<database_error>[a-z_]+)\\)")?,
+           capture("(?<migration_guard>Calendar source state (?:requires a verified catalog baseline|durable catalog entry is missing|found unrelated durable catalog drift|privacy catalog entry is missing|did not restore all catalog proofs))")?,
+           capture("^\\*\\* \\(RuntimeError\\) Delegation eval could not start: (?<reason>account_cost_hold|eval_work_window_too_short|eval_preflight_required|unsupported_eval_scenario)$")?,
+           capture("^\\s*\\(maraithon [0-9A-Za-z.-]+\\) (?<file>lib/[a-z0-9_/]+\\.ex):(?<line>[0-9]+): (?<function>[A-Za-z0-9_.!?]+/[0-9]+)")?][] |
+          . + {timestamp: $at}] | {execution: env.DELEGATION_EVAL_EXECUTION_ID, failures: .}'
+    exit 0
+    ;;
+  delegation-eval-start) task=delegation_eval_start ;;
+  delegation-eval-status) task=delegation_eval_status ;;
+  delegation-eval-review) task=delegation_eval_review; prefix=DELEGATION_EVAL_ENCRYPTED= ;;
+  delegation-eval-calendar) task=delegation_eval_calendar; prefix=DELEGATION_EVAL_CALENDAR= ;;
+  delegation-eval-memory) task=delegation_eval_memory ;;
+  delegation-eval-resume) task=delegation_eval_resume ;;
+  *) echo "Expected a controlled delegation eval operation" >&2; exit 1 ;;
+esac
+
+if [[ "${task}" == delegation_eval_memory || "${task}" == delegation_eval_resume || "${task}" == delegation_eval_review || -n "${DELEGATION_EVAL_JOB_ID:-}" ]]; then
+  [[ "${DELEGATION_EVAL_JOB_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+    echo "A controlled eval job UUID is required" >&2; exit 1;
+  }
+fi
+
+source "$(dirname "$0")/delegation-eval-config"
+scenario="${DELEGATION_EVAL_SCENARIO:-information_reply}"
+case "${scenario}" in
+  information_reply|proposed_information_reply|schedule_and_book|requested_scheduling|accepted_slot_becomes_busy|durable_memory) ;;
+  *) echo "Unknown controlled eval scenario" >&2; exit 1 ;;
+esac
+eval_env+="|DELEGATION_EVAL_SCENARIO=${scenario}"
+eval_env+="|DELEGATION_EVAL_JOB_ID=${DELEGATION_EVAL_JOB_ID:-}"
+eval_code="Maraithon.Release.${task}"
+if [[ "${task}" == delegation_eval_review ]]; then
+  [[ "${DELEGATION_EVAL_REVIEW_PUBLIC_KEY:-}" =~ ^[A-Za-z0-9+/=]{100,2000}$ ]] || {
+    echo "A base64 PEM public key is required for encrypted review output" >&2; exit 1;
+  }
+  eval_env+="|DELEGATION_EVAL_REVIEW_PUBLIC_KEY=${DELEGATION_EVAL_REVIEW_PUBLIC_KEY}"
+  eval_code="$(cat "$(dirname "$0")/delegation-eval-review.exs")"
+fi
+
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+execution_status=0
+gcloud run jobs execute maraithon-todo-validation --project maraithon --region us-central1 \
+  --args="^@^eval@${eval_code}" --update-env-vars "${eval_env}" --wait --quiet || execution_status=$?
+
+for attempt in $(seq 1 20); do
+  report="$(gcloud logging read \
+    "resource.type=cloud_run_job AND resource.labels.job_name=maraithon-todo-validation AND timestamp>=\"${started_at}\" AND textPayload:\"${prefix}\"" \
+    --project maraithon --limit 1 --order=desc --format='value(textPayload)')"
+  if [[ "${report}" == "${prefix}"* ]]; then
+    echo "${report}"
+    exit "${execution_status}"
+  fi
+  sleep 3
+done
+echo "Eval operation finished without a report" >&2
+exit 1

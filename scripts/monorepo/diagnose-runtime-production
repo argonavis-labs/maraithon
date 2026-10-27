@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+project="${MARAITHON_GCP_PROJECT:-maraithon}"
+service="${MARAITHON_GCP_SERVICE:-maraithon}"
+
+require_command gcloud
+
+if [[ "${project}" != "maraithon" || "${service}" != "maraithon" ]]; then
+  echo "Refusing to diagnose outside the pinned Maraithon production topology" >&2
+  exit 64
+fi
+
+# Do not emit log bodies. Only report counts for fixed coordination error classes.
+logs="$(gcloud logging read \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND ((textPayload:\"RUNTIME_COORDINATION_ERROR=\" OR textPayload:\"Maraithon.Runtime.Coordination.Session\" OR textPayload:\"runtime_partitions\" OR textPayload:\"runtime_partition_transitions\") OR (jsonPayload.message:\"RUNTIME_COORDINATION_ERROR=\" OR jsonPayload.message:\"Maraithon.Runtime.Coordination.Session\" OR jsonPayload.message:\"runtime_partitions\" OR jsonPayload.message:\"runtime_partition_transitions\"))" \
+  --project "${project}" \
+  --freshness 30m \
+  --limit 1000 \
+  --order=desc \
+  --format 'value(textPayload,jsonPayload.message)')"
+
+count() {
+  local pattern="$1"
+  local value
+  value="$(printf '%s\n' "${logs}" | grep -Eic "${pattern}" || true)"
+  printf '%s' "${value:-0}"
+}
+
+printf 'RUNTIME_COORDINATION_DIAGNOSTIC={'
+printf '"records":%s' "$(count '.')"
+printf ',"joining_workers_missing":%s' "$(count 'RUNTIME_COORDINATION_ERROR=joining_workers_missing')"
+printf ',"mark_node_ready":%s' "$(count 'RUNTIME_COORDINATION_ERROR=mark_node_ready')"
+printf ',"renew_node":%s' "$(count 'RUNTIME_COORDINATION_ERROR=renew_node')"
+printf ',"renew_partitions":%s' "$(count 'RUNTIME_COORDINATION_ERROR=renew_partitions')"
+printf ',"publish_partition":%s' "$(count 'RUNTIME_COORDINATION_ERROR=publish_partition')"
+printf ',"reconcile_proven":%s' "$(count 'RUNTIME_COORDINATION_ERROR=reconcile_proven')"
+printf ',"planner_error":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_error')"
+printf ',"planner_database":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner(_[a-z]+)?:database|RUNTIME_COORDINATION_ERROR=planner_database')"
+printf ',"planner_finalize":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_finalize:')"
+printf ',"planner_fence":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_fence:')"
+printf ',"planner_assign":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_assign:')"
+printf ',"planner_rebalance":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_rebalance:')"
+printf ',"planner_check_violation":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_[a-z]+:database_check_violation')"
+printf ',"planner_insufficient_privilege":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_[a-z]+:database_insufficient_privilege')"
+printf ',"planner_other_database":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner_[a-z]+:database_(foreign_key_violation|lock_not_available|query_canceled|unique_violation|undefined_column|undefined_table|other)')"
+printf ',"missing_effects_drained_epoch":%s' "$(count 'undefined_column.*effects_drained_epoch|column.*effects_drained_epoch.*does not exist')"
+printf ',"missing_lease_ready_at":%s' "$(count 'undefined_column.*ready_at|column.*ready_at.*does not exist')"
+printf ',"missing_lease_draining_at":%s' "$(count 'undefined_column.*draining_at|column.*draining_at.*does not exist')"
+printf ',"missing_coordination_activation_epoch":%s' "$(count 'undefined_column.*coordination_activation_epoch|column.*coordination_activation_epoch.*does not exist')"
+printf ',"missing_coordination_partition_id":%s' "$(count 'undefined_column.*coordination_partition_id|column.*coordination_partition_id.*does not exist')"
+printf ',"missing_coordination_partition_epoch":%s' "$(count 'undefined_column.*coordination_partition_epoch|column.*coordination_partition_epoch.*does not exist')"
+printf ',"missing_coordination_node_incarnation_id":%s' "$(count 'undefined_column.*coordination_node_incarnation_id|column.*coordination_node_incarnation_id.*does not exist')"
+printf ',"missing_coordination_task_assignment_id":%s' "$(count 'undefined_column.*coordination_task_assignment_id|column.*coordination_task_assignment_id.*does not exist')"
+printf ',"missing_cancellation_state":%s' "$(count 'undefined_column.*cancellation_state|column.*cancellation_state.*does not exist')"
+printf ',"missing_cancellation_reason":%s' "$(count 'undefined_column.*cancellation_reason|column.*cancellation_reason.*does not exist')"
+printf ',"missing_cancellation_requested_at":%s' "$(count 'undefined_column.*cancellation_requested_at|column.*cancellation_requested_at.*does not exist')"
+printf ',"missing_cancellation_target_claim_token":%s' "$(count 'undefined_column.*cancellation_target_claim_token|column.*cancellation_target_claim_token.*does not exist')"
+printf ',"missing_cancellation_last_attempt_at":%s' "$(count 'undefined_column.*cancellation_last_attempt_at|column.*cancellation_last_attempt_at.*does not exist')"
+printf ',"missing_cancellation_last_error":%s' "$(count 'undefined_column.*cancellation_last_error|column.*cancellation_last_error.*does not exist')"
+printf ',"missing_cancellation_settled_at":%s' "$(count 'undefined_column.*cancellation_settled_at|column.*cancellation_settled_at.*does not exist')"
+printf ',"missing_transition_blocked_reason":%s' "$(count 'undefined_column.*blocked_reason|column.*blocked_reason.*does not exist')"
+printf ',"planner_exception":%s' "$(count 'RUNTIME_COORDINATION_ERROR=planner(_[a-z]+)?:exception|RUNTIME_COORDINATION_ERROR=planner_exception')"
+printf ',"session_termination":%s' "$(count 'GenServer .*Coordination.Session.*terminating|Coordination.Session.*terminating')"
+printf ',"insufficient_privilege":%s' "$(count 'insufficient_privilege|permission denied')"
+printf ',"check_violation":%s' "$(count 'check_violation|ERROR 23514')"
+printf ',"partition_authority_lost":%s' "$(count 'partition_authority_lost')"
+printf ',"node_authority_lost":%s' "$(count 'node_authority_lost')"
+printf ',"leader_authority_lost":%s' "$(count 'leader_authority_lost')"
+printf ',"partition_not_assignable":%s' "$(count 'partition_not_assignable')"
+printf ',"partition_transition_table":%s' "$(count 'runtime_partition_transitions')"
+printf ',"partition_table":%s' "$(count 'runtime_partitions')"
+printf ',"database_connection":%s' "$(count 'DBConnection|connection.*closed|tcp recv')"
+printf '}\n'
+
+job="${service}-todo-validation"
+snapshot_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+expression="$(cat <<'ELIXIR'
+Application.load(:maraithon)
+keys = ~w(nodes_active nodes_recent leader_active leader_recent partitions_ready preparing_live preparing_expired preparing_active_owner draining_live draining_expired unassigned blocked tasks_reserved tasks_running tasks_termination_requested tasks_termination_proven)
+sql = """
+SELECT
+  (SELECT count(*) FROM public.runtime_node_incarnations WHERE state = 'ready' AND ready_at IS NOT NULL AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_node_incarnations WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp()) AND updated_at > timezone('UTC', clock_timestamp()) - interval '10 seconds'),
+  (SELECT count(*) FROM public.runtime_leader_authorities WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_leader_authorities WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp()) AND updated_at > timezone('UTC', clock_timestamp()) - interval '10 seconds'),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'preparing' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'preparing' AND lease_expires_at <= timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions AS p JOIN public.runtime_node_incarnations AS n ON n.id = p.owner_node_incarnation_id WHERE p.state = 'preparing' AND p.lease_expires_at > timezone('UTC', clock_timestamp()) AND n.state = 'ready' AND n.lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'draining' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'draining' AND lease_expires_at <= timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'unassigned'),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'blocked'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'reserved'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'running'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'termination_requested'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'termination_proven')
+"""
+{:ok, row, _apps} = Ecto.Migrator.with_repo(Maraithon.Repo, fn repo -> repo.query!(sql).rows |> hd() end)
+IO.puts("RUNTIME_COORDINATION_DB=" <> Jason.encode!(Map.new(Enum.zip(keys, row))))
+ELIXIR
+)"
+
+gcloud run jobs execute "${job}" \
+  --project "${project}" \
+  --region "${MARAITHON_GCP_REGION:-us-central1}" \
+  --args="^@^eval@${expression}" \
+  --wait \
+  --quiet
+
+snapshot=""
+for _attempt in $(seq 1 20); do
+  snapshot="$(gcloud logging read \
+    "resource.type=cloud_run_job AND resource.labels.job_name=${job} AND timestamp>=\"${snapshot_started_at}\" AND textPayload:\"RUNTIME_COORDINATION_DB=\"" \
+    --project "${project}" \
+    --limit 1 \
+    --order=desc \
+    --format 'value(textPayload)' 2>/dev/null || true)"
+
+  if [[ "${snapshot}" == RUNTIME_COORDINATION_DB=* ]]; then
+    break
+  fi
+
+  sleep 3
+done
+
+if [[ "${snapshot}" != RUNTIME_COORDINATION_DB=* ]]; then
+  echo "Runtime coordination snapshot completed without an aggregate report" >&2
+  exit 1
+fi
+
+echo "${snapshot}"

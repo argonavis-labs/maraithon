@@ -1,0 +1,29 @@
+// Config.local.xcconfig.example — template for per-developer signing.
+//
+// Copy this file to Config.local.xcconfig (which is gitignored) and
+// uncomment the DEVELOPMENT_TEAM line below, replacing ABCDE12345 with
+// your own 10-character Apple Developer team ID.
+//
+// How to find your team ID:
+//   1. Open https://developer.apple.com/account
+//   2. Click "Membership" in the left sidebar.
+//   3. Copy the value labelled "Team ID" (10 chars, e.g. "ABCDE12345").
+//
+// Then run:
+//   cp Config.local.xcconfig.example Config.local.xcconfig
+//   # edit Config.local.xcconfig and set DEVELOPMENT_TEAM
+//   xcodegen generate
+//   open Maraithon.xcodeproj
+//
+// CODE_SIGN_STYLE stays Automatic (set in project.yml); Xcode will pick
+// up your team ID from here and auto-manage signing certificates.
+
+// DEVELOPMENT_TEAM = ABCDE12345
+
+// Sparkle EdDSA public key for verifying companion app updates.
+// Generated once by `./scripts/sparkle_keys.sh`, which prints a
+// 44-character base64 string you paste below. The matching private
+// key lives in your login Keychain and never leaves your laptop.
+// See docs/RELEASE.md > "Generate the Sparkle EdDSA key pair".
+
+// SUPublicEDKey = paste44characterbase64stringfromsparklekeyshereeeee=

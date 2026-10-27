@@ -1,0 +1,475 @@
+import Foundation
+import Testing
+@testable import MaraithonMobile
+
+@Suite("Production Data Sync")
+@MainActor
+struct ProductionDataSyncTests {
+    @Test
+    func personPayloadUsesPersonalFallbackForEmptyRelationshipContext() {
+        let payload = ProductionDataSync.personPayload(
+            name: "Alex",
+            company: " ",
+            email: "alex@example.com",
+            phone: "",
+            status: .active,
+            dealStage: .qualified,
+            dealValue: 0,
+            notes: ""
+        )
+
+        #expect(payload["relationship"]?.string == "Personal")
+    }
+
+    @Test
+    func personPayloadCanPersistLastContactedAt() {
+        let date = Date(timeIntervalSince1970: 1_779_800_000)
+        let payload = ProductionDataSync.personPayload(
+            name: "Alex",
+            company: "Friend",
+            email: "alex@example.com",
+            phone: "",
+            status: .active,
+            dealStage: .qualified,
+            dealValue: 0,
+            notes: "",
+            lastContactedAt: date
+        )
+
+        #expect(payload["last_interaction_at"]?.string == ISO8601DateFormatter().string(from: date))
+    }
+
+    @Test
+    func personPayloadFromContactPreservesQuickActionState() {
+        let date = Date(timeIntervalSince1970: 1_779_800_000)
+        let contact = CRMContact(
+            name: "Ada Chen",
+            company: "Northstar",
+            email: "ada@example.com",
+            phone: "555-0100",
+            status: .active,
+            dealValue: 42_000,
+            dealStage: .qualified,
+            lastContactedAt: date,
+            notes: "Board prep contact."
+        )
+
+        let payload = ProductionDataSync.personPayload(from: contact)
+        let metadata = payload["metadata"]?.object
+
+        #expect(payload["display_name"]?.string == "Ada Chen")
+        #expect(payload["relationship"]?.string == "Northstar")
+        #expect(payload["last_interaction_at"]?.string == ISO8601DateFormatter().string(from: date))
+        #expect(metadata?["mobile_status"]?.string == "active")
+        #expect(metadata?["deal_stage"]?.string == "qualified")
+    }
+
+    @Test
+    func serverArchivedRelationshipStateWinsOverStaleMobileMetadata() {
+        let archived = ProductionDataSync.contact(
+            from: remotePerson(
+                status: "archived",
+                metadata: ["mobile_status": "active", "deal_stage": "proposal"]
+            ),
+            id: UUID()
+        )
+        let merged = ProductionDataSync.contact(
+            from: remotePerson(
+                status: "merged",
+                metadata: ["mobile_status": "active", "deal_stage": "qualified"]
+            ),
+            id: UUID()
+        )
+
+        #expect(archived.status == .closed)
+        #expect(archived.dealStage == .proposal)
+        #expect(merged.status == .closed)
+        #expect(merged.dealStage == .qualified)
+    }
+
+    @Test
+    func remotePersonWithoutRelationshipContextDoesNotInventCompany() {
+        let missingRelationship = ProductionDataSync.contact(
+            from: remotePerson(relationship: nil),
+            id: UUID()
+        )
+        let blankRelationship = ProductionDataSync.contact(
+            from: remotePerson(relationship: " "),
+            id: UUID()
+        )
+
+        #expect(missingRelationship.company == "")
+        #expect(blankRelationship.company == "")
+    }
+
+    @Test
+    func dismissedRemoteTodosDoNotReturnToMobileList() {
+        #expect(
+            ProductionDataSync.shouldKeepRemoteTodo(remoteTodo(status: "open"))
+        )
+        #expect(
+            ProductionDataSync.shouldKeepRemoteTodo(remoteTodo(status: "done"))
+        )
+        #expect(
+            !ProductionDataSync.shouldKeepRemoteTodo(remoteTodo(status: "dismissed"))
+        )
+    }
+
+    @Test
+    func remoteTodoPriorityScoresMapToUrgencyBands() {
+        #expect(ProductionDataSync.todo(from: remoteTodo(priority: 95), id: UUID()).priority == .critical)
+        #expect(ProductionDataSync.todo(from: remoteTodo(priority: 90), id: UUID()).priority == .critical)
+        #expect(ProductionDataSync.todo(from: remoteTodo(priority: 80), id: UUID()).priority == .high)
+        #expect(ProductionDataSync.todo(from: remoteTodo(priority: 55), id: UUID()).priority == .medium)
+        #expect(ProductionDataSync.todo(from: remoteTodo(priority: 20), id: UUID()).priority == .low)
+        #expect(ProductionDataSync.todo(from: remoteTodo(priority: nil), id: UUID()).priority == .medium)
+    }
+
+    @Test
+    func todoPayloadUsesServerScoresForUrgencyBands() {
+        #expect(todoPayloadPriority(.critical) == 95)
+        #expect(todoPayloadPriority(.high) == 80)
+        #expect(todoPayloadPriority(.medium) == 55)
+        #expect(todoPayloadPriority(.low) == 20)
+    }
+
+    @Test
+    func todoPayloadPreservesExplicitNextActionWhenEditingGeneratedWork() {
+        let nextAction = ProductionDataSync.nextActionForTodoPayload(
+            title: "Reply to board follow-up",
+            notes: "A board member is waiting on the financing packet.",
+            requestedNextAction: " ",
+            existingTitle: "Board follow-up",
+            existingNotes: "A board member asked for the financing packet.",
+            existingNextAction: "Send the financing packet and confirm the next review window."
+        )
+
+        let payload = ProductionDataSync.todoPayload(
+            title: "Reply to board follow-up",
+            notes: "A board member is waiting on the financing packet.",
+            priority: .high,
+            dueDate: nil,
+            isCompleted: false,
+            nextAction: nextAction
+        )
+
+        #expect(payload["next_action"]?.string == "Send the financing packet and confirm the next review window.")
+    }
+
+    @Test
+    func todoPayloadUsesOperatorEditedNextActionOverExistingGeneratedWork() {
+        let nextAction = ProductionDataSync.nextActionForTodoPayload(
+            title: "Reply to board follow-up",
+            notes: "A board member is waiting on the financing packet.",
+            requestedNextAction: "Send the packet, then ask whether Friday still works.",
+            existingTitle: "Board follow-up",
+            existingNotes: "A board member asked for the financing packet.",
+            existingNextAction: "Send the financing packet and confirm the next review window."
+        )
+
+        let payload = ProductionDataSync.todoPayload(
+            title: "Reply to board follow-up",
+            notes: "A board member is waiting on the financing packet.",
+            priority: .high,
+            dueDate: nil,
+            isCompleted: false,
+            nextAction: nextAction
+        )
+
+        #expect(payload["next_action"]?.string == "Send the packet, then ask whether Friday still works.")
+    }
+
+    @Test
+    func nextActionForTodoPayloadRefreshesGenericTitleActionAfterManualEdit() {
+        let nextAction = ProductionDataSync.nextActionForTodoPayload(
+            title: "Send revised investor update",
+            notes: "Use the board-approved metrics.",
+            requestedNextAction: "",
+            existingTitle: "Send investor update",
+            existingNotes: "",
+            existingNextAction: "Send investor update"
+        )
+
+        #expect(nextAction == "Send revised investor update")
+    }
+
+    @Test
+    func remoteTodoNextActionSurvivesSyncForActionRows() {
+        let remote = remoteTodo(
+            summary: "The customer asked whether the support plan is ready.",
+            nextAction: "Reply with the support plan, owner, and next review date."
+        )
+
+        let todo = ProductionDataSync.todo(from: remote, id: UUID())
+
+        #expect(todo.notes == "The customer asked whether the support plan is ready.")
+        #expect(todo.nextAction == "Reply with the support plan, owner, and next review date.")
+        #expect(todo.displayNextAction == "Reply with the support plan, owner, and next review date.")
+    }
+
+    @Test
+    func remoteTodoDecisionCardContextSurvivesSyncForTodayRows() {
+        let remote = remoteTodo(
+            summary: "Michael is waiting on the campaign update.",
+            nextAction: "Approve the short reply.",
+            actionCard: MobileAPIClient.RemoteActionCard(
+                decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+                contextItems: [
+                    .init(label: "Person", value: "Michael"),
+                    .init(label: "Project", value: "UGC campaign"),
+                    .init(label: "Relationship", value: "Investor")
+                ],
+                whyNow: "Michael is waiting and no later reply was found.",
+                sourceContext: "Checked Gmail",
+                nextBestAction: "Approve a short reply.",
+                draftPreview: "Thanks Michael. I can send the campaign timing today.",
+                evidenceExcerpt: "Can you send the next update?"
+            )
+        )
+
+        let todo = ProductionDataSync.todo(from: remote, id: UUID())
+
+        #expect(todo.decisionPrompt == "Send the campaign update with a clear owner and timing.")
+        #expect(todo.decisionContextSummary == "Michael · UGC campaign · Investor")
+        #expect(todo.whyNow == "Michael is waiting; no later reply is recorded.")
+        #expect(todo.sourceContext == "Reviewed Gmail")
+        #expect(todo.nextBestAction == "Approve a short reply.")
+        #expect(todo.draftPreview == "Thanks Michael. I can send the campaign timing today.")
+        #expect(todo.evidenceExcerpt == "Can you send the next update?")
+    }
+
+    @Test
+    func remoteTodoDecisionCardCopyIsSanitizedBeforePersistence() {
+        let remote = remoteTodo(
+            actionCard: MobileAPIClient.RemoteActionCard(
+                decisionPrompt: "The user needs to approve the finance reply.",
+                contextItems: [
+                    .init(label: "Person", value: "The operator"),
+                    .init(label: "Person", value: "the operator"),
+                    .init(label: "Project", value: "Finance approval")
+                ],
+                whyNow: "This needs operator attention before noon.",
+                sourceContext: "source_context: Checked Gmail\npriority_score: 97",
+                nextBestAction: "User should send the ETA.",
+                draftPreview: "The operator's reply should include timing.",
+                evidenceExcerpt: "The operator's last message asked for timing."
+            )
+        )
+
+        let todo = ProductionDataSync.todo(from: remote, id: UUID())
+
+        #expect(todo.decisionPrompt == "You need to approve the finance reply.")
+        #expect(todo.decisionContextSummary == "You · Finance approval")
+        #expect(todo.whyNow == "This needs your attention before noon.")
+        #expect(todo.sourceContext == "Reviewed Gmail")
+        #expect(todo.nextBestAction == "You should send the ETA.")
+        #expect(todo.draftPreview == "Your reply should include timing.")
+        #expect(todo.evidenceExcerpt == "Your last message asked for timing.")
+    }
+
+    @Test
+    func cardsOmittedRefreshPreservesExistingDecisionContext() {
+        let card = MobileAPIClient.RemoteActionCard(
+            decisionPrompt: "Decide whether to send the campaign update.",
+            contextItems: [.init(label: "Person", value: "Michael")],
+            whyNow: "Michael is waiting.",
+            sourceContext: "Checked Gmail",
+            nextBestAction: "Approve a short reply.",
+            draftPreview: "Thanks Michael.",
+            evidenceExcerpt: "Can you send the update?"
+        )
+        let todo = ProductionDataSync.todo(from: remoteTodo(actionCard: card), id: UUID())
+
+        let storedPrompt = todo.decisionPrompt
+        let storedWhyNow = todo.whyNow
+        let storedNextBest = todo.nextBestAction
+        let storedDraft = todo.draftPreview
+        #expect(storedPrompt != nil)
+
+        // A fast first-paint refresh (cards omitted) updates core fields but must not
+        // wipe the decision context that the background card pass populates.
+        ProductionDataSync.apply(
+            remoteTodo(status: "open", priority: 80, summary: "A board member is waiting."),
+            to: todo,
+            includeCards: false
+        )
+
+        #expect(todo.priority == .high)
+        #expect(todo.notes == "A board member is waiting.")
+        #expect(todo.decisionPrompt == storedPrompt)
+        #expect(todo.whyNow == storedWhyNow)
+        #expect(todo.nextBestAction == storedNextBest)
+        #expect(todo.draftPreview == storedDraft)
+    }
+
+    @Test
+    func closedCardOmissionPreservesExistingDecisionContext() {
+        let card = MobileAPIClient.RemoteActionCard(
+            decisionPrompt: "Decide whether to send the campaign update.",
+            contextItems: [.init(label: "Person", value: "Michael")],
+            whyNow: "Michael is waiting.",
+            sourceContext: "Checked Gmail",
+            nextBestAction: "Approve a short reply.",
+            draftPreview: "Thanks Michael.",
+            evidenceExcerpt: "Can you send the update?"
+        )
+        let todo = ProductionDataSync.todo(from: remoteTodo(actionCard: card), id: UUID())
+
+        ProductionDataSync.apply(
+            remoteTodo(status: "done", hasActionCardField: false),
+            to: todo,
+            includeCards: true
+        )
+
+        #expect(todo.isCompleted)
+        #expect(todo.decisionPrompt == "Decide whether to send the campaign update.")
+        #expect(todo.nextBestAction == "Approve a short reply.")
+        #expect(todo.draftPreview == "Thanks Michael.")
+    }
+
+    @Test
+    func syncedTodoUsesAuthoritativeServerTimestamps() {
+        let insertedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let todo = ProductionDataSync.todo(
+            from: remoteTodo(insertedAt: insertedAt, updatedAt: updatedAt),
+            id: UUID()
+        )
+
+        #expect(todo.createdAt == insertedAt)
+        #expect(todo.updatedAt == updatedAt)
+    }
+
+    @Test
+    func missingServerTimestampsDoNotMakeExistingWorkLookFresh() {
+        let createdAt = Date(timeIntervalSince1970: 1_600_000_000)
+        let updatedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let todo = TodoItem(
+            id: UUID(),
+            title: "Existing work",
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+
+        ProductionDataSync.apply(remoteTodo(), to: todo)
+
+        #expect(todo.createdAt == createdAt)
+        #expect(todo.updatedAt == updatedAt)
+    }
+
+    @Test
+    func cardsIncludedRefreshUpdatesDecisionContext() {
+        let todo = ProductionDataSync.todo(from: remoteTodo(), id: UUID())
+        #expect(todo.decisionPrompt == nil)
+
+        ProductionDataSync.apply(
+            remoteTodo(
+                actionCard: MobileAPIClient.RemoteActionCard(
+                    decisionPrompt: "Decide whether to send the campaign update.",
+                    contextItems: [.init(label: "Person", value: "Michael")],
+                    whyNow: "Michael is waiting.",
+                    sourceContext: "Checked Gmail",
+                    nextBestAction: "Approve a short reply.",
+                    draftPreview: "Thanks Michael.",
+                    evidenceExcerpt: "Can you send the update?"
+                )
+            ),
+            to: todo,
+            includeCards: true
+        )
+
+        #expect(todo.decisionPrompt != nil)
+        #expect(todo.nextBestAction == "Approve a short reply.")
+    }
+
+    @Test
+    func bulkTodoMappingStaysFastForLargeAccounts() {
+        let remotes = (0..<200).map { index in
+            remoteTodo(
+                summary: "The user committed to send the campaign update to the operator.",
+                nextAction: "Reply now with owner and ETA.",
+                actionCard: MobileAPIClient.RemoteActionCard(
+                    decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+                    contextItems: [
+                        .init(label: "Person", value: "Michael \(index)"),
+                        .init(label: "Project", value: "UGC campaign"),
+                        .init(label: "Relationship", value: "Investor")
+                    ],
+                    whyNow: "The user is waiting and no later reply was found.",
+                    sourceContext: "Checked Gmail",
+                    nextBestAction: "Approve a short reply.",
+                    draftPreview: "Thanks Michael. I can send the campaign timing today.",
+                    evidenceExcerpt: "Can you send the next update?"
+                )
+            )
+        }
+
+        let elapsed = ContinuousClock().measure {
+            for remote in remotes {
+                _ = ProductionDataSync.todo(from: remote, id: UUID())
+            }
+        }
+
+        // Each todo runs ~10 ChiefOfStaffCopy.clean passes. Compiling the regexes per
+        // call (the old behavior) made this take many seconds and froze/crashed the app
+        // on large accounts; cached regexes keep a full 200-todo merge well under a second.
+        #expect(elapsed < .seconds(5))
+    }
+
+    private func todoPayloadPriority(_ priority: TodoPriority) -> Int? {
+        ProductionDataSync.todoPayload(
+            title: "Send investor update",
+            notes: "",
+            priority: priority,
+            dueDate: nil,
+            isCompleted: false
+        )["priority"]?.int
+    }
+
+    private func remotePerson(
+        status: String = "active",
+        relationship: String? = "Northstar",
+        metadata: [String: Any] = [:]
+    ) -> MobileAPIClient.RemotePerson {
+        var payload: [String: Any] = [
+            "id": UUID().uuidString,
+            "display_name": "Ada Chen",
+            "contact_details": ["emails": ["ada@example.com"], "phones": []],
+            "status": status,
+            "notes": "Board prep contact.",
+            "metadata": metadata,
+            "last_interaction_at": NSNull()
+        ]
+        payload["relationship"] = relationship ?? NSNull()
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+        return try! JSONDecoder().decode(MobileAPIClient.RemotePerson.self, from: data)
+    }
+
+    private func remoteTodo(
+        status: String = "open",
+        priority: Int? = 55,
+        summary: String? = nil,
+        nextAction: String? = nil,
+        insertedAt: Date? = nil,
+        updatedAt: Date? = nil,
+        actionCard: MobileAPIClient.RemoteActionCard? = nil,
+        hasActionCardField: Bool = true
+    ) -> MobileAPIClient.RemoteTodo {
+        MobileAPIClient.RemoteTodo(
+            id: UUID().uuidString,
+            title: "Send investor update",
+            summary: summary,
+            nextAction: nextAction,
+            dueAt: nil,
+            notes: nil,
+            priority: priority,
+            status: status,
+            closedAt: nil,
+            insertedAt: insertedAt,
+            updatedAt: updatedAt,
+            actionCard: actionCard,
+            hasActionCardField: hasActionCardField
+        )
+    }
+}

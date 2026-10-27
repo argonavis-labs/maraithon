@@ -1,0 +1,73 @@
+{
+  "spec_id": "todo-see-less-training",
+  "slug": "todo-see-less-training",
+  "title": "Todo See Less Training Specification",
+  "stage": "done",
+  "spec_path": "../specs/todo-see-less-training.md",
+  "created_at": "2026-05-25T02:34:15Z",
+  "started_at": "2026-05-25T02:34:15Z",
+  "completed_at": "2026-05-25T02:52:00Z",
+  "updated_at": "2026-05-25T02:52:00Z",
+  "summary": "Implemented a model-backed todo feedback loop that lets users mark a todo as something to see less often, records durable negative relevance memory, and feeds that memory into future todo intelligence decisions.",
+  "next_action": "Ready for review in the todo-see-less-training worktree.",
+  "blockers": [],
+  "reference_examples": [
+    "DESIGN.md",
+    "docs/spectacula/specs/todo-homepage-table.md",
+    "docs/spectacula/specs/ship-memory-primitive-with-model-callable-read-write-tools-26355ff4.md"
+  ],
+  "resume_context": {
+    "last_completed_step": "Implementation completed and verified with focused tests plus mix precommit.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "All"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/todo-see-less-training.md",
+      "docs/spectacula/done/todo-see-less-training.json",
+      "lib/maraithon/todos/feedback_trainer.ex",
+      "lib/maraithon/todos.ex",
+      "lib/maraithon/todos/intelligence.ex",
+      "lib/maraithon_web/live/todos_live.ex",
+      "lib/maraithon/telegram_assistant/todo_actions.ex",
+      "test/maraithon/todos_test.exs",
+      "test/maraithon/todos/intelligence_test.exs",
+      "test/maraithon_web/live/todos_live_test.exs",
+      "test/maraithon/telegram_assistant/todo_actions_test.exs"
+    ],
+    "notes": "Worktree: /Users/kent/bliss/maraithon-todo-see-less-training. Branch: todo-see-less-training. Also narrowed an unrelated People LiveView assertion so it ignores global command palette shell markup."
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "Focused tests passed for Todos context, todo intelligence, Todos LiveView, Telegram todo actions, and People LiveView. Full mix precommit passed: compile --warnings-as-errors, deps.unlock --unused, format, 1923 tests with 0 failures, and assistant_eval 60/60."
+  },
+  "history": [
+    {
+      "at": "2026-05-25T02:34:15Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial implementation-ready spec created from repo context and user request."
+    },
+    {
+      "at": "2026-05-25T02:34:15Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "User requested a new worktree and implementation."
+    },
+    {
+      "at": "2026-05-25T02:52:00Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented see-less training, wired UI and Telegram actions, added tests, and passed mix precommit."
+    }
+  ]
+}

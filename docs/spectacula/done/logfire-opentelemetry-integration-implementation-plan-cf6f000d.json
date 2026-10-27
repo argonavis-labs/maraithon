@@ -1,0 +1,50 @@
+{
+  "blockers": [],
+  "completed_at": "2026-05-20T09:07:06Z",
+  "created_at": "2026-05-14T19:01:48Z",
+  "history": [
+    {
+      "at": "2026-05-14T19:01:48Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task CF6F000D-D8B2-4D8A-8BA9-051749978359.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:07:06Z",
+      "event": "codebase_verified_done",
+      "from_stage": "ready",
+      "note": "Current code includes all planned implementation surfaces and tracing_test coverage.",
+      "to_stage": "done"
+    }
+  ],
+  "next_action": "No build action. Run live Logfire smoke test once LOGFIRE_WRITE_TOKEN is provisioned.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/logfire-opentelemetry-integration-implementation-plan-cf6f000d.md"
+    ],
+    "last_completed_step": "Spectacula codebase verification completed on 2026-05-20.",
+    "notes": "Current code includes all planned implementation surfaces and tracing_test coverage.",
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "CF6F000D-D8B2-4D8A-8BA9-051749978359"
+  },
+  "slug": "logfire-opentelemetry-integration-implementation-plan-cf6f000d",
+  "spec_id": "logfire-opentelemetry-integration-implementation-plan-cf6f000d",
+  "spec_path": "../specs/logfire-opentelemetry-integration-implementation-plan-cf6f000d.md",
+  "stage": "done",
+  "summary": "Reviewed against current codebase; latest Logfire/OpenTelemetry plan is implemented.",
+  "title": "Logfire / OpenTelemetry Integration Implementation Plan",
+  "updated_at": "2026-05-20T09:07:06Z",
+  "verification": {
+    "build": "not_run",
+    "codebase_review": "passed",
+    "format": "generated",
+    "lint": "not_run",
+    "notes": "Current code includes all planned implementation surfaces and tracing_test coverage.",
+    "reviewed_at": "2026-05-20T09:07:06Z",
+    "spec_review": "passed",
+    "tests": "not_run",
+    "typecheck": "not_run"
+  }
+}

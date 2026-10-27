@@ -1,0 +1,95 @@
+[
+  {
+    "id": "gmail_triage_001",
+    "category": "gmail_triage",
+    "summary": "Same-day employment eligibility request becomes an actionable todo.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-001", "sender": "hr@rippling.com"},
+    "mock_output": {"decision": "create_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-001", "todo_title": "Reply to Rippling about employment eligibility"},
+    "expected": {
+      "output": {"decision": "create_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-001"},
+      "policy": {"surface": "agent_harness", "tool_name": "upsert_todos", "user_id": "assistant-eval@example.com", "expected_status": "allow"},
+      "ledger": {"event_type": "tool.executed", "status": "completed", "result_object_refs": {"dedupe_key": "gmail:gmail_triage:gmail-thread-001"}}
+    }
+  },
+  {
+    "id": "gmail_triage_002",
+    "category": "gmail_triage",
+    "summary": "Newsletter is ignored as noise.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-002", "sender": "newsletter@example.com"},
+    "mock_output": {"decision": "ignore_noise", "reason": "bulk newsletter"},
+    "expected": {"output": {"decision": "ignore_noise"}}
+  },
+  {
+    "id": "gmail_triage_003",
+    "category": "gmail_triage",
+    "summary": "Existing thread updates the same todo instead of duplicating.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-003", "existing_dedupe_key": "gmail:gmail_triage:gmail-thread-003"},
+    "mock_output": {"decision": "update_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-003"},
+    "expected": {
+      "output": {"decision": "update_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-003"},
+      "policy": {"surface": "agent_harness", "tool_name": "upsert_todos", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "gmail_triage_004",
+    "category": "gmail_triage",
+    "summary": "FYI-only receipt stays out of todos.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-004", "subject": "Receipt for your order"},
+    "mock_output": {"decision": "ignore_noise", "reason": "receipt only"},
+    "expected": {"output": {"decision": "ignore_noise"}}
+  },
+  {
+    "id": "gmail_triage_005",
+    "category": "gmail_triage",
+    "summary": "Customer asks for an answer before a call.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-005", "sender": "customer@example.com"},
+    "mock_output": {"decision": "create_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-005", "todo_title": "Send customer update before review call"},
+    "expected": {
+      "output": {"decision": "create_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-005"},
+      "policy": {"surface": "agent_harness", "tool_name": "upsert_todos", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "gmail_triage_006",
+    "category": "gmail_triage",
+    "summary": "Automated alert creates no human follow-up.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-006", "sender": "no-reply@alerts.example.com"},
+    "mock_output": {"decision": "ignore_noise", "reason": "automated alert"},
+    "expected": {"output": {"decision": "ignore_noise"}}
+  },
+  {
+    "id": "gmail_triage_007",
+    "category": "gmail_triage",
+    "summary": "Calendar invite with no requested response stays informational.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-007", "subject": "Meeting accepted"},
+    "mock_output": {"decision": "ignore_noise", "reason": "no action requested"},
+    "expected": {"output": {"decision": "ignore_noise"}}
+  },
+  {
+    "id": "gmail_triage_008",
+    "category": "gmail_triage",
+    "summary": "Vendor request for missing details becomes a todo.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-008", "sender": "vendor@example.com"},
+    "mock_output": {"decision": "create_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-008", "todo_title": "Send vendor missing invoice details"},
+    "expected": {
+      "output": {"decision": "create_todo", "dedupe_key": "gmail:gmail_triage:gmail-thread-008"},
+      "policy": {"surface": "agent_harness", "tool_name": "upsert_todos", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "gmail_triage_009",
+    "category": "gmail_triage",
+    "summary": "Already answered thread is not duplicated.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-009", "latest_sender": "assistant-owner"},
+    "mock_output": {"decision": "skip_duplicate", "dedupe_key": "gmail:gmail_triage:gmail-thread-009"},
+    "expected": {"output": {"decision": "skip_duplicate", "dedupe_key": "gmail:gmail_triage:gmail-thread-009"}}
+  },
+  {
+    "id": "gmail_triage_010",
+    "category": "gmail_triage",
+    "summary": "Ambiguous email is held for review instead of becoming a todo.",
+    "input": {"user_id": "assistant-eval@example.com", "thread_id": "gmail-thread-010", "subject": "Quick thought"},
+    "mock_output": {"decision": "hold_for_review", "confidence": 0.42},
+    "expected": {"output": {"decision": "hold_for_review"}}
+  }
+]

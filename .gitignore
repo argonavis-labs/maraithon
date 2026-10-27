@@ -1,0 +1,155 @@
+# =============================================================================
+# Elixir/Phoenix
+# =============================================================================
+
+# Build artifacts
+/_build/
+/deps/
+/.fetch
+*.ez
+*.beam
+*.plt
+
+# Test and coverage
+/cover/
+
+# Documentation
+/doc/
+
+# Package tarball
+maraithon-*.tar
+
+# VM crash dump
+erl_crash.dump
+*.dump
+
+# Temporary files
+/tmp/
+
+# =============================================================================
+# Phoenix Assets
+# =============================================================================
+
+# Static artifacts (if building from source)
+/priv/static/assets/
+/priv/static/cache_manifest.json
+/priv/static/**/*.gz
+/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
+/assets/node_modules/
+
+# =============================================================================
+# Release
+# =============================================================================
+
+/rel/artifacts/
+
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
+
+# Environment files
+.env
+.env.*
+.env.local
+.envrc
+!.env.example
+fly-prod.env
+fly-*.env
+
+# Secret config files
+*.secret.exs
+dev.secret.exs
+test.secret.exs
+prod.secret.exs
+
+# GCP credentials
+*-credentials.json
+service-account*.json
+*.json.enc
+gcloud-service-key.json
+
+# =============================================================================
+# IDE & Editors
+# =============================================================================
+
+.elixir_ls/
+.idea/
+*.iml
+.vscode/
+.claude/*.lock
+*.swp
+*.swo
+*~
+.projections.json
+
+# =============================================================================
+# OS Generated
+# =============================================================================
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# =============================================================================
+# Docker
+# =============================================================================
+
+.docker/
+
+# =============================================================================
+# Logs
+# =============================================================================
+
+*.log
+/log/
+/logs/
+
+# Local audit reports and scratch output can contain personal data.
+/err[0-9]*.txt
+/.agent-*
+/gitleaks-report.*
+/security-audit/
+
+# =============================================================================
+# Monorepo Native Clients
+# =============================================================================
+
+/apps/**/.build/
+/apps/**/.swiftpm/
+/apps/**/build/
+/apps/**/*.xcodeproj/
+/apps/**/DerivedData/
+/apps/**/xcuserdata/
+/apps/**/*.xcuserstate
+/apps/**/*.dSYM/
+/apps/**/*.ipa
+/apps/mobile/Config/production-verification.env
+
+# =============================================================================
+# Dialyzer
+# =============================================================================
+
+/priv/plts/
+.dialyzer_ignore.exs
+
+# =============================================================================
+# Local Database (if using sqlite for dev)
+# =============================================================================
+
+*.db
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# Self-signed certs for development
+# =============================================================================
+
+/priv/*.pem
+
+# Built/digested web assets
+/priv/static/assets/
+/priv/static/cache_manifest.json

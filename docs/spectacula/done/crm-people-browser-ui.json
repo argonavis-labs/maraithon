@@ -1,0 +1,58 @@
+{
+  "spec_id": "crm-people-browser-ui",
+  "slug": "crm-people-browser-ui",
+  "title": "CRM People Browser UI",
+  "stage": "done",
+  "spec_path": "../specs/crm-people-browser-ui.md",
+  "created_at": "2026-05-20T13:42:00Z",
+  "updated_at": "2026-05-20T13:40:30Z",
+  "summary": "Added an authenticated, searchable People/CRM browser backed by the existing Maraithon.Crm context.",
+  "next_action": "Use the People page to inspect CRM data; future work can add person detail, edit, and merge flows.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798.md",
+    "DESIGN.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "Focused People LiveView tests passed. mix precommit passed with 1868 tests, 0 failures."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented and verified the CRM People browser UI.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "UX Contract",
+      "Data Contract",
+      "Acceptance Checks",
+      "Implementation Result"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/crm-people-browser-ui.md",
+      "lib/maraithon_web/live/people_live.ex",
+      "test/maraithon_web/live/people_live_test.exs"
+    ],
+    "notes": "The page is read-only by design for this pass. It lists active CRM people and searches through Maraithon.Crm.list_people/2."
+  },
+  "history": [
+    {
+      "at": "2026-05-20T13:42:00Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "inprogress",
+      "note": "Initial spec created and moved directly into implementation."
+    },
+    {
+      "at": "2026-05-20T13:40:30Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented the People LiveView, route, sidebar navigation, focused tests, and passed mix precommit."
+    }
+  ]
+}

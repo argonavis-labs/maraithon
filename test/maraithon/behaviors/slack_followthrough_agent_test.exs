@@ -1,0 +1,355 @@
+defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
+  use Maraithon.DataCase, async: true
+
+  alias Maraithon.Accounts
+  alias Maraithon.Agents
+  alias Maraithon.Behaviors.SlackFollowthroughAgent
+  alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.Insights
+  alias Maraithon.Todos
+
+  setup do
+    user_id = "slack-advisor@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "slack_followthrough_agent",
+        config: %{}
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: DateTime.utc_now(),
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    %{user_id: user_id, agent: agent, context: context}
+  end
+
+  describe "handle_wakeup/2" do
+    test "uses the shared Slack delta bundle without requiring another connector scan", %{
+      user_id: user_id,
+      context: context
+    } do
+      slack_ts = "#{DateTime.to_unix(context.timestamp, :second)}.000001"
+
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "team_ids" => ["T123"],
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      source_bundle =
+        context
+        |> SourceBundle.empty(%{
+          "slack_workspaces" => [%{"team_id" => "T123"}]
+        })
+        |> SourceBundle.put_slack(%{
+          "workspaces" => [
+            %{
+              "team_id" => "T123",
+              "channels" => [
+                %{
+                  "id" => "C456",
+                  "name" => "planning",
+                  "messages" => [
+                    %{
+                      "source" => "slack",
+                      "user_id" => "U_TEAM",
+                      "text" => "<!here> Please send the requested screenshots today",
+                      "ts" => slack_ts
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "mentions" => [],
+          "status" => "ready",
+          "fetched_at" => context.timestamp
+        })
+
+      {:emit, {:insights_recorded, %{count: 1}}, _state} =
+        SlackFollowthroughAgent.handle_wakeup(
+          state,
+          Map.put(context, :source_bundle, source_bundle)
+        )
+
+      [stored] = Insights.list_open_for_user(user_id)
+      assert stored.source == "slack"
+      assert stored.source_id == "slack:T123:C456:#{slack_ts}"
+    end
+
+    test "records unresolved slack commitment from pubsub payload", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I'll send the deck to <@U12345> by today",
+              "ts" => "1762502400.000001"
+            }
+          ]
+        }
+      }
+
+      {:emit, {:insights_recorded, recorded}, _state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert recorded.count == 1
+      assert recorded.user_id == user_id
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+
+      assert stored.source == "slack"
+      assert stored.category in ["commitment_unresolved", "meeting_follow_up"]
+      assert stored.metadata["record"]["status"] == "unresolved"
+      assert stored.metadata["record"]["person"] == "U12345"
+      assert stored.metadata["record"]["next_action"] =~ "Reply in the same Slack thread"
+    end
+
+    test "turns an actionable @here device-security request into a useful todo", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.75",
+          "max_insights_per_cycle" => "3"
+        })
+
+      payload = %{
+        "source" => "slack",
+        "data" => %{
+          "team_id" => "T123",
+          "channel_id" => "C-SOC2",
+          "channel_name" => "p-certificates-soc2",
+          "user_id" => "UKEVIN",
+          "user_display_name" => "Kevin",
+          "self_user_id" => "U_SELF",
+          "text" =>
+            "<!here> Please dm me with the following information depending on the OS you have\n" <>
+              "macOS screenshots: FileVault turned on, lock screen at 5 minutes or less, " <>
+              "automatic security updates, device model and serial, macOS version, and password-length attestation.",
+          "ts" => "1787792700.000001"
+        }
+      }
+
+      {:emit, {:insights_recorded, %{count: 1}}, _state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.title == "Send device security evidence to Kevin"
+
+      assert todo.next_action ==
+               "Complete the requested items, then DM Kevin with the results in Slack."
+
+      assert todo.source == "slack"
+      assert todo.metadata["source_excerpt"] =~ "FileVault"
+      assert todo.metadata["broadcast_mention"] == "@here"
+    end
+
+    test "ignores closed loops when follow-through already happened", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I will send the notes to <@U_TEAM> today",
+              "ts" => "1762502400.000001"
+            },
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "Sent the notes here",
+              "ts" => "1762503000.000001"
+            }
+          ]
+        }
+      }
+
+      {:idle, _state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert Insights.list_open_for_user(user_id) == []
+    end
+
+    test "checks off an existing Slack todo when the latest scan finds completion evidence", %{
+      user_id: user_id,
+      context: context
+    } do
+      open_ts = "#{DateTime.to_unix(context.timestamp, :second)}.000001"
+      resolved_ts = "#{DateTime.to_unix(context.timestamp, :second) + 60}.000001"
+
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      open_payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I will send the notes to <@U_TEAM> today",
+              "ts" => open_ts
+            }
+          ]
+        }
+      }
+
+      {:emit, {:insights_recorded, _recorded}, state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: open_payload}})
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.status == "open"
+
+      resolved_payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I will send the notes to <@U_TEAM> today",
+              "ts" => open_ts
+            },
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "Sent the notes here",
+              "thread_ts" => open_ts,
+              "ts" => resolved_ts
+            }
+          ]
+        }
+      }
+
+      assert {:idle, _state} =
+               SlackFollowthroughAgent.handle_wakeup(state, %{
+                 context
+                 | event: %{payload: resolved_payload}
+               })
+
+      assert Insights.list_open_for_user(user_id) == []
+      assert Todos.list_open_for_user(user_id) == []
+      assert [done_todo | _] = Todos.list_recent_for_user(user_id)
+      assert done_todo.id == todo.id
+      assert done_todo.status == "done"
+      assert get_in(done_todo.metadata, ["auto_resolution", "status"]) == "done"
+    end
+
+    test "downgrades Slack follow-through when another participant already replied", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I'll send the deck to <@U12345> by today",
+              "ts" => "1762502400.000001"
+            },
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_TEAM",
+              "text" => "I'll handle this and send the update by today",
+              "thread_ts" => "1762502400.000001",
+              "ts" => "1762503000.000001"
+            }
+          ]
+        }
+      }
+
+      {:emit, {:insights_recorded, recorded}, _state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert recorded.count == 1
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+
+      assert stored.metadata["conversation_context"]["notification_posture"] == "heads_up"
+      assert stored.summary =~ "conversation is moving"
+      assert stored.recommended_action =~ "Monitor the thread"
+      assert stored.metadata["why_now"] =~ "already responded"
+    end
+  end
+end

@@ -1,0 +1,110 @@
+{
+  "spec_id": "mobile-chief-of-staff-product-gap-review",
+  "slug": "mobile-chief-of-staff-product-gap-review",
+  "title": "Chief of Staff Product Operating System Specification",
+  "stage": "done",
+  "spec_path": "../specs/mobile-chief-of-staff-product-gap-review.md",
+  "created_at": "2026-05-26T00:57:39Z",
+  "updated_at": "2026-05-26T02:15:40Z",
+  "summary": "Implemented the central Decision Card contract from the v3 chief-of-staff product spec. Todos now project through a shared action-card layer with person/company/relationship context, why-now reasoning, source evidence, source-health disclosure, prepared action hints, stale keep-or-dismiss handling, safe buttons, and product scoring. Telegram todo cards and the dashboard review card now use that contract, and the operational Telegram verification loop includes an action-card 10/10 gate.",
+  "next_action": "Monitor production behavior and use user feedback to broaden Decision Cards into meeting prep, mobile field cards, and richer prepared draft approval flows.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/mobile-pwa-app-shell.md",
+    "docs/spectacula/specs/source-backed-morning-briefing.md",
+    "docs/spectacula/specs/open-loop-operating-system.md",
+    "docs/spectacula/specs/todo-homepage-table.md",
+    "docs/spectacula/specs/crm-people-browser-ui.md",
+    "docs/spectacula/specs/voice-aware-gmail-slack-drafts.md"
+  ],
+  "research_sources": [
+    "https://www.bcg.com/publications/2024/how-ceos-find-a-chief-of-staff",
+    "https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/seeing-around-corners-how-to-excel-as-a-chief-of-staff",
+    "https://hbr.org/2020/05/the-case-for-a-chief-of-staff",
+    "https://www.microsoft.com/en-us/worklab/work-trend-index/breaking-down-infinite-workday",
+    "https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights/good-decisions-dont-have-to-be-slow-ones",
+    "https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights/decision-making-in-the-age-of-urgency",
+    "https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights/if-were-all-so-busy-why-isnt-anything-getting-done",
+    "https://gettingthingsdone.com/what-is-gtd/",
+    "https://www.apa.org/research/action/multitask",
+    "https://developer.apple.com/design/human-interface-guidelines/"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "not_run",
+    "typecheck": "not_run",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "implemented_and_verified",
+    "notes": "Compiled with warnings-as-errors. Focused tests passed for ActionCards, Telegram todo actions, and dashboard review cards. Telegram chief-of-staff verification loop passed score=10/10 with the new action_card_product_contract scenario."
+  },
+  "resume_context": {
+    "last_completed_step": "Built and verified the shared Decision Card implementation across todo projection, Telegram todo cards, dashboard review cards, and the operational verification loop.",
+    "pending_steps": [
+      "Watch production todo cards for overlong copy or missing relationship context.",
+      "Extend the same card contract to meeting prep and mobile API surfaces.",
+      "Add approval-first draft actions directly from todo cards."
+    ],
+    "open_questions": [
+      "Should web search be automatic for unfamiliar business contacts, or only user-approved?",
+      "Should family/personal priority be configurable in v1, or part of the default product stance?",
+      "How much should Maraithon explain ranking decisions to the user?",
+      "Should review sessions optimize for all open loops, top N, or time available?",
+      "Should the product expose a what-Maraithon-learned surface after every review or only when meaningful?",
+      "How assertive should Maraithon be when it thinks the user is ignoring something for good reason?",
+      "Where is the line between useful prepared action and overstepping?"
+    ],
+    "last_reviewed_sections": [
+      "docs/spectacula/specs/mobile-chief-of-staff-product-gap-review.md",
+      "docs/spectacula/done/mobile-chief-of-staff-product-gap-review.json",
+      "BCG chief of staff article",
+      "McKinsey chief of staff article",
+      "HBR chief of staff article",
+      "Microsoft Work Trend Index infinite workday",
+      "McKinsey decision-making research",
+      "Getting Things Done overview",
+      "APA multitasking switching costs",
+      "Apple Human Interface Guidelines"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/mobile-chief-of-staff-product-gap-review.md",
+      "docs/spectacula/done/mobile-chief-of-staff-product-gap-review.json",
+      "lib/maraithon/action_cards.ex",
+      "lib/maraithon/telegram_assistant/todo_actions.ex",
+      "lib/maraithon_web/live/dashboard_live.ex",
+      "lib/maraithon/telegram_assistant/verification_loop.ex",
+      "test/maraithon/action_cards_test.exs"
+    ],
+    "notes": "Existing unrelated working tree changes were left untouched."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T00:57:39Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Created draft product gap review spec for on-the-go chief-of-staff workflows."
+    },
+    {
+      "at": "2026-05-26T01:01:13Z",
+      "event": "spec_upgraded",
+      "from_stage": "specs",
+      "to_stage": "specs",
+      "note": "Rewrote the draft into a concrete chief-of-staff action operating system spec with critical findings, product decisions, contracts, state model, ranking policy, workflows, rollout phases, and validation matrix."
+    },
+    {
+      "at": "2026-05-26T01:07:52Z",
+      "event": "spec_upgraded_with_research",
+      "from_stage": "specs",
+      "to_stage": "specs",
+      "note": "Rewrote the spec as a product-first chief-of-staff doctrine grounded in online research and focused on why/what rather than implementation mechanics."
+    },
+    {
+      "at": "2026-05-26T02:15:40Z",
+      "event": "implemented_and_verified",
+      "from_stage": "specs",
+      "to_stage": "done",
+      "note": "Implemented the shared Decision Card projection, wired it into Telegram and dashboard todo review surfaces, added a verification-loop contract, and passed focused tests plus score=10/10 operational verification."
+    }
+  ]
+}

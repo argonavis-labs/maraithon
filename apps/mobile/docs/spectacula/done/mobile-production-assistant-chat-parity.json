@@ -1,0 +1,92 @@
+{
+  "spec_id": "mobile-production-assistant-chat-parity",
+  "slug": "mobile-production-assistant-chat-parity",
+  "title": "Mobile Production Assistant Chat Parity Specification",
+  "stage": "done",
+  "spec_path": "../specs/mobile-production-assistant-chat-parity.md",
+  "created_at": "2026-05-26T09:50:21Z",
+  "approved_at": null,
+  "updated_at": "2026-05-26T12:34:44Z",
+  "summary": "Implemented and deployed production mobile assistant chat parity, including backend mobile chat API, native ChatSyncService, production assistant delivery, prepared-action decisions, and deterministic direct mobile todo intent.",
+  "next_action": "Monitor production assistant chat latency and expand deterministic mobile intent coverage only for similarly explicit low-risk commands.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/telegram-style-chat-experience.md",
+    "docs/spectacula/specs/mobile-2x-web-parity-magic-link-upgrade.md"
+  ],
+  "verification": {
+    "format": "passed for changed backend files with mix format --check-formatted; full backend format still blocked by pre-existing lib/maraithon/telegram_assistant/verification_loop.exs formatting drift",
+    "lint": "not separately configured",
+    "typecheck": "xcodebuild build passed for MaraithonMobile on iPhone 17 iOS 26.4.1 simulator",
+    "build": "passed: backend Fly image registry.fly.io/maraithon:deployment-01KSJ495GX670RGJ0QWTKV5FNA deployed; mobile xcodebuild build passed",
+    "tests": "passed: mobile_chat_controller_test, telegram_assistant_test, mobile_api_controller_test, telegram_assistant/toolbox_test, telegram_assistant_toolbox_test, MaraithonMobileTests, ChatSyncServiceTests",
+    "production_simulator": "passed against maraithon.com for kent@runner.now with run 20260526123256; verified magic sign-in, todo create/complete, person create/update, real production chat reply, and chat-created todo",
+    "spec_review": "implemented and production verified",
+    "notes": "Backend production app maraithon is running version 529 with image deployment-01KSJ495GX670RGJ0QWTKV5FNA. The production assistant path is live for mobile chat; an explicit direct todo intent lane prevents simple create-todo commands from timing out in the model loop while general chat remains model-backed."
+  },
+  "resume_context": {
+    "last_completed_step": "Production verification passed after backend deploy and simulator run.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "2. Root Cause",
+      "6. Recommended Architecture",
+      "7. Backend API Contract",
+      "8. Backend Implementation Plan",
+      "9. iOS Implementation Plan",
+      "14. Test Strategy",
+      "18. Open Decisions",
+      "20. Implementation Review Checklist",
+      "21. References"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/mobile-production-assistant-chat-parity.md",
+      "docs/spectacula/done/mobile-production-assistant-chat-parity.json"
+    ],
+    "notes": "The implemented fix gives mobile its own production chat API and sync service while reusing Telegram assistant runtime/tooling behind a mobile surface. Direct explicit todo creation now completes instantly; general chat continues through the production assistant."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T09:50:21Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial mobile production assistant chat parity spec saved."
+    },
+    {
+      "at": "2026-05-26T09:50:21Z",
+      "event": "marked_ready",
+      "from_stage": "specs",
+      "to_stage": "ready",
+      "note": "Detailed spec prepared for review; implementation intentionally deferred by user request."
+    },
+    {
+      "at": "2026-05-26T11:20:06Z",
+      "event": "spec_upgraded",
+      "from_stage": "ready",
+      "to_stage": "ready",
+      "note": "Upgraded to Ready v2 with implementation-grade backend/iOS contracts, exact runner seams, schema additions, verification loop, and Apple 2026 design/privacy guidance."
+    },
+    {
+      "at": "2026-05-26T11:25:35Z",
+      "event": "spec_references_added",
+      "from_stage": "ready",
+      "to_stage": "ready",
+      "note": "Added local and Apple reference section to make the Ready v2 spec easier to verify and resume."
+    },
+    {
+      "at": "2026-05-26T11:47:06Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "User requested building and verifying the spec to 10/10."
+    },
+    {
+      "at": "2026-05-26T12:34:44Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented, deployed to Fly production, and verified end-to-end on the iOS simulator against maraithon.com."
+    }
+  ]
+}

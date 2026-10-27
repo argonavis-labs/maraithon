@@ -1,0 +1,158 @@
+{
+  "spec_id": "mobile-email-code-login",
+  "slug": "mobile-email-code-login",
+  "title": "Mobile Email Code Login Specification",
+  "stage": "done",
+  "spec_path": "../specs/mobile-email-code-login.md",
+  "created_at": "2026-05-26T15:53:47Z",
+  "approved_at": "2026-05-26T15:53:47Z",
+  "started_at": "2026-05-26T15:53:47Z",
+  "updated_at": "2026-05-26T16:39:02Z",
+  "completed_at": "2026-05-26T16:39:02Z",
+  "summary": "Implementation is complete for replacing mobile magic-link login emails with copyable one-time codes while preserving web magic links.",
+  "next_action": "No further implementation action required; production UI verification scripts are ready for the next live production run.",
+  "blockers": [],
+  "reference_examples": [
+    "apps/mobile/docs/spectacula/specs/mobile-2x-web-parity-magic-link-upgrade.md",
+    "apps/mobile/docs/spectacula/specs/production-mobile-simulator-verification-loop.md"
+  ],
+  "review_policy": {
+    "final_vetting": "off"
+  },
+  "implementation": {
+    "status": "complete",
+    "artifacts": [
+      "priv/repo/migrations/20260526155708_add_mobile_magic_code_hash.exs",
+      "lib/maraithon/accounts.ex",
+      "lib/maraithon/accounts/magic_link.ex",
+      "lib/maraithon/accounts/email_templates.ex",
+      "lib/maraithon/accounts/magic_link_sender.ex",
+      "lib/maraithon_web/controllers/mobile_auth_controller.ex",
+      "lib/maraithon_web/router.ex",
+      "test/test_helper.exs",
+      "test/maraithon/accounts_test.exs",
+      "test/maraithon/accounts/email_templates_test.exs",
+      "test/maraithon_web/controllers/mobile_api_controller_test.exs",
+      "apps/mobile/MaraithonMobile/Core/API/MobileAPIClient.swift",
+      "apps/mobile/MaraithonMobile/Core/Auth/AuthModels.swift",
+      "apps/mobile/MaraithonMobile/Core/Auth/ProductionMagicAuthProvider.swift",
+      "apps/mobile/MaraithonMobile/Core/Auth/LocalMagicAuthProvider.swift",
+      "apps/mobile/MaraithonMobile/Core/Auth/MagicLinkParser.swift",
+      "apps/mobile/MaraithonMobile/Features/Auth/MagicSigninView.swift",
+      "apps/mobile/MaraithonMobile/Core/Testing/UITestLaunchSupport.swift",
+      "apps/mobile/MaraithonMobileUITests/ProductionIntegrationUITests.swift",
+      "apps/mobile/MaraithonMobileUITests/VisualSmokeUITests.swift",
+      "apps/mobile/scripts/lib/production-magic-token.sh",
+      "apps/mobile/scripts/verify-production-simulator.sh",
+      "apps/mobile/scripts/capture-visual-smoke.sh"
+    ]
+  },
+  "deployment": {
+    "status": "live",
+    "deployed_at": "2026-05-26T16:29:14Z",
+    "fly_release": "v539",
+    "image": "registry.fly.io/maraithon:deployment-01KSJHTR8GKHYS3K51KJ3N920X",
+    "production_url": "https://maraithon.com"
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "final_vetting": "skipped",
+    "notes": "Passed after final delivery-error handling: mix test test/maraithon/accounts_test.exs test/maraithon/accounts/email_templates_test.exs test/maraithon_web/controllers/mobile_api_controller_test.exs test/maraithon_web/controllers/session_controller_test.exs; xcodebuild -quiet -project apps/mobile/MaraithonMobile.xcodeproj -scheme MaraithonMobile -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.4.1' -only-testing:MaraithonMobileTests/MagicLinkParserTests -only-testing:MaraithonMobileTests/LocalMagicAuthProviderTests test; xcodebuild mobile build; xcodebuild mobile tests with MaraithonMobileUITests skipped; git diff --check. Live deployment passed: Fly release v539 completed release_command migration; https://maraithon.com/health/ returned ok; production code_hash column exists; live email-code template renders a code without /auth/magic URL; /api/mobile/auth/magic-link returns delivery=email_code; user-supplied received email code was accepted by /api/mobile/auth/magic-code; generated production codes are single-use; make verify-production-mobile passed for run 20260526163527. Final mix precommit after production verification harness fixes passed (1982 tests, 0 failures; assistant_eval passed)."
+  },
+  "resume_context": {
+    "last_completed_step": "Deployed backend email-code auth to production and passed the production mobile verification loop.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "4. UX / Interaction Model",
+      "5. Functional Requirements",
+      "6. Data and Domain Model",
+      "7. Backend / Service Changes",
+      "8. iOS Changes",
+      "10. Verification Loop",
+      "11. Test Plan and Validation Matrix",
+      "12. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/mobile-email-code-login.md",
+      "priv/repo/migrations/20260526155708_add_mobile_magic_code_hash.exs",
+      "lib/maraithon/accounts.ex",
+      "lib/maraithon_web/controllers/mobile_auth_controller.ex",
+      "apps/mobile/MaraithonMobile/Core/API/MobileAPIClient.swift",
+      "apps/mobile/MaraithonMobile/Features/Auth/MagicSigninView.swift",
+      "apps/mobile/MaraithonMobileUITests/ProductionIntegrationUITests.swift",
+      "apps/mobile/scripts/verify-production-simulator.sh"
+    ],
+    "notes": "Plain spectacula invocation sets final_vetting off. Self-review found implementation aligned with the reference spec; legacy mobile token consume and web magic links remain compatible. Production verification required a harness fix so UI tests can read generated magic-code config reliably under xcodebuild test-without-building."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T15:53:47Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial spec saved from mobile login request."
+    },
+    {
+      "at": "2026-05-26T15:53:47Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "User requested implementation and verification loop in the same Spectacula run."
+    },
+    {
+      "at": "2026-05-26T16:06:01Z",
+      "event": "verification_failed",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Initial mix precommit exposed an existing mobile chat controller test async-worker leak; fixed by forcing AssistantChat.ThreadWorker synchronous in test_helper."
+    },
+    {
+      "at": "2026-05-26T16:11:47Z",
+      "event": "verification_completed",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Focused backend, focused iOS, mobile build, mobile unit tests, git diff --check, and final mix precommit passed after delivery-error handling was added."
+    },
+    {
+      "at": "2026-05-26T16:11:47Z",
+      "event": "spec_review_passed",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Self-review confirmed backend, iOS, and verification-loop changes satisfy the specification."
+    },
+    {
+      "at": "2026-05-26T16:11:47Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implementation and verification loop completed; final vetting skipped per plain spectacula invocation."
+    },
+    {
+      "at": "2026-05-26T16:29:14Z",
+      "event": "production_deployed",
+      "from_stage": "done",
+      "to_stage": "done",
+      "note": "Fly release v539 deployed image registry.fly.io/maraithon:deployment-01KSJHTR8GKHYS3K51KJ3N920X; release_command migration completed successfully."
+    },
+    {
+      "at": "2026-05-26T16:37:42Z",
+      "event": "production_verification_completed",
+      "from_stage": "done",
+      "to_stage": "done",
+      "note": "Live API, received email code, single-use rejection, and make verify-production-mobile passed for run 20260526163527."
+    },
+    {
+      "at": "2026-05-26T16:39:02Z",
+      "event": "final_precommit_passed",
+      "from_stage": "done",
+      "to_stage": "done",
+      "note": "Final mix precommit passed after production verification harness fixes: 1982 tests, 0 failures; assistant_eval passed."
+    }
+  ]
+}

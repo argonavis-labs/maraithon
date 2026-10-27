@@ -1,0 +1,509 @@
+defmodule Maraithon.TelegramAssistant.ContextTest do
+  use Maraithon.DataCase, async: false
+
+  alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.LocalCalendar
+  alias Maraithon.OAuth
+  alias Maraithon.TelegramAssistant.Context
+
+  test "selected todo chat does not preload unrelated sources or model-selected memory" do
+    keys = Context.fetcher_keys_for_focus(:linked_item_context)
+    assert keys == Context.fetcher_keys_for_focus("linked_item_context")
+    assert :preference_memory in keys
+    assert :connected_accounts in keys
+
+    for unrelated <- [:calendar, :deep_memory, :open_loops, :todos, :relationships, :projects] do
+      refute unrelated in keys
+    end
+  end
+
+  test "task chat retains the current calendar block without unrelated provider payloads" do
+    user_id = "context-calendar-block-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Maraithon.Todos.upsert_many(user_id, [
+        %{"source" => "manual", "title" => "Register for hockey"}
+      ])
+
+    block = %{
+      "event_id" => "owned-event-id",
+      "calendar_id" => "primary",
+      "start_at" => "2026-09-17T09:00:00-04:00",
+      "end_at" => "2026-09-17T09:30:00-04:00"
+    }
+
+    {:ok, _todo} =
+      Maraithon.Todos.record_calendar_block(
+        user_id,
+        todo.id,
+        Map.put(block, "provider_payload", "not needed in chat")
+      )
+
+    attrs = %{
+      user_id: user_id,
+      chat_id: "12345",
+      request_focus: :linked_item_context,
+      linked_todo_id: todo.id
+    }
+
+    assert Context.build(attrs).linked_item.todo.metadata["calendar_block"] == block
+
+    {:ok, _todo} = Maraithon.Todos.clear_calendar_block(user_id, todo.id, block["event_id"])
+    refute Map.has_key?(Context.build(attrs).linked_item.todo.metadata, "calendar_block")
+  end
+
+  describe "connected account prompt context" do
+    test "uses account labels without raw provider identifiers or scopes" do
+      user_id = "context-connected-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _telegram} =
+        ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+          external_account_id: "6114124042",
+          metadata: %{"chat_id" => "6114124042", "username" => "kentfenwick"}
+        })
+
+      {:ok, _google} =
+        ConnectedAccounts.upsert_manual(user_id, "google", %{
+          external_account_id: "google-account-raw",
+          scopes: ["gmail.readonly"],
+          metadata: %{"account_email" => "founder@example.com"}
+        })
+
+      {:ok, _slack} =
+        ConnectedAccounts.upsert_manual(user_id, "slack:TSECRET123", %{
+          external_account_id: "TSECRET123",
+          scopes: ["search:read"],
+          metadata: %{"team_id" => "TSECRET123", "team_name" => "Executive Ops"}
+        })
+
+      {:ok, _slack_token} =
+        OAuth.store_tokens(user_id, "slack:TSECRET123:user:USECRET", %{
+          access_token: "slack-token",
+          scopes: ["channels:history"],
+          metadata: %{"team_id" => "TSECRET123", "team_name" => "Executive Ops"}
+        })
+
+      context =
+        Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :connector_status})
+
+      providers = Enum.map(context.connected_accounts, & &1.provider)
+      assert "google" in providers
+      assert "slack" in providers
+      assert "telegram" in providers
+
+      assert %{account_label: "Telegram"} =
+               Enum.find(context.connected_accounts, &(&1.provider == "telegram"))
+
+      assert %{account_label: "founder@example.com"} =
+               Enum.find(context.connected_accounts, &(&1.provider == "google"))
+
+      assert %{account_label: "Executive Ops"} =
+               Enum.find(context.connected_accounts, &(&1.provider == "slack"))
+
+      connected_account_text = inspect(context.connected_accounts)
+      refute connected_account_text =~ "external_account_id"
+      refute connected_account_text =~ "metadata"
+      refute connected_account_text =~ "scopes"
+      refute connected_account_text =~ "chat_id"
+      refute connected_account_text =~ "team_id"
+      refute connected_account_text =~ "6114124042"
+      refute connected_account_text =~ "TSECRET123"
+      refute connected_account_text =~ "USECRET"
+      refute connected_account_text =~ "google-account-raw"
+      refute connected_account_text =~ "gmail.readonly"
+      refute connected_account_text =~ "search:read"
+      refute connected_account_text =~ "channels:history"
+
+      assert "slack" in context.defaults.providers
+
+      defaults_text = inspect(context.defaults)
+      refute Map.has_key?(context.defaults, :default_slack_team_id)
+      refute Map.has_key?(context.defaults, :slack_team_ids)
+      refute Map.has_key?(context.defaults, :provider_ids)
+      refute defaults_text =~ "TSECRET123"
+      refute defaults_text =~ "USECRET"
+      refute defaults_text =~ "channels:history"
+    end
+  end
+
+  describe "calendar source status" do
+    test "does not classify business campaign calendar events as family camp logistics" do
+      user_id = "context-calendar-personal-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      start_at =
+        DateTime.utc_now()
+        |> DateTime.add(2, :hour)
+        |> DateTime.truncate(:second)
+
+      end_at = DateTime.add(start_at, 30, :minute)
+
+      {:ok, _result} =
+        LocalCalendar.ingest_batch(user_id, device_id, [
+          calendar_event("campaign-review", start_at, end_at, %{
+            "calendar_name" => "Work",
+            "title" => "Starteryou UGC Campaign Review",
+            "notes" => "Review campaign materials and asset ownership."
+          }),
+          calendar_event(
+            "camp-pickup",
+            DateTime.add(start_at, 1, :hour),
+            DateTime.add(end_at, 1, :hour),
+            %{
+              "calendar_name" => "Work",
+              "title" => "Emma camp pickup",
+              "notes" => "Confirm pickup window with the camp coordinator."
+            }
+          )
+        ])
+
+      context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
+
+      upcoming_summaries = Enum.map(context.calendar.upcoming_events, & &1.summary)
+      personal_summaries = Enum.map(context.calendar.personal_events, & &1.summary)
+
+      assert "Starteryou UGC Campaign Review" in upcoming_summaries
+      assert "Emma camp pickup" in upcoming_summaries
+      refute "Starteryou UGC Campaign Review" in personal_summaries
+      assert "Emma camp pickup" in personal_summaries
+      assert context.calendar.counts.personal == 1
+    end
+
+    test "uses user-safe copy when Google Calendar is not connected" do
+      user_id = "context-calendar-status-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
+
+      assert context.calendar.source_status.local == "empty"
+      assert context.calendar.source_status.google == "not connected"
+      refute calendar_status_text(context) =~ ":no_token"
+      refute calendar_status_text(context) =~ "error:"
+    end
+
+    test "keeps Google all-day events in context without crashing deduplication" do
+      original_google_calendar = Application.get_env(:maraithon, :google_calendar, [])
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, :google_calendar, original_google_calendar)
+      end)
+
+      user_id = "context-calendar-all-day-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "calendar-token",
+          scopes: ["calendar.readonly"]
+        })
+
+      event_date = Date.utc_today() |> Date.add(1)
+      end_date = Date.add(event_date, 1)
+      {:ok, timed_start} = DateTime.new(event_date, ~T[12:00:00], "Etc/UTC")
+      timed_end = DateTime.add(timed_start, 3_600, :second)
+
+      Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "id" => "timed-event",
+                "summary" => "Lunch",
+                "start" => %{"dateTime" => DateTime.to_iso8601(timed_start)},
+                "end" => %{"dateTime" => DateTime.to_iso8601(timed_end)}
+              },
+              %{
+                "id" => "all-day-event",
+                "summary" => "Family day",
+                "start" => %{"date" => Date.to_iso8601(event_date)},
+                "end" => %{"date" => Date.to_iso8601(end_date)}
+              }
+            ]
+          })
+        )
+      end)
+
+      context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
+
+      assert Enum.map(context.calendar.upcoming_events, & &1.id) |> Enum.take(2) == [
+               "all-day-event",
+               "timed-event"
+             ]
+
+      assert context.calendar.source_status.google == "ready"
+      refute Enum.any?(context.context_fetch.failures, &(&1.key == "calendar"))
+    end
+
+    test "does not expose Google API response bodies in prompt-facing status" do
+      original_google_calendar = Application.get_env(:maraithon, :google_calendar, [])
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, :google_calendar, original_google_calendar)
+      end)
+
+      user_id = "context-calendar-http-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "calendar-token",
+          scopes: ["calendar.readonly"]
+        })
+
+      Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(500, Jason.encode!(%{"error" => "internal_stacktrace: db_timeout"}))
+      end)
+
+      context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
+
+      assert context.calendar.source_status.google == "service problem"
+      refute calendar_status_text(context) =~ "internal_stacktrace"
+      refute calendar_status_text(context) =~ "db_timeout"
+      refute calendar_status_text(context) =~ "500"
+      refute calendar_status_text(context) =~ "temporarily unavailable"
+    end
+  end
+
+  describe "SPEC 09 focus fetcher scopes" do
+    test "commitment_audit uses the waiting_on fetcher set" do
+      assert Context.fetcher_keys_for_focus(:commitment_audit) ==
+               Context.fetcher_keys_for_focus(:waiting_on)
+
+      assert Context.fetcher_keys_for_focus(:commitment_audit) == [
+               :preference_memory,
+               :operator_memory,
+               :user_memory,
+               :deep_memory,
+               :open_loops,
+               :goals,
+               :relationships,
+               :todos,
+               :briefing_schedule,
+               :connected_accounts,
+               :source_freshness,
+               :defaults
+             ]
+    end
+
+    test "delivery planner skips intelligence-generation fetchers" do
+      assert Context.fetcher_keys_for_focus(:delivery_planner) == [
+               :preference_memory,
+               :operator_memory,
+               :user_memory,
+               :open_loops,
+               :goals,
+               :relationships,
+               :todos,
+               :calendar,
+               :briefing_schedule,
+               :source_freshness,
+               :projects,
+               :defaults
+             ]
+    end
+
+    test "continuity uses a narrower recap fetcher set" do
+      assert Context.fetcher_keys_for_focus(:continuity) == [
+               :preference_memory,
+               :operator_memory,
+               :user_memory,
+               :open_loops,
+               :todos,
+               :briefing_schedule,
+               :defaults
+             ]
+    end
+
+    test "proactive projection reserves high-signal fields within a hard byte cap" do
+      escaped = String.duplicate("🙂\"\n", 2_000)
+
+      context = %{
+        user: %{"bio" => escaped},
+        preference_memory: List.duplicate(%{"instruction" => escaped}, 20),
+        operator_memory: List.duplicate(%{"summary" => escaped}, 20),
+        user_memory: %{"summary" => escaped},
+        deep_memory: List.duplicate(%{"content" => escaped}, 20),
+        todos: List.duplicate(%{"id" => "todo", "title" => escaped}, 20),
+        open_loops: %{"buckets" => %{"due" => List.duplicate(escaped, 20)}},
+        calendar: List.duplicate(%{"title" => escaped}, 20),
+        relationships: List.duplicate(%{"name" => escaped}, 20),
+        goals: List.duplicate(%{"title" => escaped}, 20),
+        projects: List.duplicate(%{"name" => escaped}, 20)
+      }
+
+      projected = Context.for_proactive_prompt(context)
+
+      assert Maraithon.PromptBudget.encoded_bytes(projected) <= 24_000
+      assert projected["preference_memory"] != []
+      assert projected["todos"] != []
+      assert projected["calendar"] != []
+      assert String.valid?(Jason.encode!(projected))
+    end
+
+    test "proactive projection preserves semantic todo fields and nested open-loop items" do
+      noisy_todos =
+        Enum.map(1..20, fn index ->
+          %{
+            "id" => "todo-semantic-#{index}",
+            "title" => "Important title #{index} " <> String.duplicate("x", 300),
+            "next_action" => "Call the person #{index} " <> String.duplicate("y", 300),
+            "summary" => "Summary #{index} " <> String.duplicate("z", 300),
+            "status" => "open",
+            "priority" => 90 - index,
+            "source" => "gmail",
+            "aaa_noise" => Map.new(1..100, &{"noise-#{&1}", String.duplicate("n", 100)})
+          }
+        end)
+
+      bucket_todo = %{
+        "id" => "bucket-semantic-id",
+        "title" => "Bucket semantic title",
+        "next_action" => "Handle the bucket item",
+        "status" => "open",
+        "priority" => 95,
+        "source" => "calendar"
+      }
+
+      projected =
+        Context.for_proactive_prompt(%{
+          todos: noisy_todos,
+          open_loops: %{
+            buckets: %{overdue: [bucket_todo]},
+            totals: %{overdue: 1, open: 1}
+          }
+        })
+
+      [first_todo | _rest] = projected["todos"]
+      assert first_todo["id"] == "todo-semantic-1"
+      assert first_todo["title"] =~ "Important title 1"
+      assert first_todo["next_action"] =~ "Call the person 1"
+      refute Map.has_key?(first_todo, "aaa_noise")
+
+      [open_loop_item] = projected["open_loops"]["items"]
+      assert open_loop_item["id"] == "bucket-semantic-id"
+      assert open_loop_item["title"] == "Bucket semantic title"
+      assert open_loop_item["bucket"] == "overdue"
+      assert projected["open_loops"]["totals"]["overdue"] == 1
+    end
+
+    test "string focus values normalize to the new atoms" do
+      assert Context.fetcher_keys_for_focus("commitment_audit") ==
+               Context.fetcher_keys_for_focus(:commitment_audit)
+
+      assert Context.fetcher_keys_for_focus("continuity") ==
+               Context.fetcher_keys_for_focus(:continuity)
+
+      assert Context.fetcher_keys_for_focus("delivery_planner") ==
+               Context.fetcher_keys_for_focus(:delivery_planner)
+    end
+  end
+
+  describe "context fetch diagnostics" do
+    test "summarizes crashed source fetches without leaking provider internals" do
+      context =
+        Context.safe_parallel_fetch(
+          [
+            gmail: fn ->
+              raise RuntimeError,
+                    "gmail 500 internal_stacktrace token=sk-live-secret db_timeout"
+            end,
+            notes: fn ->
+              throw({:provider_error, "raw Apple Notes path /Users/kent/Library/secret"})
+            end,
+            messages: fn ->
+              exit({:shutdown, "private iMessage database handle"})
+            end
+          ],
+          defaults: %{gmail: [], notes: [], messages: []},
+          timeout_ms: 1_000,
+          max_concurrency: 3
+        )
+
+      assert context.context_fetch.status == "degraded"
+
+      assert Enum.map(context.context_fetch.failures, & &1.reason) == [
+               "service problem",
+               "service problem",
+               "interrupted"
+             ]
+
+      diagnostics = inspect(context.context_fetch.failures)
+      refute diagnostics =~ "internal_stacktrace"
+      refute diagnostics =~ "sk-live-secret"
+      refute diagnostics =~ "/Users/kent"
+      refute diagnostics =~ "iMessage database"
+      refute diagnostics =~ "temporarily unavailable"
+    end
+
+    test "reports timed-out source fetches with a machine-readable reason" do
+      started = System.monotonic_time(:millisecond)
+
+      context =
+        Context.safe_parallel_fetch(
+          [
+            messages: fn ->
+              Process.sleep(250)
+              ["late message"]
+            end
+          ],
+          defaults: %{messages: []},
+          timeout_ms: 20,
+          max_concurrency: 1
+        )
+
+      elapsed_ms = System.monotonic_time(:millisecond) - started
+
+      assert context.messages == []
+      assert context.context_fetch.status == "degraded"
+      assert [%{key: "messages", reason: "timeout"}] = context.context_fetch.failures
+      assert elapsed_ms < 250
+    end
+  end
+
+  defp calendar_status_text(context) do
+    context.calendar.source_status
+    |> inspect()
+  end
+
+  defp calendar_event(guid, start_at, end_at, overrides) do
+    Map.merge(
+      %{
+        "local_id" => "evt:#{guid}",
+        "guid" => guid,
+        "calendar_name" => "Work",
+        "title" => "Planning review",
+        "notes" => nil,
+        "location" => nil,
+        "start_at" => DateTime.to_iso8601(start_at),
+        "end_at" => DateTime.to_iso8601(end_at),
+        "is_all_day" => false,
+        "is_recurring" => false,
+        "organizer_email" => "kent@example.com",
+        "attendees_count" => 1,
+        "attendee_emails" => ["kent@example.com"],
+        "created_at" => DateTime.to_iso8601(DateTime.add(start_at, -1, :day)),
+        "modified_at" => DateTime.to_iso8601(DateTime.add(start_at, -1, :hour))
+      },
+      overrides
+    )
+  end
+end

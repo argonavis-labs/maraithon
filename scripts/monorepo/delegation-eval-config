@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Sourced by the controlled eval commands. Copy only non-secret settings from
+# the pinned serving revision; never enable a rollout gate as a side effect.
+revision="$(gcloud run services describe maraithon --project maraithon --region us-central1 --format='value(status.latestReadyRevisionName)')"
+revision_json="$(gcloud run revisions describe "${revision}" --project maraithon --region us-central1 --format=json)"
+image="$(jq -r '.status.imageDigest' <<<"${revision_json}")"
+[[ "${image}" == us-central1-docker.pkg.dev/maraithon/*@sha256:* ]] || exit 1
+
+eval_env="$(jq -r '
+  [.spec.containers[0].env[]? | select(.value != null) | {key: .name, value: .value}] | from_entries as $env |
+  ["LLM_PROVIDER", "LLM_MODEL", "LLM_MODEL_FALLBACKS", "OPENROUTER_MODEL",
+   "OPENROUTER_CHAT_MODEL", "OPENROUTER_FAST_MODEL",
+   "OPENROUTER_ROUTING_MODEL", "LLM_PROJECTED_DAILY_USD", "LLM_DEVELOPMENT_SPENDING",
+   "DELEGATIONS_ENABLED", "DELEGATION_EVAL_ONLY", "DELEGATION_USER_ALLOWLIST",
+   "DELEGATION_GMAIL_SENDS_ENABLED", "DELEGATION_SLACK_SENDS_ENABLED"] |
+  map(. as $name | "\($name)=\($env[$name] // (if $name == "LLM_PROJECTED_DAILY_USD" then "3.00" else "" end))") | join("|")
+' <<<"${revision_json}")"
+eval_env="^|^POOL_SIZE=2|${eval_env}"
+actor="${DELEGATION_EVAL_ACTOR:-as_user}"
+case "${actor}" in
+  as_user|as_assistant) ;;
+  *) echo "Unknown controlled eval actor" >&2; exit 1 ;;
+esac
+eval_env+="|DELEGATION_EVAL_ACTOR=${actor}"
+
+# An automatic container retry must not create a second conversation.
+gcloud run jobs update maraithon-todo-validation --project maraithon --region us-central1 \
+  --image "${image}" --max-retries=0 --quiet

@@ -1,0 +1,76 @@
+{
+  "spec_id": "native-swiftui-productivity-app",
+  "slug": "native-swiftui-productivity-app",
+  "title": "Native SwiftUI Productivity App Specification",
+  "stage": "done",
+  "spec_path": "../specs/native-swiftui-productivity-app.md",
+  "created_at": "2026-05-25T22:28:40Z",
+  "approved_at": "2026-05-25T22:28:40Z",
+  "started_at": "2026-05-25T22:28:40Z",
+  "completed_at": "2026-05-25T22:39:53Z",
+  "updated_at": "2026-05-25T22:39:53Z",
+  "summary": "Implementation finished for a greenfield native SwiftUI app with Magic Signin, Todos, CRM, and Chat.",
+  "next_action": "Open the generated Xcode project and run the app on an iOS 26 simulator.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Built and tested the SwiftUI app against the Spectacula spec.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "3. Product and UX Model",
+      "4. Technical Architecture",
+      "5. Data and Domain Model",
+      "6. Implementation Contract",
+      "9. Testing and Validation Matrix",
+      "10. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/native-swiftui-productivity-app.md",
+      "project.yml",
+      "MaraithonMobile.xcodeproj",
+      "MaraithonMobile",
+      "MaraithonMobileTests"
+    ],
+    "notes": "No existing app code was present. Auth uses a local passwordless provider behind a production-ready protocol because no Magic key/backend exists."
+  },
+  "verification": {
+    "format": "skipped",
+    "lint": "skipped",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "No dedicated Swift formatter or linter is configured. xcodegen generate passed. xcodebuild build passed on iPhone 17 iOS 26.4.1. xcodebuild test passed on iPhone 17 Pro iOS 26.4.1 after one simulator Busy retry."
+  },
+  "history": [
+    {
+      "at": "2026-05-25T22:28:40Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial implementation-ready spec saved."
+    },
+    {
+      "at": "2026-05-25T22:28:40Z",
+      "event": "spec_approved",
+      "from_stage": "specs",
+      "to_stage": "ready",
+      "note": "User requested spec and implementation in the same turn."
+    },
+    {
+      "at": "2026-05-25T22:28:40Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "Implementation started from the generated spec."
+    },
+    {
+      "at": "2026-05-25T22:39:53Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Generated Xcode project, implemented app, ran build and tests, and completed final spec review."
+    }
+  ]
+}

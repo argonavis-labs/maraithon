@@ -1,0 +1,3317 @@
+defmodule Maraithon.Todos.CrossSourceCompletion do
+  @moduledoc """
+  LLM-backed completion pass that closes open todos when later source material
+  shows the work was already handled.
+
+  The deterministic `CompletionSweep` only sees hard same-source evidence (a
+  Gmail reply closes a Gmail todo). This pass gives the model current material
+  from every connected Chief-of-Staff source, plus persisted observations, so it
+  can reason across Gmail, Slack, Calendar, local messages, notes, reminders,
+  files, browser history, and other companion sources.
+
+  The bar for closing is strict and the LLM must quote source evidence;
+  ambiguous matches stay open, because wrongly closing real work is worse than
+  showing a finished item.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.AssistantHarness.PromptStability
+  alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm.Observation
+  alias Maraithon.LLM
+  alias Maraithon.LocalMessages.LocalMessage
+  alias Maraithon.PromptBudget
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.TodoClosureReceipt
+  alias Maraithon.TelegramAssistant.PushBroker
+  alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.UserBatch
+
+  require Logger
+
+  @open_statuses Todo.completion_statuses()
+  # Per-cycle LLM prompt-size cap (SPEC 05 R3). This bounds "how many todos
+  # we check this cycle", not "which 40 we permanently limit to":
+  # evidence-linked (delta) candidates fill the budget first, and whatever
+  # remains rotates through the backstop by `last_completion_checked_at`.
+  @max_todos 40
+  # Safety bound on the open-todo scan for one pathological user; not the
+  # real per-cycle cap (see @max_todos above).
+  @max_open_todo_scan 500
+  @max_observations 120
+  @max_outgoing_messages 80
+  @max_live_evidence_per_source 120
+  # Live acquisition intentionally sees a broad, per-source-bounded window so
+  # candidate selection can notice fresh links. The LLM prompt is a separate,
+  # much smaller budget: keep one linked item per checked todo first, then
+  # round-robin across channels so a noisy source cannot crowd out the rest.
+  @max_prompt_evidence_items 96
+  @max_prompt_linked_evidence_items 56
+  @max_prompt_evidence_per_channel 8
+  @max_prompt_bytes 96_000
+  @max_prompt_health_text 12_000
+  @max_prompt_health_sources 32
+  @max_prompt_health_providers 8
+  @max_prompt_health_counts 16
+  @evidence_window_days 7
+  @min_todo_age_minutes 30
+  @min_confidence 0.8
+  # Evidence selection is part of a successful review's semantic input. Revisit
+  # prior negative decisions when the booking-selection policy changes.
+  @review_policy_version 4
+  @max_excerpt 280
+  @default_max_tokens 2_048
+  @default_timeout_ms 60_000
+  @source_acquisition_timeout_ms 90_000
+  @source_skill_id "commitment_tracker"
+  @source_skill_config %{
+    "email_scan_limit" => 40,
+    "event_scan_limit" => 40,
+    "gmail_fetch_timeout_ms" => 18_000,
+    "gmail_body_fetch_limit" => 24,
+    "gmail_body_fetch_timeout_ms" => 750,
+    "calendar_fetch_timeout_ms" => 12_000,
+    "slack_fetch_timeout_ms" => 45_000,
+    "slack_channel_fetch_timeout_ms" => 4_000,
+    "slack_search_timeout_ms" => 5_000,
+    "slack_self_authored_query_limit" => 3,
+    "slack_channel_scan_limit" => 4,
+    "slack_message_scan_limit" => 60,
+    "companion_fetch_timeout_ms" => 4_000,
+    "local_message_limit" => 180,
+    "local_chat_limit" => 80,
+    "local_voice_memo_limit" => 60,
+    "local_note_limit" => 80,
+    "local_reminder_limit" => 80,
+    "local_file_limit" => 80,
+    "local_browser_visit_limit" => 160,
+    "lookback_hours" => @evidence_window_days * 24 * 2
+  }
+
+  @doc "Maximum todo count accepted by one completion-model response."
+  def max_todos_per_request, do: @max_todos
+
+  @doc """
+  Runs the cross-source pass for every user with open todos.
+  """
+  def run_for_all_users(opts \\ []) do
+    user_ids = UserBatch.reviewable_todo_user_ids(opts)
+
+    empty = %{users: length(user_ids), checked: 0, completed: 0, skipped: 0, errors: 0}
+
+    Enum.reduce(user_ids, empty, fn user_id, acc ->
+      case run_for_user_safely(user_id, opts) do
+        %{checked: checked, completed: completed} ->
+          %{acc | checked: acc.checked + checked, completed: acc.completed + completed}
+
+        {:skip, _reason} ->
+          %{acc | skipped: acc.skipped + 1}
+
+        {:error, _reason} ->
+          %{acc | errors: acc.errors + 1}
+      end
+    end)
+  end
+
+  # One user's crash must never abort the pass for every user after them
+  # (mirrors StalenessTriageSweep.run_for_user_safely/2).
+  defp run_for_user_safely(user_id, opts) do
+    run_for_user(user_id, opts)
+  rescue
+    error ->
+      failure_code = Maraithon.Redaction.error_class(error)
+
+      Logger.warning("Cross-source completion crashed for user",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: failure_code
+      )
+
+      {:error, {:exception, failure_code}}
+  catch
+    kind, reason ->
+      failure_code = Maraithon.Redaction.error_class(reason)
+
+      Logger.warning("Cross-source completion crashed for user",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: to_string(kind)
+      )
+
+      {:error, {kind, failure_code}}
+  end
+
+  @doc """
+  Runs the cross-source pass for one user.
+
+  Returns `%{checked: n, completed: n}`, `{:skip, reason}` when there is
+  nothing to evaluate, or `{:error, reason}` when the LLM call fails.
+  Tests may inject `:llm_complete` as a prompt-level one-arity function or
+  `:llm_request` as a request-map one-arity function.
+  """
+  def run_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+
+    # Cheap existence gate first (SPEC 05 R2): evidence acquisition — which
+    # fires live Gmail/Slack/etc. calls — must never run for a user with
+    # nothing to check, preserving the original zero-open-todos short-circuit.
+    open_todos = open_todo_pool(user_id, now, opts)
+
+    cond do
+      open_todos == [] ->
+        {:skip, :no_open_todos}
+
+      Keyword.has_key?(opts, :review_memo) ->
+        review_changed_todos(user_id, open_todos, now, opts)
+
+      true ->
+        # Evidence before candidate selection (SPEC 05 R2): live acquisition
+        # is independent of which todos are checked (`build_live_source_bundle/4`
+        # takes `_todos` and never reads it), so collecting first lets R3
+        # partition candidates into evidence-linked vs backstop.
+        evidence = collect_evidence(user_id, open_todos, now, opts)
+
+        with :ok <- validate_exact_source_evidence(evidence, opts) do
+          opts = put_exact_source_session(opts, user_id)
+
+          if actionable_evidence?(evidence) do
+            todos = select_candidates(user_id, open_todos, evidence)
+
+            # Stamp only on success: a failed evaluation checked nothing, so
+            # advancing the backstop rotation would skip these todos unchecked.
+            case evaluate_fitting(user_id, todos, evidence, now, opts) do
+              {:ok, result, evaluated_todos} ->
+                stamp_completion_checked(user_id, evaluated_todos, now)
+
+                result
+                |> Map.put_new(:model_calls, 1)
+                |> Map.put(:decision_refs, Enum.map(evaluated_todos, & &1.id))
+
+              {:error, _reason} = error ->
+                error
+            end
+          else
+            if Keyword.get(opts, :exhaustive_completion, false) do
+              stamp_completion_checked(user_id, open_todos, now)
+
+              %{
+                checked: length(open_todos),
+                completed: 0,
+                model_calls: 0,
+                outcome: "no_completion_evidence",
+                decision_refs: Enum.map(open_todos, & &1.id)
+              }
+            else
+              {:skip, :no_evidence}
+            end
+          end
+        end
+    end
+  end
+
+  # The durable backstop remembers successful decisions, not transient task
+  # state. Hash only semantic inputs: a new fetch timestamp is not new evidence.
+  # Exact account closure keeps its independent, exhaustive coverage protocol.
+  defp review_changed_todos(user_id, open_todos, now, opts) do
+    evidence = collect_evidence(user_id, open_todos, now, opts)
+
+    if review_source_failure?(evidence) do
+      {:error, :workflow_review_source_unavailable}
+    else
+      memo = Keyword.fetch!(opts, :review_memo)
+
+      # Each todo's memo covers only the evidence that could close it, so a
+      # newsletter arriving for one todo no longer invalidates every other.
+      # Calendar and source-health entries stay shared: time-blocked work can
+      # complete on the clock alone.
+      {shared_evidence, linkable_evidence} =
+        Enum.split_with(evidence, fn item ->
+          read_string(item, "channel", nil) in ["source_health", "google_calendar", "calendar"]
+        end)
+
+      shared_hash =
+        shared_evidence
+        |> Enum.flat_map(&stable_review_evidence/1)
+        |> Enum.uniq()
+        |> Enum.sort()
+        |> review_hash()
+
+      discriminating = discriminating_token_set(open_todos)
+
+      linkable_with_tokens =
+        Enum.map(linkable_evidence, fn item -> {item, evidence_people_tokens([item])} end)
+
+      fingerprints =
+        Map.new(open_todos, fn todo ->
+          linked_hash =
+            linkable_with_tokens
+            |> Enum.filter(fn {item, people} ->
+              evidence_item_linked?(todo, item, people, discriminating)
+            end)
+            |> Enum.map(&elem(&1, 0))
+            |> Enum.uniq()
+            |> Enum.sort()
+            |> review_hash()
+
+          {todo.id,
+           review_hash({@review_policy_version, prompt_todo(todo), shared_hash, linked_hash})}
+        end)
+
+      last_checks = last_model_checks(user_id, Enum.map(open_todos, & &1.id))
+
+      changed =
+        Enum.filter(open_todos, fn todo ->
+          memo[todo.id] != fingerprints[todo.id] or
+            exhaustive_check_due?(todo, last_checks, now)
+        end)
+
+      unchanged = open_todos -- changed
+      {eligible, no_new_evidence} = exact_model_candidates(changed, evidence)
+      candidates = select_candidates(user_id, eligible, evidence)
+
+      evaluation =
+        if candidates == [] do
+          {:ok, %{checked: 0, completed: 0, model_calls: 0}, []}
+        else
+          evaluate_fitting(user_id, candidates, evidence, now, opts)
+        end
+
+      case evaluation do
+        {:ok, result, evaluated} ->
+          decided = unchanged ++ no_new_evidence ++ evaluated
+          # Only a full scan needs unchanged rows rotated to expose its tail.
+          # Ordinary idle reviews should not rewrite every open todo.
+          rotation =
+            if length(open_todos) == @max_open_todo_scan,
+              do: decided,
+              else: no_new_evidence ++ evaluated
+
+          stamp_completion_checked(user_id, rotation, now)
+          decided_ids = Enum.map(decided, & &1.id)
+
+          result
+          |> Map.put(:outcome, if(changed == [], do: "unchanged_context", else: "reviewed"))
+          |> Map.put(:unchanged, length(unchanged))
+          |> Map.put(:no_new_evidence, length(no_new_evidence))
+          |> Map.put(:pending_reviews, length(open_todos) - length(decided))
+          |> Map.put(:decision_refs, Enum.map(evaluated, & &1.id))
+          |> Map.put(:review_memo, Map.take(fingerprints, decided_ids))
+          |> Map.put(:calendar_evidence, calendar_review_evidence(evidence))
+          |> Map.put(:degraded_sources, degraded_review_sources(evidence))
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp review_hash(value) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(value, [:deterministic]))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp stable_review_evidence(%{"channel" => "source_health", "text" => text}) do
+    case Jason.decode(text) do
+      {:ok, health} when is_map(health) ->
+        Enum.map(health, fn {source, details} ->
+          {"source_health", source, strip_review_clock(details)}
+        end)
+
+      _ ->
+        [{"source_health", text}]
+    end
+  end
+
+  defp stable_review_evidence(item), do: [item]
+
+  defp strip_review_clock(value) when is_map(value) do
+    value
+    |> Map.drop(["fetched_at", "counts"])
+    |> Map.new(fn {key, nested} -> {key, strip_review_clock(nested)} end)
+  end
+
+  defp strip_review_clock(value) when is_list(value), do: Enum.map(value, &strip_review_clock/1)
+  defp strip_review_clock(value), do: value
+
+  defp review_source_failure?(evidence) do
+    Enum.any?(evidence, fn
+      %{"channel" => "source_health", "text" => text} ->
+        case Jason.decode(text) do
+          {:ok, health} ->
+            Map.has_key?(health, "live_sources")
+
+          _ ->
+            true
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  # Partial coverage is explicit in the prompt. Keep using valid evidence
+  # while retrying acquisition on every wake; recovery changes its fingerprint.
+  defp degraded_review_sources(evidence) do
+    evidence
+    |> Enum.flat_map(fn
+      %{"channel" => "source_health", "text" => text} ->
+        case Jason.decode(text) do
+          {:ok, health} ->
+            Enum.flat_map(health, fn {source, details} ->
+              if Enum.any?(nested_statuses(details), &(&1 in ["error", "partial", "unavailable"])) and
+                   read_string(details, "reason", "") != "google_calendar_not_connected" do
+                [source]
+              else
+                []
+              end
+            end)
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp calendar_review_evidence(evidence) do
+    Enum.flat_map(evidence, fn
+      %{"channel" => "google_calendar", "kind" => "calendar event"} = item ->
+        [item]
+
+      %{"channel" => "source_health", "text" => text} = item ->
+        case Jason.decode(text) do
+          {:ok, %{"calendar" => calendar}} ->
+            [Map.put(item, "text", Jason.encode!(%{"calendar" => calendar}))]
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end)
+    |> Enum.take(@max_live_evidence_per_source + 1)
+  end
+
+  defp actionable_evidence?(evidence) when is_list(evidence) do
+    Enum.any?(evidence, fn item ->
+      if read_string(item, "channel", nil) == "source_health" do
+        source_health_actionable?(item)
+      else
+        not blank?(exact_string(item, "text", nil)) or
+          not blank?(read_string(item, "subject", nil))
+      end
+    end)
+  end
+
+  defp actionable_evidence?(_evidence), do: false
+
+  defp put_exact_source_session(opts, user_id) do
+    if Keyword.get(opts, :exact_source_delta, false) do
+      refs = opts |> Keyword.fetch!(:source_item_refs) |> Enum.sort()
+
+      key =
+        :crypto.hash(:sha256, :erlang.term_to_binary({user_id, refs}))
+        |> Base.encode16(case: :lower)
+
+      Keyword.put(opts, :llm_session_id, "source-closure:" <> key)
+    else
+      opts
+    end
+  end
+
+  defp validate_exact_source_evidence(evidence, opts) do
+    if Keyword.get(opts, :exact_source_delta, false) do
+      expected =
+        opts
+        |> Keyword.get(:source_item_refs, [])
+        |> Enum.filter(&(is_binary(&1) and &1 != ""))
+        |> Enum.sort()
+
+      actual =
+        evidence
+        |> Enum.map(&read_string(&1, "source_ref", nil))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      unscoped? =
+        Enum.any?(evidence, fn item ->
+          read_string(item, "channel", nil) != "source_health" and
+            is_nil(read_string(item, "source_ref", nil))
+        end)
+
+      if expected != [] and actual == expected and not unscoped? do
+        :ok
+      else
+        {:error, :cross_source_completion_source_coverage_incomplete}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp source_health_actionable?(item) when is_map(item) do
+    with text when is_binary(text) <- read_string(item, "text", nil),
+         {:ok, health} when is_map(health) <- Jason.decode(text) do
+      health
+      |> nested_statuses()
+      |> Enum.any?(&(&1 in ["partial", "unavailable", "error"]))
+    else
+      _other -> false
+    end
+  end
+
+  defp source_health_actionable?(_item), do: false
+
+  defp nested_statuses(value) when is_map(value) do
+    Enum.flat_map(value, fn
+      {"status", status} when is_binary(status) -> [status]
+      {_key, nested} -> nested_statuses(nested)
+    end)
+  end
+
+  defp nested_statuses(value) when is_list(value), do: Enum.flat_map(value, &nested_statuses/1)
+  defp nested_statuses(_value), do: []
+
+  # ── Candidates ────────────────────────────────────────────────────────────
+
+  defp open_todo_pool(user_id, now, run_opts) do
+    case Keyword.get(run_opts, :todo_ids) do
+      ids when is_list(ids) -> exact_todo_pool(user_id, ids, run_opts)
+      _other -> rotating_todo_pool(user_id, now, run_opts)
+    end
+  end
+
+  defp exact_todo_pool(_user_id, [], _run_opts), do: []
+
+  defp exact_todo_pool(user_id, todo_ids, run_opts) do
+    Todo
+    |> where(
+      [todo],
+      todo.user_id == ^user_id and todo.id in ^todo_ids and todo.status in ^@open_statuses
+    )
+    |> maybe_scope_todo_query(run_opts)
+    |> order_by([todo], asc: todo.id)
+    |> Repo.all()
+  end
+
+  defp rotating_todo_pool(user_id, now, run_opts) do
+    min_age = if Keyword.has_key?(run_opts, :review_memo), do: 0, else: @min_todo_age_minutes
+    age_cutoff = DateTime.add(now, -min_age * 60, :second)
+
+    # Rotate before bounding the database scan. An updated-at prefix would
+    # permanently exclude the tail because check stamps do not update it.
+    # Query the full open set, including todos hidden by presentation filters.
+    Todo
+    |> where(
+      [todo],
+      todo.user_id == ^user_id and todo.status in ^@open_statuses and
+        todo.inserted_at < ^age_cutoff
+    )
+    |> maybe_scope_todo_query(run_opts)
+    |> order_by([todo], asc_nulls_first: todo.last_completion_checked_at, asc: todo.id)
+    |> limit(@max_open_todo_scan)
+    |> Repo.all()
+  end
+
+  defp maybe_scope_todo_query(query, run_opts) do
+    case Keyword.get(run_opts, :source_account_id) do
+      account_id when is_integer(account_id) ->
+        where(query, [todo], todo.source_account_id == ^account_id)
+
+      _other ->
+        if Keyword.get(run_opts, :source_account_unassigned?, false) do
+          where(query, [todo], is_nil(todo.source_account_id))
+        else
+          query
+        end
+    end
+  end
+
+  # Delta-driven candidate selection with a bounded backstop (SPEC 05 R3):
+  # anything with fresh related activity ("active") is checked every cycle
+  # regardless of its position in any ordering; the remaining budget rotates
+  # deterministically through the rest by `last_completion_checked_at`
+  # ascending with never-checked items first.
+  defp select_candidates(user_id, todos, evidence) do
+    identifiers = evidence_identifiers(evidence)
+    calendar = Enum.filter(evidence, &calendar_evidence?/1)
+
+    {active, backstop} =
+      Enum.split_with(todos, fn todo ->
+        evidence_linked?(todo, identifiers) or
+          Enum.any?(calendar, &calendar_relevant_to_todo?(todo, &1))
+      end)
+
+    active = Enum.sort_by(active, &completion_rotation_sort_key/1)
+
+    active =
+      if length(active) > @max_todos do
+        # Linked candidates still share the same finite prompt budget. Rotate
+        # them by the durable completion-check stamp instead of repeatedly
+        # taking the same updated-at prefix forever.
+        Logger.info("Cross-source completion truncated active candidates to the per-cycle cap",
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          active: length(active),
+          cap: @max_todos
+        )
+
+        Enum.take(active, @max_todos)
+      else
+        active
+      end
+
+    backstop_fill =
+      backstop
+      |> Enum.sort_by(&completion_rotation_sort_key/1)
+      |> Enum.take(max(@max_todos - length(active), 0))
+
+    active ++ backstop_fill
+  end
+
+  defp completion_rotation_sort_key(todo) do
+    case todo.last_completion_checked_at do
+      %DateTime{} = checked_at ->
+        {1, DateTime.to_unix(checked_at, :microsecond), todo.id}
+
+      _never_checked ->
+        {0, 0, todo.id}
+    end
+  end
+
+  defp evidence_identifiers(evidence) do
+    evidence
+    |> Enum.reject(fn item -> read_string(item, "channel", nil) == "source_health" end)
+    |> Enum.reduce(%{item_ids: MapSet.new(), label_items: []}, fn item, acc ->
+      ids =
+        [
+          read_string(item, "thread_id", nil),
+          read_string(item, "source_item_id", nil),
+          read_string(item, "target_source_item_id", nil)
+        ]
+        |> Enum.reject(&is_nil/1)
+
+      channel = read_string(item, "channel", nil)
+      acc = %{acc | item_ids: Enum.into(ids, acc.item_ids, &{channel, &1})}
+      account = read_string(item, "account", nil)
+      subject = read_string(item, "subject", nil)
+
+      if channel && account && subject do
+        %{acc | label_items: [{channel, account, String.downcase(subject)} | acc.label_items]}
+      else
+        acc
+      end
+    end)
+  end
+
+  defp evidence_linked?(todo, %{item_ids: item_ids, label_items: label_items}) do
+    (is_binary(todo.source_item_id) and todo.source_item_id != "" and
+       MapSet.member?(item_ids, {todo.source, todo.source_item_id})) or
+      counterparty_label_linked?(todo, label_items)
+  end
+
+  defp counterparty_label_linked?(
+         %Todo{source: source, source_account_label: account, counterparty_label: label},
+         label_items
+       )
+       when is_binary(source) and is_binary(account) and is_binary(label) do
+    case String.trim(label) do
+      "" ->
+        false
+
+      trimmed ->
+        needle = String.downcase(trimmed)
+
+        Enum.any?(label_items, fn {channel, evidence_account, subject} ->
+          channel == source and evidence_account == account and
+            String.contains?(subject, needle)
+        end)
+    end
+  end
+
+  defp counterparty_label_linked?(_todo, _label_items), do: false
+
+  # Bulk-stamp every candidate considered this cycle (SPEC 05 R4) — including
+  # ones that did not close — so the backstop rotation advances even when
+  # nothing resolved. `update_all` with an explicit `set:` list (mirroring
+  # `Todos.record_nudge_sent/3`), namespaced by user and tolerant of ids that
+  # no longer exist (zero rows affected is fine). `updated_at` is deliberately
+  # not touched: a "we looked at it" stamp across 40 todos every cycle must
+  # not churn updated-ordering or freshness signals.
+  defp stamp_completion_checked(_user_id, [], _now), do: :ok
+
+  defp stamp_completion_checked(user_id, todos, now) do
+    ids = Enum.map(todos, & &1.id)
+    stamped_at = DateTime.truncate(now, :second)
+
+    Todo
+    |> where([todo], todo.id in ^ids and todo.user_id == ^user_id)
+    |> Repo.update_all(set: [last_completion_checked_at: stamped_at])
+
+    :ok
+  end
+
+  # ── Evidence ──────────────────────────────────────────────────────────────
+
+  defp collect_evidence(user_id, todos, now, opts) do
+    cutoff = DateTime.add(now, -@evidence_window_days * 24 * 3600, :second)
+
+    persisted_evidence =
+      if Keyword.get(opts, :exact_source_delta, false) or
+           Keyword.has_key?(opts, :source_account_id) do
+        # Exact workers must decide from their sealed source bundle, whose
+        # references and revisions become the cycle proof. General CRM/local
+        # evidence belongs to the separate cross-source backstop, not every
+        # account × todo batch.
+        []
+      else
+        observation_evidence(user_id, cutoff) ++ outgoing_message_evidence(user_id, cutoff)
+      end
+
+    persisted_evidence
+    |> Enum.concat(live_source_evidence(user_id, todos, now, opts))
+    |> Enum.concat(Keyword.get(opts, :cached_calendar_evidence, []))
+    |> dedupe_evidence()
+  end
+
+  defp observation_evidence(user_id, cutoff) do
+    Repo.all(
+      from(o in Maraithon.AssistantIdentities.user_observations(Observation),
+        where: o.user_id == ^user_id and o.occurred_at >= ^cutoff,
+        where: not is_nil(o.excerpt) and o.excerpt != "",
+        order_by: [desc: o.occurred_at],
+        limit: @max_observations,
+        select: %{
+          source: o.source,
+          direction: o.direction,
+          subject: o.subject,
+          excerpt: o.excerpt,
+          occurred_at: o.occurred_at
+        }
+      )
+    )
+    |> Enum.map(fn obs ->
+      %{
+        "channel" => obs.source,
+        "kind" => observation_kind(obs),
+        "subject" => obs.subject,
+        "text" => truncate(obs.excerpt, @max_excerpt),
+        "at" => DateTime.to_iso8601(obs.occurred_at)
+      }
+    end)
+  rescue
+    _exception -> []
+  end
+
+  defp observation_kind(%{source: "gmail", direction: "outbound"}), do: "email sent by the user"
+  defp observation_kind(%{source: "gmail"}), do: "email received"
+  defp observation_kind(%{source: "slack"}), do: "slack message"
+  defp observation_kind(%{source: source}), do: to_string(source)
+
+  defp outgoing_message_evidence(user_id, cutoff) do
+    Repo.all(
+      from(m in LocalMessage,
+        where: m.user_id == ^user_id and m.is_from_me == true,
+        where: m.sent_at >= ^cutoff,
+        where: not is_nil(m.text) and m.text != "",
+        order_by: [desc: m.sent_at],
+        limit: @max_outgoing_messages,
+        select: %{
+          chat: m.chat_display_name,
+          handle: m.chat_key,
+          text: m.text,
+          sent_at: m.sent_at
+        }
+      )
+    )
+    |> Enum.map(fn message ->
+      %{
+        "channel" => "imessage",
+        "kind" => "message sent by the user",
+        "subject" => message.chat || message.handle,
+        "text" => truncate(message.text, @max_excerpt),
+        "at" => DateTime.to_iso8601(message.sent_at)
+      }
+    end)
+  rescue
+    _exception -> []
+  end
+
+  defp live_source_evidence(user_id, todos, now, opts) do
+    cond do
+      Keyword.has_key?(opts, :source_bundle) ->
+        opts
+        |> Keyword.get(:source_bundle)
+        |> source_bundle_evidence(now, Keyword.get(opts, :exact_source_delta, false))
+
+      Keyword.get(opts, :live_sources, true) ->
+        fetch_live_source_bundle(user_id, todos, now, opts)
+
+      true ->
+        []
+    end
+  rescue
+    exception ->
+      failure_code = Maraithon.Redaction.error_class(exception)
+
+      Logger.warning("Cross-source completion could not collect live source evidence",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: failure_code
+      )
+
+      live_source_unavailable_evidence(now, failure_code)
+  catch
+    kind, reason ->
+      failure_code = Maraithon.Redaction.error_class(reason)
+
+      Logger.warning("Cross-source completion could not collect live source evidence",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: to_string(kind)
+      )
+
+      live_source_unavailable_evidence(now, failure_code)
+  end
+
+  defp fetch_live_source_bundle(user_id, todos, now, opts) do
+    timeout_ms =
+      opts
+      |> Keyword.get(:source_timeout_ms)
+      |> positive_integer(@source_acquisition_timeout_ms)
+      |> min(@source_acquisition_timeout_ms)
+
+    fetcher = Keyword.get(opts, :source_bundle_fetcher) || (&build_live_source_bundle/4)
+
+    task =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        try do
+          evidence =
+            user_id
+            |> fetcher.(todos, now, opts)
+            |> source_bundle_evidence(now, false)
+
+          {:ok, evidence}
+        rescue
+          exception -> {:error, Maraithon.Redaction.error_class(exception)}
+        catch
+          kind, _reason -> {:error, to_string(kind)}
+        end
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, bundle}} ->
+        bundle
+
+      {:ok, {:error, _failure_code}} ->
+        raise "live source acquisition failed"
+
+      {:exit, _reason} ->
+        raise "live source acquisition failed"
+
+      nil ->
+        raise "live source acquisition timed out"
+    end
+  end
+
+  defp build_live_source_bundle(user_id, _todos, now, opts) do
+    skill_config =
+      @source_skill_config
+      |> Map.merge(Keyword.get(opts, :source_skill_config, %{}))
+
+    context =
+      %{
+        user_id: user_id,
+        timestamp: now,
+        trigger: %{type: :wakeup, job_type: "todo_completion_sweep"},
+        recent_events: [],
+        event: nil,
+        # An explicit evidence sweep, not a scheduled scan — keep the deep
+        # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
+        acquisition_deep_lookback: true,
+        skip_account_message_sources: Keyword.get(opts, :skip_account_message_sources, false),
+        skip_calendar_sources: Keyword.has_key?(opts, :cached_calendar_evidence)
+      }
+      |> maybe_put_context_source_scope(Keyword.get(opts, :source_scope))
+
+    {bundle, _telemetry, _proposed_watermarks} =
+      Acquisition.build(
+        user_id,
+        [@source_skill_id],
+        %{@source_skill_id => skill_config},
+        context
+      )
+
+    bundle
+  end
+
+  defp maybe_put_context_source_scope(context, source_scope) when is_map(source_scope) do
+    Map.put(context, :source_scope, source_scope)
+  end
+
+  defp maybe_put_context_source_scope(context, _source_scope), do: context
+
+  defp live_source_unavailable_evidence(now, reason) do
+    [
+      %{
+        "channel" => "source_health",
+        "kind" => "connected source coverage for this sweep",
+        "subject" => "all connected Chief-of-Staff sources",
+        "text" =>
+          Jason.encode!(%{
+            "live_sources" => %{
+              "status" => "unavailable",
+              "reason" => truncate(reason, @max_excerpt)
+            }
+          }),
+        "at" => DateTime.to_iso8601(now)
+      }
+    ]
+  end
+
+  defp source_bundle_evidence(bundle, now, exact?) when is_map(bundle) and is_boolean(exact?) do
+    [
+      source_health_evidence(bundle, now),
+      bundle
+      |> SourceBundle.gmail_messages()
+      |> evidence_bucket(&message_evidence_items(&1, exact?, :gmail), exact?),
+      bundle |> SourceBundle.calendar_events() |> evidence_bucket(&calendar_source_evidence/1),
+      bundle
+      |> SourceBundle.calendar_local_events()
+      |> evidence_bucket(&local_calendar_source_evidence/1),
+      bundle
+      |> SourceBundle.slack_messages()
+      |> evidence_bucket(&message_evidence_items(&1, exact?, :slack), exact?),
+      bundle
+      |> SourceBundle.slack_mentions()
+      |> evidence_bucket(&message_evidence_items(&1, exact?, :slack_mention), exact?),
+      bundle |> SourceBundle.imessage_messages() |> evidence_bucket(&imessage_source_evidence/1),
+      bundle |> SourceBundle.notes() |> evidence_bucket(&note_source_evidence/1),
+      bundle |> SourceBundle.reminders() |> evidence_bucket(&reminder_source_evidence/1),
+      bundle |> SourceBundle.files() |> evidence_bucket(&file_source_evidence/1),
+      bundle
+      |> SourceBundle.browser_visits()
+      |> evidence_bucket(&browser_history_source_evidence/1),
+      bundle |> SourceBundle.voice_memos() |> evidence_bucket(&voice_memo_source_evidence/1)
+    ]
+    |> List.flatten()
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp source_bundle_evidence(_bundle, _now, _exact?), do: []
+
+  defp source_health_evidence(bundle, now) do
+    freshness = SourceBundle.freshness(bundle)
+
+    %{
+      "channel" => "source_health",
+      "kind" => "connected source coverage for this sweep",
+      "subject" => "all connected Chief-of-Staff sources",
+      "text" => compact_source_health_json(freshness),
+      "at" => DateTime.to_iso8601(now)
+    }
+  end
+
+  defp compact_source_health_json(freshness) when is_map(freshness) do
+    entries =
+      freshness
+      |> Enum.take(@max_prompt_health_sources * 4)
+      |> Enum.sort_by(fn {source, _details} -> bounded_prompt_string(to_string(source), 64) end)
+      |> Enum.take(@max_prompt_health_sources)
+
+    detailed =
+      Map.new(entries, fn {source, details} ->
+        source = bounded_prompt_string(to_string(source), 64)
+
+        value =
+          %{
+            "source" => bounded_prompt_string(read_string(details, "source", source), 64),
+            "status" => bounded_prompt_string(read_string(details, "status", "unknown"), 64),
+            "fetched_at" => bounded_prompt_string(read_string(details, "fetched_at", nil), 64),
+            "reason" => bounded_prompt_string(read_string(details, "reason", nil), 400),
+            "providers" => compact_health_providers(read_value(details, "providers")),
+            "counts" => compact_health_counts(read_value(details, "counts"))
+          }
+          |> compact_map()
+
+        {source, value}
+      end)
+
+    case Jason.encode!(detailed) do
+      encoded when byte_size(encoded) <= @max_prompt_health_text ->
+        encoded
+
+      _too_large ->
+        entries
+        |> Map.new(fn {source, details} ->
+          {bounded_prompt_string(to_string(source), 64),
+           %{"status" => bounded_prompt_string(read_string(details, "status", "unknown"), 64)}}
+        end)
+        |> Jason.encode!()
+        |> case do
+          encoded when byte_size(encoded) <= @max_prompt_health_text -> encoded
+          _still_too_large -> Jason.encode!(%{"source_health" => "summary_too_large"})
+        end
+    end
+  end
+
+  defp compact_source_health_json(_freshness), do: "{}"
+
+  defp compact_health_providers(providers) when is_list(providers) do
+    providers
+    |> Enum.take(@max_prompt_health_providers)
+    |> Enum.map(&health_provider_label/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp compact_health_providers(_providers), do: []
+
+  defp health_provider_label(provider) when is_binary(provider) do
+    bounded_prompt_string(provider, 160)
+  end
+
+  defp health_provider_label(provider) when is_map(provider) do
+    ["provider", "account", "email", "label", "name", "id"]
+    |> Enum.find_value(fn key -> read_string(provider, key, nil) end)
+    |> bounded_prompt_string(160)
+  end
+
+  defp health_provider_label(_provider), do: nil
+
+  defp compact_health_counts(counts) when is_map(counts) do
+    counts
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.take(@max_prompt_health_counts)
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
+      case compact_health_count(value) do
+        nil -> acc
+        compact -> Map.put(acc, bounded_prompt_string(to_string(key), 80), compact)
+      end
+    end)
+  end
+
+  defp compact_health_counts(_counts), do: %{}
+
+  defp compact_health_count(value) when is_number(value) or is_boolean(value), do: value
+  defp compact_health_count(value) when is_binary(value), do: bounded_prompt_string(value, 160)
+  defp compact_health_count(_value), do: nil
+
+  defp evidence_bucket(items, mapper) when is_list(items) and is_function(mapper, 1) do
+    items
+    |> Enum.take(@max_live_evidence_per_source * 4)
+    |> Enum.flat_map(&(mapper.(&1) |> List.wrap()))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sort_by(&evidence_sort_key/1, :desc)
+    |> Enum.take(@max_live_evidence_per_source)
+  end
+
+  defp evidence_bucket(_items, _mapper), do: []
+
+  defp evidence_bucket(items, mapper, true) when is_list(items) and is_function(mapper, 1) do
+    items
+    |> Enum.flat_map(&(mapper.(&1) |> List.wrap()))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sort_by(&evidence_sort_key/1, :desc)
+  end
+
+  defp evidence_bucket(items, mapper, false), do: evidence_bucket(items, mapper)
+
+  # Context is useful evidence, but it must retain its own timestamp and
+  # author. Combining it with a newer message would make an old "done" reply
+  # appear to be fresh evidence, including after the user reopened the todo.
+  defp message_evidence_items(message, exact?, source) when is_map(message) do
+    {mapper, inherited_keys} =
+      case source do
+        :gmail ->
+          {&gmail_source_evidence/2,
+           ~w(thread_id account google_account_email google_provider subject)}
+
+        :slack ->
+          {&slack_source_evidence/2, ~w(team_id team_name channel_id channel_name thread_ts)}
+
+        :slack_mention ->
+          {&slack_mention_evidence/2, ~w(team_id team_name channel_id channel_name thread_ts)}
+      end
+
+    current = mapper.(message, exact?)
+    inherited = Map.new(inherited_keys, &{&1, read_value(message, &1)})
+
+    source_ref =
+      if(source == :gmail, do: gmail_source_ref(message), else: slack_source_ref(message))
+
+    context =
+      message
+      |> read_list("thread_context")
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(fn reply ->
+        inherited
+        |> Map.merge(reply)
+        |> mapper.(exact?)
+        |> case do
+          nil -> nil
+          item -> Map.put(item, "source_ref", source_ref)
+        end
+      end)
+
+    # The coverage reference remains the acquired delta item; source_item_id,
+    # sender, and at identify the actual reply quoted as completion evidence.
+    [current | context]
+  end
+
+  defp message_evidence_items(_message, _exact?, _source), do: []
+
+  defp gmail_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
+    if Maraithon.Connectors.Gmail.Delivery.draft?(message) do
+      nil
+    else
+      delivered_gmail_source_evidence(message, exact?)
+    end
+  end
+
+  defp gmail_source_evidence(_message, _exact?), do: nil
+
+  defp delivered_gmail_source_evidence(message, exact?) do
+    current_text =
+      source_evidence_text(
+        message,
+        ~w(body_text text_body body snippet html_body),
+        exact?
+      )
+
+    evidence_item(
+      %{
+        "channel" => "gmail",
+        "kind" => gmail_kind(message),
+        "to" => read_string(message, "to", nil),
+        "cc" => read_string(message, "cc", nil),
+        "subject" => read_string(message, "subject", nil),
+        "text" => current_text,
+        "sender" => read_string(message, "from", nil),
+        "at" => gmail_evidence_time(message),
+        "source_item_id" => read_string(message, "message_id", read_string(message, "id", nil)),
+        "source_ref" => gmail_source_ref(message),
+        "thread_id" => read_string(message, "thread_id", nil),
+        "account" =>
+          read_string(message, "account", read_string(message, "google_account_email", nil))
+      },
+      exact?
+    )
+  end
+
+  defp gmail_source_ref(message) do
+    provider = read_string(message, "google_provider", "unknown")
+    id = read_string(message, "message_id", read_string(message, "id", nil))
+    if id, do: "gmail:" <> provider <> ":" <> id
+  end
+
+  defp gmail_kind(message) do
+    labels = read_list(message, "labels")
+
+    cond do
+      "SENT" in labels -> "email sent by the user"
+      "INBOX" in labels -> "email received"
+      true -> "gmail message"
+    end
+  end
+
+  defp calendar_source_evidence(event) when is_map(event) do
+    calendar_evidence_item("google_calendar", "calendar event", event)
+  end
+
+  defp calendar_source_evidence(_event), do: nil
+
+  defp local_calendar_source_evidence(event) when is_map(event) do
+    calendar_evidence_item("local_calendar", "local calendar event", event)
+  end
+
+  defp local_calendar_source_evidence(_event), do: nil
+
+  defp calendar_evidence_item(channel, kind, event) do
+    summary = read_string(event, "summary", read_string(event, "title", nil))
+
+    text =
+      [
+        "Status: " <> read_string(event, "status", "unknown"),
+        "Your response: " <> read_string(event, "self_response", "unknown"),
+        calendar_time_text(event, "start", "Starts"),
+        calendar_time_text(event, "end", "Ends"),
+        event |> read_list("attendees") |> attendee_summary(),
+        read_string(event, "description", nil),
+        read_string(event, "notes", nil),
+        read_string(event, "location", nil),
+        read_string(event, "html_link", nil)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join("\n")
+      |> bounded_prompt_string(1_600)
+
+    # The generic 280-character excerpt can discard attendees behind a long
+    # description or meeting URL. Keep bounded booking facts and response states
+    # together so the checker can distinguish a confirmed booking from a decline.
+    evidence_item(
+      %{
+        "channel" => channel,
+        "kind" => kind,
+        "subject" => bounded_prompt_string(summary, 180),
+        "text" => text,
+        "at" => evidence_time(event, ["updated", "updated_at", "created", "created_at"]),
+        "source_item_id" =>
+          read_string(
+            event,
+            "event_id",
+            read_string(event, "id", read_string(event, "guid", nil))
+          ),
+        "account" =>
+          read_string(event, "account", read_string(event, "google_account_email", nil))
+      },
+      true
+    )
+  end
+
+  defp calendar_time_text(event, key, label) do
+    time =
+      case read_value(event, key) do
+        %{date: date} when is_binary(date) -> date
+        %{"date" => date} when is_binary(date) -> date
+        value -> normalize_evidence_time(value)
+      end
+
+    if is_binary(time), do: "#{label}: #{time}", else: nil
+  end
+
+  defp slack_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
+    current_text = source_evidence_text(message, ~w(text_resolved text), exact?)
+    channel_id = read_string(message, "channel_id", nil)
+    message_ts = read_string(message, "ts", nil)
+
+    target_ts =
+      read_string(
+        message,
+        "target_ts",
+        read_string(message, "thread_ts", message_ts)
+      )
+
+    evidence_item(
+      %{
+        "channel" => "slack",
+        "kind" => "slack message",
+        "subject" =>
+          read_string(message, "channel_name", read_string(message, "channel_id", nil)),
+        "text" => current_text,
+        "sender" => read_string(message, "user_display_name", read_string(message, "user", nil)),
+        "at" => evidence_time(message, ["date", "ts"]),
+        "source_item_id" => slack_source_item_id(channel_id, message_ts),
+        "target_source_item_id" => slack_source_item_id(channel_id, target_ts),
+        "source_ref" => slack_source_ref(message),
+        "thread_id" => read_string(message, "thread_ts", nil),
+        "permalink" => read_string(message, "permalink", nil)
+      },
+      exact?
+    )
+  end
+
+  defp slack_source_evidence(_message, _exact?), do: nil
+
+  defp slack_source_ref(message) do
+    team_id = read_string(message, "team_id", nil)
+    channel_id = read_string(message, "channel_id", nil)
+    ts = read_string(message, "ts", nil)
+
+    if team_id && channel_id && ts,
+      do: "slack:" <> Enum.join([team_id, channel_id, ts], ":")
+  end
+
+  defp slack_mention_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
+    message
+    |> slack_source_evidence(exact?)
+    |> case do
+      nil -> nil
+      item -> Map.put(item, "kind", "slack mention")
+    end
+  end
+
+  defp slack_mention_evidence(_message, _exact?), do: nil
+
+  defp imessage_source_evidence(message) when is_map(message) do
+    evidence_item(%{
+      "channel" => "imessage",
+      "kind" =>
+        if(truthy?(read_value(message, "is_from_me")),
+          do: "message sent by the user",
+          else: "message received"
+        ),
+      "subject" =>
+        read_string(message, "chat_display_name", read_string(message, "chat_key", nil)),
+      "text" => read_string(message, "text", nil),
+      "at" => evidence_time(message, ["sent_at", "date"]),
+      "source_item_id" => read_string(message, "guid", read_string(message, "message_id", nil))
+    })
+  end
+
+  defp imessage_source_evidence(_message), do: nil
+
+  defp note_source_evidence(note) when is_map(note) do
+    evidence_item(%{
+      "channel" => "notes",
+      "kind" => "note",
+      "subject" => read_string(note, "title", nil),
+      "text" => read_string(note, "body", read_string(note, "text", nil)),
+      "at" => evidence_time(note, ["updated_at", "modified_at", "created_at"]),
+      "source_item_id" => read_string(note, "guid", read_string(note, "id", nil))
+    })
+  end
+
+  defp note_source_evidence(_note), do: nil
+
+  defp reminder_source_evidence(reminder) when is_map(reminder) do
+    evidence_item(%{
+      "channel" => "reminders",
+      "kind" =>
+        if(truthy?(read_value(reminder, "is_completed")),
+          do: "completed reminder",
+          else: "open reminder"
+        ),
+      "subject" => read_string(reminder, "title", nil),
+      "text" => read_string(reminder, "notes", nil),
+      "at" => evidence_time(reminder, ["completed_at", "due_at", "updated_at"]),
+      "source_item_id" => read_string(reminder, "guid", read_string(reminder, "id", nil))
+    })
+  end
+
+  defp reminder_source_evidence(_reminder), do: nil
+
+  defp file_source_evidence(file) when is_map(file) do
+    evidence_item(%{
+      "channel" => "files",
+      "kind" => "recent file",
+      "subject" => read_string(file, "name", read_string(file, "filename", nil)),
+      "text" => read_string(file, "path", read_string(file, "text", nil)),
+      "at" => evidence_time(file, ["modified_at", "created_at"]),
+      "source_item_id" => read_string(file, "id", read_string(file, "path", nil))
+    })
+  end
+
+  defp file_source_evidence(_file), do: nil
+
+  defp browser_history_source_evidence(visit) when is_map(visit) do
+    evidence_item(%{
+      "channel" => "browser_history",
+      "kind" => "browser visit",
+      "subject" => read_string(visit, "title", nil),
+      "text" => read_string(visit, "url", nil),
+      "at" => evidence_time(visit, ["visited_at", "last_visit_at"]),
+      "source_item_id" => read_string(visit, "id", read_string(visit, "url", nil))
+    })
+  end
+
+  defp browser_history_source_evidence(_visit), do: nil
+
+  defp voice_memo_source_evidence(memo) when is_map(memo) do
+    evidence_item(%{
+      "channel" => "voice_memos",
+      "kind" => "voice memo",
+      "subject" => read_string(memo, "title", nil),
+      "text" => read_string(memo, "transcript", read_string(memo, "text", nil)),
+      "at" => evidence_time(memo, ["recorded_at", "created_at", "updated_at"]),
+      "source_item_id" => read_string(memo, "guid", read_string(memo, "id", nil))
+    })
+  end
+
+  defp voice_memo_source_evidence(_memo), do: nil
+
+  # ── Evaluation ────────────────────────────────────────────────────────────
+
+  defp evaluate_fitting(_user_id, [], _evidence, _now, _opts),
+    do: {:error, :no_prompt_candidates_fit}
+
+  defp evaluate_fitting(user_id, todos, evidence, now, opts) do
+    evaluation =
+      if Keyword.get(opts, :exact_source_delta, false) do
+        evaluate_exact_candidates(user_id, todos, evidence, now, opts)
+      else
+        evaluate(user_id, todos, evidence, now, opts)
+      end
+
+    case evaluation do
+      %{} = result ->
+        {:ok, Map.put_new(result, :model_calls, 1), todos}
+
+      {:error, reason} = error ->
+        if prompt_budget_error?(reason) and length(todos) > 1 do
+          if Keyword.get(opts, :exhaustive_completion, false) do
+            {left, right} = Enum.split(todos, div(length(todos), 2))
+
+            with {:ok, left_result, left_todos} <-
+                   evaluate_fitting(user_id, left, evidence, now, opts),
+                 {:ok, right_result, right_todos} <-
+                   evaluate_fitting(user_id, right, evidence, now, opts) do
+              {:ok,
+               %{
+                 checked: left_result.checked + right_result.checked,
+                 completed: left_result.completed + right_result.completed,
+                 model_calls: left_result.model_calls + right_result.model_calls,
+                 policy_decision_refs:
+                   Map.get(left_result, :policy_decision_refs, []) ++
+                     Map.get(right_result, :policy_decision_refs, []),
+                 unlinked_decision_refs:
+                   Map.get(left_result, :unlinked_decision_refs, []) ++
+                     Map.get(right_result, :unlinked_decision_refs, [])
+               }, left_todos ++ right_todos}
+            end
+          else
+            evaluate_fitting(user_id, Enum.drop(todos, -1), evidence, now, opts)
+          end
+        else
+          error
+        end
+    end
+  end
+
+  defp prompt_budget_error?({reason, _actual, _limit})
+       when reason in [
+              :prompt_base_exceeds_budget,
+              :required_evidence_exceeds_budget,
+              :prompt_exceeds_budget,
+              :exact_completion_evidence_exceeds_budget,
+              :exact_completion_evidence_item_exceeds_budget
+            ],
+       do: true
+
+  defp prompt_budget_error?({:required_evidence_items_exceed_limit, _actual, _limit}), do: true
+  defp prompt_budget_error?({:evidence_budget_too_small, _limit}), do: true
+  defp prompt_budget_error?(_reason), do: false
+
+  defp evaluate(user_id, todos, evidence, now, opts) do
+    with {:ok, resolutions, authorized_evidence} <-
+           evaluate_resolutions(user_id, todos, evidence, now, opts),
+         {:ok, completed} <-
+           apply_resolutions(
+             user_id,
+             Map.new(todos, &{&1.id, &1}),
+             resolutions,
+             authorized_evidence,
+             opts
+           ) do
+      %{checked: length(todos), completed: completed}
+    else
+      {:error, reason} ->
+        log_evaluation_failure(
+          "Cross-source completion pass failed",
+          "Cross-source completion deferred for model capacity",
+          user_id,
+          reason
+        )
+
+        {:error, reason}
+
+      other ->
+        {:error, {:unexpected_llm_result, other}}
+    end
+  end
+
+  defp evaluate_resolutions(user_id, todos, evidence, now, opts) do
+    # Exact passes must return every decision, including citations for each
+    # closure. A fixed 2K-token response can truncate a valid larger batch.
+    opts = Keyword.put_new(opts, :max_tokens, max(@default_max_tokens, length(todos) * 256))
+    llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
+
+    with {:ok, {prompt, authorized_evidence}} <-
+           build_prompt(user_id, todos, evidence, now, opts),
+         {:ok, response} <- llm_complete.(prompt),
+         {:ok, resolutions} <- decode_response(response),
+         :ok <- validate_resolution_coverage(resolutions, todos, opts) do
+      {:ok, resolutions, authorized_evidence}
+    end
+  end
+
+  defp evaluate_exact_evidence_chunks(user_id, todos, evidence, now, opts) do
+    exact_opts = Keyword.put(opts, :exhaustive_completion, true)
+
+    result =
+      with {:ok, evidence_chunks} <-
+             partition_exact_prompt_evidence(user_id, todos, evidence, now, exact_opts),
+           {:ok, evaluations} <-
+             evaluate_exact_chunks(user_id, todos, evidence_chunks, now, exact_opts),
+           {resolutions, authorized_evidence} <-
+             aggregate_exact_resolutions(todos, evaluations),
+           {:ok, completed} <-
+             apply_resolutions(
+               user_id,
+               Map.new(todos, &{&1.id, &1}),
+               resolutions,
+               authorized_evidence,
+               exact_opts
+             ) do
+        %{
+          checked: length(todos),
+          completed: completed,
+          model_calls: length(evidence_chunks)
+        }
+      end
+
+    case result do
+      %{} = summary ->
+        summary
+
+      {:error, reason} = error ->
+        log_evaluation_failure(
+          "Cross-source exact completion pass failed",
+          "Cross-source exact completion deferred for model capacity",
+          user_id,
+          reason
+        )
+
+        error
+    end
+  end
+
+  defp evaluate_exact_candidates(user_id, todos, evidence, now, opts) do
+    {timely, ruled_out} = exact_model_candidates(todos, evidence)
+    {candidates, unlinked} = linked_model_candidates(user_id, timely, evidence, now)
+
+    evaluation =
+      if candidates == [],
+        do: %{checked: 0, completed: 0, model_calls: 0},
+        else: evaluate_exact_evidence_chunks(user_id, candidates, evidence, now, opts)
+
+    case evaluation do
+      %{} = result ->
+        result
+        |> Map.update!(:checked, &(&1 + length(ruled_out) + length(unlinked)))
+        |> Map.put(:policy_decision_refs, Enum.map(ruled_out, & &1.id))
+        |> Map.put(:unlinked_decision_refs, Enum.map(unlinked, & &1.id))
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  # One new message used to send every open todo to the model. Evidence can
+  # only close work it is about: the same thread or source item, the same
+  # counterparty, or a person the todo names. Everything else gets a policy
+  # receipt instead of a prompt, and a daily exhaustive check still lets an
+  # acknowledgement on one channel close work created from another.
+  @exhaustive_check_seconds 24 * 60 * 60
+
+  defp linked_model_candidates(_user_id, [], _evidence, _now), do: {[], []}
+
+  defp linked_model_candidates(user_id, todos, evidence, now) do
+    identifiers = evidence_identifiers(evidence)
+    people = evidence_people_tokens(evidence)
+    discriminating = discriminating_token_set(todos)
+    last_checks = last_model_checks(user_id, Enum.map(todos, & &1.id))
+
+    Enum.split_with(todos, fn todo ->
+      evidence_linked?(todo, identifiers) or
+        counterparty_mentioned?(todo, people, discriminating) or
+        exhaustive_check_due?(todo, last_checks, now)
+    end)
+  end
+
+  # Counterparty labels are generated prose, not identifiers: "Runner
+  # teammate (U0B79L2BQKY)", "Teammate in #cust-uride". Matching them as
+  # substrings let "teammate", "the" and the workspace's own name link any
+  # message to nearly every todo, so the linked-evidence filter passed most
+  # of the pool through to the model anyway. Tokens now have to match whole,
+  # and a token only counts when it can actually tell todos apart: generic
+  # role words are dropped, and so is anything a large share of the open
+  # pool already shares. Ids and addresses always count, however common.
+  @generic_counterparty_tokens MapSet.new(~w(
+    the and for with from that this you your our about into
+    team teammate teammates colleague colleagues coworker contact contacts
+    group channel thread chat message messages email inbox note
+    inc llc ltd corp company new who whoever someone person people
+    slack gmail google calendar imessage sms call meeting dms
+  ))
+
+  @shared_token_pool_ratio 0.1
+  @min_shared_token_todos 2
+
+  defp text_tokens(text) when is_binary(text) do
+    text
+    |> String.downcase()
+    |> String.split(~r/[^\p{L}\p{N}@.]+/u, trim: true)
+    |> Enum.flat_map(fn token ->
+      trimmed = String.trim(token, ".")
+
+      [trimmed | String.split(trimmed, ~r/[@.]/, trim: true)]
+    end)
+    |> Enum.filter(&(String.length(&1) >= 3))
+    |> Enum.uniq()
+  end
+
+  defp text_tokens(_text), do: []
+
+  defp counterparty_tokens(label) when is_binary(label) do
+    label
+    |> text_tokens()
+    |> Enum.reject(&MapSet.member?(@generic_counterparty_tokens, &1))
+  end
+
+  defp counterparty_tokens(_label), do: []
+
+  # An address or an opaque account id names one counterparty however many
+  # todos carry it; a plain word only does while it stays rare in the pool.
+  defp identifier_token?(token) do
+    String.contains?(token, "@") or
+      (String.length(token) >= 8 and Regex.match?(~r/\d/, token) and
+         Regex.match?(~r/\p{L}/u, token))
+  end
+
+  defp discriminating_token_set(todos) do
+    counts =
+      todos
+      |> Enum.flat_map(fn todo -> counterparty_tokens(todo.counterparty_label) end)
+      |> Enum.frequencies()
+
+    limit = max(@min_shared_token_todos, trunc(length(todos) * @shared_token_pool_ratio))
+
+    Enum.reduce(counts, MapSet.new(), fn {token, count}, acc ->
+      if count <= limit or identifier_token?(token), do: MapSet.put(acc, token), else: acc
+    end)
+  end
+
+  # Who sent it identifies a counterparty; what it is about does not. A plain
+  # word has to match the sender, so a subject full of shared project words
+  # cannot link a message to work it has nothing to do with. Ids and
+  # addresses still count wherever they appear, including as a mention.
+  defp evidence_people_tokens(evidence) do
+    evidence
+    |> Enum.reject(fn item -> read_string(item, "channel", nil) == "source_health" end)
+    |> Enum.reduce(%{sender: MapSet.new(), any: MapSet.new()}, fn item, acc ->
+      sender = item |> read_string("sender", nil) |> text_tokens()
+      subject = item |> read_string("subject", nil) |> text_tokens()
+
+      %{
+        sender: Enum.into(sender, acc.sender),
+        any: subject |> Enum.into(acc.any) |> then(&Enum.into(sender, &1))
+      }
+    end)
+  end
+
+  defp counterparty_mentioned?(%Todo{counterparty_label: label}, people, discriminating) do
+    label
+    |> counterparty_tokens()
+    |> Enum.any?(fn token ->
+      MapSet.member?(discriminating, token) and
+        MapSet.member?(matchable_tokens(people, token), token)
+    end)
+  end
+
+  defp counterparty_mentioned?(_todo, _people, _discriminating), do: false
+
+  defp matchable_tokens(%{sender: sender, any: any}, token) do
+    if identifier_token?(token), do: any, else: sender
+  end
+
+  # Item-level linkage for the backstop memo: the same thread or source item,
+  # the same account and subject, or the todo's counterparty named in it.
+  defp evidence_item_linked?(%Todo{} = todo, item, people, discriminating) when is_map(item) do
+    channel = read_string(item, "channel", nil)
+
+    ids =
+      [
+        read_string(item, "thread_id", nil),
+        read_string(item, "source_item_id", nil),
+        read_string(item, "target_source_item_id", nil)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    id_linked? =
+      is_binary(todo.source_item_id) and todo.source_item_id != "" and channel == todo.source and
+        todo.source_item_id in ids
+
+    label_items =
+      case {channel, read_string(item, "account", nil), read_string(item, "subject", nil)} do
+        {c, a, s} when is_binary(c) and is_binary(a) and is_binary(s) ->
+          [{c, a, String.downcase(s)}]
+
+        _ ->
+          []
+      end
+
+    id_linked? or counterparty_label_linked?(todo, label_items) or
+      counterparty_mentioned?(todo, people, discriminating)
+  end
+
+  defp evidence_item_linked?(_todo, _item, _people, _discriminating), do: false
+
+  defp exhaustive_check_due?(todo, last_checks, now) do
+    case Map.get(last_checks, todo.id) do
+      %DateTime{} = checked_at ->
+        DateTime.diff(now, checked_at, :second) >= @exhaustive_check_seconds
+
+      _never ->
+        true
+    end
+  end
+
+  # The newest model verdict per todo, from the closure receipts the cycle
+  # proofs already record.
+  defp last_model_checks(_user_id, []), do: %{}
+
+  defp last_model_checks(user_id, todo_ids) do
+    Repo.all(
+      from(r in TodoClosureReceipt,
+        where: r.user_id == ^user_id and r.todo_id in ^todo_ids and r.evaluator == "model",
+        group_by: r.todo_id,
+        select: {r.todo_id, max(r.inserted_at)}
+      )
+    )
+    |> Map.new()
+  rescue
+    _exception -> %{}
+  end
+
+  # The same strict timestamp gate is enforced again when applying a quote.
+  # If no authorized source is later than a todo's request/reopen boundary,
+  # its negative decision is already known. Keep all source material as
+  # context for the remaining candidates, and retain every decision receipt.
+  defp exact_model_candidates(todos, evidence) do
+    latest =
+      evidence
+      |> Enum.filter(&allowed_evidence_channel?(read_string(&1, "channel", nil)))
+      |> Enum.map(&(&1 |> read_string("at", nil) |> parse_datetime()))
+      |> Enum.filter(&is_struct(&1, DateTime))
+      |> Enum.max(DateTime, fn -> nil end)
+
+    Enum.split_with(todos, fn todo ->
+      boundary = Todo.completion_evidence_after(todo)
+      is_nil(boundary) or evidence_after_todo?(latest, boundary)
+    end)
+  end
+
+  defp evaluate_exact_chunks(user_id, todos, evidence_chunks, now, opts) do
+    Enum.reduce_while(evidence_chunks, {:ok, []}, fn chunk, {:ok, evaluations} ->
+      case evaluate_resolutions(user_id, todos, chunk, now, opts) do
+        {:ok, resolutions, authorized_evidence} ->
+          {:cont, {:ok, [{resolutions, authorized_evidence} | evaluations]}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, evaluations} -> {:ok, Enum.reverse(evaluations)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp log_evaluation_failure(failure_message, deferred_message, user_id, reason) do
+    metadata = [
+      user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    ]
+
+    if model_capacity_deferral?(reason) do
+      Logger.info(deferred_message, metadata)
+    else
+      Logger.warning(failure_message, metadata)
+    end
+  end
+
+  defp model_capacity_deferral?(:llm_busy), do: true
+  defp model_capacity_deferral?({:llm_busy, _retry_after}), do: true
+  defp model_capacity_deferral?({:rate_limited, _retry_after}), do: true
+  defp model_capacity_deferral?({:rate_limited, _retry_after, _detail}), do: true
+  defp model_capacity_deferral?(_reason), do: false
+
+  defp aggregate_exact_resolutions(todos, evaluations) do
+    resolutions =
+      Enum.map(todos, fn todo ->
+        candidates =
+          Enum.map(evaluations, fn {chunk_resolutions, authorized_evidence} ->
+            resolution =
+              Enum.find(chunk_resolutions, &(&1["todo_id"] == todo.id)) ||
+                %{"todo_id" => todo.id, "completed" => false}
+
+            {resolution, authorized_evidence}
+          end)
+
+        completion =
+          Enum.find(candidates, fn {resolution, authorized_evidence} ->
+            exact_completion_resolution?(todo, resolution, authorized_evidence)
+          end)
+
+        acknowledgement =
+          Enum.find(candidates, fn {resolution, authorized_evidence} ->
+            exact_acknowledgement_resolution?(todo, resolution, authorized_evidence)
+          end)
+
+        progress = latest_exact_workflow_resolution(todo, candidates)
+
+        case completion || progress || acknowledgement do
+          {resolution, _authorized_evidence} ->
+            resolution
+
+          nil ->
+            %{"todo_id" => todo.id, "completed" => false}
+        end
+      end)
+
+    authorized_evidence = Enum.flat_map(evaluations, &elem(&1, 1))
+    {resolutions, authorized_evidence}
+  end
+
+  defp exact_completion_resolution?(
+         %Todo{direction: "owed_to_me"},
+         %{"reply_outcome" => "acknowledged_only"},
+         _evidence
+       ),
+       do: false
+
+  defp exact_completion_resolution?(%Todo{} = todo, resolution, evidence) do
+    resolution["completed"] == true and
+      (not Maraithon.Todos.Workflow.outcome_tracked?(todo) or
+         resolution["outcome_confirmed"] == true) and
+      authorized_resolution_evidence?(todo, resolution, evidence)
+  end
+
+  # Account deltas can span several model requests. Keep an intermediate
+  # handoff as well as completion/acknowledgment decisions. Input chunk order
+  # is not chronology, so the latest quoted source controls the next move.
+  # Conflicting plans at the same timestamp need another review.
+  defp latest_exact_workflow_resolution(todo, candidates) do
+    proposals =
+      Enum.flat_map(candidates, fn
+        {%{"completed" => false, "workflow_transition" => %{} = transition} = resolution,
+         evidence} = candidate ->
+          if transition["state"] in ~w(you_own working waiting they_own) do
+            case matching_evidence(todo, resolution, evidence, fn _ -> true end) do
+              %{"at" => at} -> [{parse_datetime(at), transition, candidate}]
+              _ -> []
+            end
+          else
+            []
+          end
+
+        _ ->
+          []
+      end)
+
+    case Enum.max_by(proposals, fn {at, _, _} -> DateTime.to_unix(at, :microsecond) end, fn ->
+           nil
+         end) do
+      nil ->
+        nil
+
+      {latest, _, _} ->
+        proposals
+        |> Enum.filter(fn {at, _, _} -> DateTime.compare(at, latest) == :eq end)
+        |> Enum.uniq_by(fn {_, transition, _} ->
+          transition
+          |> Map.take(~w(state owner next_action waiting_until))
+          |> Map.update("owner", nil, fn
+            owner when is_map(owner) -> Map.take(owner, ~w(kind id))
+            _ -> nil
+          end)
+        end)
+        |> case do
+          [{_, _, candidate}] -> candidate
+          _conflicting -> nil
+        end
+    end
+  end
+
+  defp exact_acknowledgement_resolution?(
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "acknowledged_only"} = resolution,
+         evidence
+       ) do
+    authorized_acknowledgement_evidence?(todo, resolution, evidence)
+  end
+
+  defp exact_acknowledgement_resolution?(_todo, _resolution, _evidence), do: false
+
+  defp partition_exact_prompt_evidence(user_id, todos, evidence, now, opts) do
+    started_at = System.monotonic_time(:millisecond)
+    unique_evidence = coalesce_exact_prompt_evidence(evidence)
+
+    with {:ok, budget} <- exact_prompt_evidence_budget(todos, now, opts),
+         {:ok, fragments} <- split_exact_prompt_evidence(unique_evidence, budget),
+         {:ok, chunks} <- pack_exact_prompt_evidence(fragments, budget),
+         :ok <- validate_exact_partition_refs(evidence, chunks) do
+      Logger.info("Cross-source exact prompt prepared",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        candidate_count: length(todos),
+        item_count: length(evidence),
+        included_candidates: length(unique_evidence),
+        count: length(chunks),
+        duration_ms: System.monotonic_time(:millisecond) - started_at
+      )
+
+      {:ok, chunks}
+    end
+  end
+
+  # A thread reply can be attached to several acquired delta items. Its
+  # coverage references differ, but its content need only appear once. Match
+  # every other field exactly, including author, timestamp, account and IDs.
+  # Keep all coverage references and the first scalar ref for provenance.
+  defp coalesce_exact_prompt_evidence(evidence) do
+    # Sweep health carries the current evaluation time. Keep that volatile
+    # context after source records so repeated batches share a stable prefix.
+    {health, activity} =
+      Enum.split_with(evidence, &(read_string(&1, "channel", nil) == "source_health"))
+
+    {order, grouped} =
+      Enum.reduce(activity ++ health, {[], %{}}, fn item, {order, grouped} ->
+        key = Map.delete(item, "source_ref")
+        refs = MapSet.new(List.wrap(read_string(item, "source_ref", nil)))
+
+        case Map.fetch(grouped, key) do
+          {:ok, {first, prior_refs}} ->
+            {order, Map.put(grouped, key, {first, MapSet.union(prior_refs, refs)})}
+
+          :error ->
+            {[key | order], Map.put(grouped, key, {item, refs})}
+        end
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn key ->
+      {item, refs} = Map.fetch!(grouped, key)
+
+      if MapSet.size(refs) > 1,
+        do: Map.put(item, "source_refs", Enum.sort(refs)),
+        else: item
+    end)
+  end
+
+  defp exact_prompt_evidence_budget(todos, now, opts) do
+    todos_json = todos |> Enum.map(&prompt_todo/1) |> Jason.encode!()
+
+    base_bytes =
+      todos_json
+      |> render_prompt("[]", now, Keyword.get(opts, :exhaustive_completion, false))
+      |> prompt_request_bytes()
+
+    if base_bytes <= @max_prompt_bytes,
+      do: {:ok, @max_prompt_bytes - base_bytes},
+      else: {:error, {:prompt_base_exceeds_budget, base_bytes, @max_prompt_bytes}}
+  end
+
+  defp split_exact_prompt_evidence(evidence, budget) do
+    evidence
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, groups} ->
+      case split_exact_prompt_item(item, budget) do
+        {:ok, fragments} -> {:cont, {:ok, [fragments | groups]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, groups} -> {:ok, groups |> Enum.reverse() |> List.flatten()}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp split_exact_prompt_item(item, budget) when is_map(item) do
+    bytes = exact_evidence_request_bytes(item)
+
+    if bytes <= budget do
+      {:ok, [{item, bytes}]}
+    else
+      with text when is_binary(text) <- exact_string(item, "text", nil),
+           {:ok, left, right} <- split_utf8_text(text),
+           {:ok, left_fragments} <- split_exact_prompt_item(Map.put(item, "text", left), budget),
+           {:ok, right_fragments} <- split_exact_prompt_item(Map.put(item, "text", right), budget) do
+        {:ok, left_fragments ++ right_fragments}
+      else
+        _invalid -> exact_item_budget_error(item)
+      end
+    end
+  end
+
+  defp split_exact_prompt_item(item, _budget),
+    do: exact_item_budget_error(item)
+
+  # Evidence is JSON embedded in the request's content string. Encoding each
+  # item as a string measures its outer escaping exactly; remove only that
+  # string's two enclosing quotes. Array brackets are already in the empty
+  # prompt, and each separator adds one byte. The final build_prompt/5 check
+  # still verifies the complete serialized request before every model call.
+  defp exact_evidence_request_bytes(item) do
+    item
+    |> compact_exact_prompt_evidence_item()
+    |> Jason.encode!()
+    |> PromptStability.encode!()
+    |> byte_size()
+    |> Kernel.-(2)
+  end
+
+  defp pack_exact_prompt_evidence(fragments, budget) do
+    fragments
+    |> Enum.reduce_while({:ok, [], [], 0}, fn {fragment, bytes},
+                                              {:ok, chunks, current, current_bytes} ->
+      candidate_bytes = current_bytes + bytes + if(current == [], do: 0, else: 1)
+
+      cond do
+        candidate_bytes <= budget ->
+          {:cont, {:ok, chunks, [fragment | current], candidate_bytes}}
+
+        current != [] and bytes <= budget ->
+          {:cont, {:ok, [Enum.reverse(current) | chunks], [fragment], bytes}}
+
+        true ->
+          {:halt, exact_item_budget_error(fragment)}
+      end
+    end)
+    |> case do
+      {:ok, chunks, [], _bytes} -> {:ok, Enum.reverse(chunks)}
+      {:ok, chunks, current, _bytes} -> {:ok, Enum.reverse([Enum.reverse(current) | chunks])}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_exact_partition_refs(evidence, chunks) do
+    expected = exact_source_refs(evidence)
+    actual = chunks |> List.flatten() |> exact_source_refs()
+
+    if expected != [] and actual == expected do
+      :ok
+    else
+      {:error, :cross_source_completion_partition_coverage_incomplete}
+    end
+  end
+
+  defp exact_source_refs(evidence) do
+    evidence
+    |> Enum.flat_map(fn item ->
+      [read_string(item, "source_ref", nil) | read_list(item, "source_refs")]
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp exact_item_budget_error(item) do
+    actual = item |> compact_exact_prompt_evidence_item() |> Jason.encode!() |> byte_size()
+    {:error, {:exact_completion_evidence_item_exceeds_budget, actual, @max_prompt_bytes}}
+  end
+
+  defp split_utf8_text(text) when is_binary(text) do
+    if String.valid?(text) do
+      codepoints = String.codepoints(text)
+      split_at = div(length(codepoints), 2)
+
+      case Enum.split(codepoints, split_at) do
+        {left, right} when left != [] and right != [] ->
+          {:ok, IO.iodata_to_binary(left), IO.iodata_to_binary(right)}
+
+        _unsplittable ->
+          {:error, :exact_completion_evidence_text_unsplittable}
+      end
+    else
+      {:error, :exact_completion_evidence_text_invalid_utf8}
+    end
+  end
+
+  defp build_prompt(user_id, todos, evidence, now, opts) do
+    exhaustive? = require_decision_coverage?(opts)
+    todos_json = todos |> Enum.map(&prompt_todo/1) |> Jason.encode!()
+    empty_prompt = render_prompt(todos_json, "[]", now, exhaustive?)
+    base_bytes = prompt_request_bytes(empty_prompt)
+
+    if base_bytes > @max_prompt_bytes do
+      {:error, {:prompt_base_exceeds_budget, base_bytes, @max_prompt_bytes}}
+    else
+      available_bytes = max(@max_prompt_bytes - base_bytes + byte_size("[]"), 0)
+
+      # Exact scans split and repack on the final serialized-size check below.
+      # Let that check account for actual escaping instead of spending half the
+      # evidence budget on a worst-case reserve. The selective path still needs
+      # that reserve because it selects its evidence before rendering the prompt.
+      evidence_budget =
+        if Keyword.get(opts, :exact_source_delta, false),
+          do: available_bytes,
+          else: div(available_bytes, 2)
+
+      with {:ok, {evidence_json, included_evidence}} <-
+             encode_evidence_for_mode(todos, evidence, evidence_budget, opts) do
+        prompt = render_prompt(todos_json, evidence_json, now, exhaustive?)
+        prompt_bytes = prompt_request_bytes(prompt)
+
+        if prompt_bytes <= @max_prompt_bytes do
+          if included_evidence < length(evidence) do
+            Logger.info("Cross-source completion bounded LLM prompt evidence",
+              user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+              available_evidence: length(evidence),
+              included_evidence: included_evidence,
+              prompt_bytes: prompt_bytes,
+              prompt_byte_cap: @max_prompt_bytes
+            )
+          end
+
+          {:ok, {prompt, Jason.decode!(evidence_json)}}
+        else
+          {:error, {:prompt_exceeds_budget, prompt_bytes, @max_prompt_bytes}}
+        end
+      end
+    end
+  end
+
+  defp encode_evidence_for_mode(todos, evidence, evidence_budget, opts) do
+    if Keyword.get(opts, :exact_source_delta, false) do
+      encode_exact_prompt_evidence(evidence, evidence_budget)
+    else
+      with {:ok, {required, optional}} <- select_prompt_evidence(todos, evidence) do
+        encode_prompt_evidence(required, optional, evidence_budget)
+      end
+    end
+  end
+
+  defp encode_exact_prompt_evidence(evidence, max_bytes)
+       when is_list(evidence) and is_integer(max_bytes) and max_bytes >= 2 do
+    encoded = Enum.map(evidence, &(compact_exact_prompt_evidence_item(&1) |> Jason.encode!()))
+    evidence_json = "[" <> Enum.join(encoded, ",") <> "]"
+
+    if byte_size(evidence_json) <= max_bytes do
+      {:ok, {evidence_json, length(evidence)}}
+    else
+      {:error, {:exact_completion_evidence_exceeds_budget, byte_size(evidence_json), max_bytes}}
+    end
+  end
+
+  defp encode_exact_prompt_evidence(_evidence, max_bytes),
+    do: {:error, {:evidence_budget_too_small, max_bytes}}
+
+  defp compact_exact_prompt_evidence_item(item) do
+    %{
+      "channel" => read_string(item, "channel", nil),
+      "kind" => read_string(item, "kind", nil),
+      "sender" => read_string(item, "sender", nil),
+      "to" => read_string(item, "to", nil),
+      "cc" => read_string(item, "cc", nil),
+      "subject" => read_string(item, "subject", nil),
+      "text" => exact_string(item, "text", nil),
+      "at" => read_string(item, "at", nil),
+      "source_ref" => read_string(item, "source_ref", nil),
+      "source_refs" => read_list(item, "source_refs"),
+      "source_item_id" => read_string(item, "source_item_id", nil),
+      "target_source_item_id" => read_string(item, "target_source_item_id", nil),
+      "thread_id" => read_string(item, "thread_id", nil),
+      "account" => read_string(item, "account", nil),
+      "permalink" => read_string(item, "permalink", nil)
+    }
+    |> compact_map()
+  end
+
+  defp prompt_request_bytes(prompt) when is_binary(prompt) do
+    [%{"role" => "user", "content" => prompt}]
+    |> PromptStability.encode!()
+    |> byte_size()
+  end
+
+  defp prompt_todo(todo) do
+    %{
+      "todo_id" => bounded_prompt_string(todo.id, 64),
+      "status" => todo.status,
+      "source_channel" => bounded_prompt_string(todo.source, 64),
+      "title" => bounded_prompt_string(todo.title, 240),
+      "summary" => bounded_prompt_string(todo.summary, 480),
+      "next_action" => bounded_prompt_string(todo.next_action, 320),
+      "people" => workflow_people(todo),
+      "workflow" =>
+        Maraithon.Todos.Workflow.current(todo)
+        |> Map.take(~w(state owner outcome revision reason))
+        |> Map.update("reason", nil, &bounded_prompt_string(&1, 800)),
+      "captured_at" => DateTime.to_iso8601(Todo.completion_evidence_after(todo)),
+      # SPEC 05 R5: structured linkage so the model can match a specific piece
+      # of inbound evidence to a specific waiting-on item.
+      "direction" => bounded_prompt_string(todo.direction, 64),
+      "counterparty_label" => bounded_prompt_string(todo.counterparty_label, 200),
+      "counterparty_person_id" => todo.counterparty_person_id,
+      "source_item_id" => bounded_prompt_string(todo.source_item_id, 256),
+      "source_account_label" => bounded_prompt_string(todo.source_account_label, 200)
+    }
+    |> compact_map()
+    |> PromptBudget.project_fields(
+      ~w(todo_id status source_channel workflow people title summary next_action captured_at direction counterparty_label counterparty_person_id source_item_id source_account_label),
+      4_500,
+      string_bytes: 2_000,
+      list_items: 5,
+      map_entries: 16,
+      max_depth: 5,
+      key_bytes: 64
+    )
+  end
+
+  defp workflow_people(todo) do
+    ((Maraithon.Todos.Brief.stored(todo) || %{})["people"] || [])
+    |> Enum.filter(fn person -> Ecto.UUID.cast(person["id"]) != :error end)
+    |> Enum.take(8)
+    |> Enum.map(&Map.take(&1, ~w(id name)))
+  end
+
+  defp select_prompt_evidence(todos, evidence) do
+    indexed =
+      evidence
+      |> Enum.reject(&is_nil/1)
+      |> Enum.with_index()
+
+    {health, activity} =
+      Enum.split_with(indexed, fn {item, _index} ->
+        read_string(item, "channel", nil) == "source_health"
+      end)
+
+    health = health |> sort_prompt_evidence_newest() |> Enum.take(1)
+
+    linked =
+      Enum.filter(activity, fn {item, _index} ->
+        Enum.any?(todos, &prompt_evidence_linked?(&1, item))
+      end)
+
+    linked_heads =
+      todos
+      |> Enum.flat_map(fn todo ->
+        case best_linked_evidence(todo, linked) do
+          nil -> []
+          item -> [item]
+        end
+      end)
+      |> Enum.uniq_by(&elem(&1, 1))
+
+    linked_calendar = Enum.filter(linked, fn {item, _index} -> calendar_evidence?(item) end)
+
+    calendar_heads =
+      todos
+      |> Enum.flat_map(fn todo ->
+        case best_linked_evidence(todo, linked_calendar) do
+          nil -> []
+          item -> [item]
+        end
+      end)
+      |> Enum.uniq_by(&elem(&1, 1))
+
+    linked_heads = Enum.uniq_by(linked_heads ++ calendar_heads, &elem(&1, 1))
+
+    linked_head_indexes = indexed_evidence_set(linked_heads)
+
+    linked_head_channels =
+      linked_heads
+      |> Enum.map(fn {item, _index} -> read_string(item, "channel", "unknown") end)
+      |> MapSet.new()
+
+    channel_heads =
+      activity
+      |> Enum.reject(fn {item, index} ->
+        MapSet.member?(linked_head_indexes, index) or
+          MapSet.member?(
+            linked_head_channels,
+            read_string(item, "channel", "unknown")
+          )
+      end)
+      |> group_prompt_evidence_by_channel()
+      |> Enum.map(fn {_channel, items} -> items |> sort_prompt_evidence_newest() |> hd() end)
+
+    required =
+      (health ++ linked_heads ++ channel_heads)
+      |> Enum.uniq_by(&elem(&1, 1))
+
+    if length(required) > @max_prompt_evidence_items do
+      {:error,
+       {:required_evidence_items_exceed_limit, length(required), @max_prompt_evidence_items}}
+    else
+      required_indexes = indexed_evidence_set(required)
+
+      linked_tail =
+        linked
+        |> Enum.reject(fn {_item, index} -> MapSet.member?(required_indexes, index) end)
+        |> sort_prompt_evidence_newest()
+        |> Enum.take(max(@max_prompt_linked_evidence_items - length(linked_heads), 0))
+
+      selected_indexes = indexed_evidence_set(required ++ linked_tail)
+
+      fair_tail =
+        activity
+        |> Enum.reject(fn {_item, index} -> MapSet.member?(selected_indexes, index) end)
+        |> group_prompt_evidence_by_channel()
+        |> Enum.map(fn {_channel, items} ->
+          items
+          |> sort_prompt_evidence_newest()
+          |> Enum.take(@max_prompt_evidence_per_channel)
+        end)
+        |> round_robin_prompt_evidence()
+
+      optional =
+        (linked_tail ++ fair_tail)
+        |> Enum.uniq_by(&elem(&1, 1))
+        |> Enum.take(@max_prompt_evidence_items - length(required))
+
+      {:ok, {Enum.map(required, &elem(&1, 0)), Enum.map(optional, &elem(&1, 0))}}
+    end
+  end
+
+  defp best_linked_evidence(todo, linked) do
+    linked
+    |> Enum.filter(fn {item, _index} -> prompt_evidence_linked?(todo, item) end)
+    |> Enum.sort_by(
+      fn {item, index} ->
+        {if(exact_evidence_link?(todo, item), do: 1, else: 0), evidence_sort_key(item), -index}
+      end,
+      :desc
+    )
+    |> List.first()
+  end
+
+  defp exact_evidence_link?(todo, item) do
+    source_item_id = todo.source_item_id
+
+    todo.source == read_string(item, "channel", nil) and
+      is_binary(source_item_id) and source_item_id != "" and
+      source_item_id in [
+        read_string(item, "source_item_id", nil),
+        read_string(item, "thread_id", nil),
+        read_string(item, "target_source_item_id", nil)
+      ]
+  end
+
+  defp evidence_linked_to_todo?(todo, item) do
+    evidence_linked?(todo, evidence_identifiers([item]))
+  end
+
+  # Reserve relevant bookings in the prompt even when the request originated
+  # in Slack or email. This is selection only: cross-source closure still needs
+  # the model's explicit relationship anchor, quote, and fresh source timestamp.
+  defp prompt_evidence_linked?(todo, item) do
+    evidence_linked_to_todo?(todo, item) or calendar_relevant_to_todo?(todo, item)
+  end
+
+  defp calendar_relevant_to_todo?(todo, item) do
+    calendar_evidence?(item) and
+      Enum.any?(
+        [todo.counterparty_label | Enum.map(workflow_people(todo), & &1["name"])],
+        &shared_relationship_anchor?(todo, %{"relationship_anchor" => &1}, item)
+      )
+  end
+
+  defp calendar_evidence?(item),
+    do: read_string(item, "channel", nil) in ["google_calendar", "local_calendar"]
+
+  defp indexed_evidence_set(indexed) do
+    indexed |> Enum.map(&elem(&1, 1)) |> MapSet.new()
+  end
+
+  defp group_prompt_evidence_by_channel(indexed) do
+    indexed
+    |> Enum.group_by(fn {item, _index} -> read_string(item, "channel", "unknown") end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp sort_prompt_evidence_newest(indexed) do
+    Enum.sort_by(indexed, fn {item, index} -> {evidence_sort_key(item), -index} end, :desc)
+  end
+
+  defp round_robin_prompt_evidence(groups) do
+    Enum.flat_map(0..(@max_prompt_evidence_per_channel - 1), fn offset ->
+      Enum.flat_map(groups, fn group ->
+        case Enum.at(group, offset) do
+          nil -> []
+          item -> [item]
+        end
+      end)
+    end)
+  end
+
+  defp encode_prompt_evidence(required, optional, max_bytes)
+       when is_integer(max_bytes) and max_bytes >= 2 do
+    with {:ok, required_json, used_bytes} <-
+           encode_required_prompt_evidence(required, max_bytes) do
+      {encoded, _used_bytes} =
+        Enum.reduce(optional, {required_json, used_bytes}, fn item, {items, bytes} ->
+          encoded_item = item |> compact_prompt_evidence_item() |> Jason.encode!()
+          separator_bytes = if items == [], do: 0, else: 1
+          item_bytes = byte_size(encoded_item) + separator_bytes
+
+          if bytes + item_bytes <= max_bytes do
+            {[encoded_item | items], bytes + item_bytes}
+          else
+            # Skip an oversized optional item and continue so one pathological
+            # record cannot starve later channels that would still fit.
+            {items, bytes}
+          end
+        end)
+
+      evidence_json = "[" <> (encoded |> Enum.reverse() |> Enum.join(",")) <> "]"
+      {:ok, {evidence_json, length(encoded)}}
+    end
+  end
+
+  defp encode_prompt_evidence(_required, _optional, max_bytes) do
+    {:error, {:evidence_budget_too_small, max_bytes}}
+  end
+
+  defp encode_required_prompt_evidence(required, max_bytes) do
+    Enum.reduce_while(required, {:ok, [], 2}, fn item, {:ok, items, bytes} ->
+      encoded_item = item |> compact_prompt_evidence_item() |> Jason.encode!()
+      separator_bytes = if items == [], do: 0, else: 1
+      item_bytes = byte_size(encoded_item) + separator_bytes
+
+      if bytes + item_bytes <= max_bytes do
+        {:cont, {:ok, [encoded_item | items], bytes + item_bytes}}
+      else
+        {:halt, {:error, {:required_evidence_exceeds_budget, bytes + item_bytes, max_bytes}}}
+      end
+    end)
+  end
+
+  defp compact_prompt_evidence_item(item) do
+    channel = read_string(item, "channel", nil)
+    text_limit = if channel == "source_health", do: @max_prompt_health_text, else: 1_000
+
+    %{
+      "channel" => bounded_prompt_string(channel, 64),
+      "kind" => bounded_prompt_string(read_string(item, "kind", nil), 160),
+      "sender" => bounded_prompt_string(read_string(item, "sender", nil), 200),
+      "subject" => bounded_prompt_string(read_string(item, "subject", nil), 360),
+      "text" => bounded_prompt_string(read_string(item, "text", nil), text_limit),
+      "at" => bounded_prompt_string(read_string(item, "at", nil), 64),
+      "source_item_id" => bounded_prompt_string(read_string(item, "source_item_id", nil), 256),
+      "target_source_item_id" =>
+        bounded_prompt_string(read_string(item, "target_source_item_id", nil), 256),
+      "thread_id" => bounded_prompt_string(read_string(item, "thread_id", nil), 256),
+      "account" => bounded_prompt_string(read_string(item, "account", nil), 200),
+      "permalink" => bounded_prompt_string(read_string(item, "permalink", nil), 500)
+    }
+    |> compact_map()
+    |> PromptBudget.project_fields(
+      ~w(channel kind sender subject text at source_item_id target_source_item_id thread_id account permalink),
+      if(channel == "source_health", do: 13_000, else: 1_200),
+      string_bytes: text_limit,
+      list_items: 4,
+      map_entries: 12,
+      max_depth: 2,
+      key_bytes: 64
+    )
+  end
+
+  defp bounded_prompt_string(value, max_bytes) when is_binary(value) do
+    PromptBudget.truncate_utf8(value, max_bytes)
+  end
+
+  defp bounded_prompt_string(_value, _max_bytes), do: nil
+
+  defp render_prompt(todos_json, evidence_json, now, exhaustive?) do
+    """
+    Evaluate progress toward the workflow outcome, not just the latest next_action.
+    For a genuine deliverable or follow-up, a proposed time, a sent availability
+    reply, a calendar booking, or the clock passing a meeting's end does not
+    prove that work was done. Calendar-only attendance reminders are different:
+    they do not belong in Todos and must not be kept alive to prove attendance.
+    Never manufacture a replacement follow-up for an expired invitation.
+    When an outcome is achieved, include outcome_confirmed:true alongside the
+    completed:true decision and quote the source evidence that proves it.
+    When fresh evidence moves the work forward without completing it, return
+    completed:false and workflow_transition:{state,owner:{kind,id},next_action,reason}.
+    Use you_own when the operator must act next; working for active work; they_own
+    when a verified person has the next move; waiting for a date or condition.
+    Preserve the goal through these handoffs. Use only person IDs supplied in the
+    work item's workflow, people or counterparty fields. If identity is not established,
+    preserve the current owner; do not invent a person or group owner or default
+    someone else's work back to the user. Being affected, CC'd, or an account's
+    connected user does not assign the next action. An explicit user correction
+    of ownership remains authoritative until fresh evidence changes it.
+    An unsent Gmail draft or intent is not a promise or a delivered handoff.
+    Include the same confidence, evidence_quote and evidence source fields as a
+    completion decision. Do not propose a transition without fresh grounded evidence.
+
+    Match completion to the scope of this particular outcome:
+    - Booking, scheduling, confirming a time, or locking a sync is complete when
+      a later, non-cancelled calendar event or booking confirmation proves that
+      specific meeting is booked with the intended people at the intended time.
+      The meeting need not have happened yet. Do not expand a scheduling task
+      into attending the meeting, preparing for it, or delivering its follow-up.
+      A proposal, unrelated meeting, cancelled event, or declined invitation
+      does not prove the requested booking.
+    - Resolving a balance needs a settled payment or an agreed resolution. Asking
+      a question or promising to pay is progress, not a resolved balance.
+    - Granting access needs the requested permission to be active. Sending an
+      invitation is only progress when acceptance or another permission step remains.
+    - Fixing a service needs evidence the fault is resolved. A deployed change or
+      an investigation update alone does not prove recovery.
+    - Sending a requested URL, delivering a draft, or answering a specific question
+      can finish that narrow outcome once the requested content is delivered. Do
+      not turn every reply into an indefinite relationship or meeting goal.
+    - Monitoring several conversations or filling several positions stays open
+      after one reply, booking, or filled position. Keep one accountable owner and
+      track independent follow-on outcomes separately; do not close the whole batch.
+    - Use waiting with a verified person or the user as owner when an explicit
+      date/condition is pending. Include waiting_until only for a grounded review
+      date. A review date returns follow-up to the user; it never proves completion.
+
+    Items in triage are unaccepted suggestions. Check them for completion with
+    the same evidence standard. If unfinished, leave them in triage without a
+    workflow_transition; only the user can accept suggested work.
+
+    You are the completion checker for a chief-of-staff product. The user has
+    saved open work items. Below is current source material from every connected
+    source this sweep could access: Gmail, Slack, Google Calendar, local
+    Calendar, iMessage/Messages, Reminders, Notes, files, browser history, voice
+    memos, and persisted CRM observations. The `source_health` item records
+    which sources were ready, partial, unavailable, or empty for this sweep.
+
+    Decide which open work items the user has ALREADY COMPLETED or which have
+    been made obsolete by newer source evidence, judged only from the supplied
+    source material.
+
+    Strict rules:
+    - Close an item only when the evidence explicitly shows that the specific
+      work was done: a past-tense completion statement by the user ("paid",
+      "sent it", "booked", "submitted", "done", "renewed", "shipped"), or a
+      counterparty confirming receipt/closure ("got it, thanks", a receipt or
+      confirmation message), about the SAME counterparty/object as the item.
+    - For work whose action is to create, publish, schedule, or share an event,
+      later source material showing the same event exists, has a public/manage
+      URL, has guests/attendees, is live, is being promoted, or is otherwise
+      already operating is completion evidence for that creation/publishing
+      step. Do not keep the creation item open just because follow-on work
+      remains; follow-on work belongs in a separate work item.
+    - Use intelligence, not keyword overlap. Compare the object, counterparty,
+      timing, source references, and the actual action requested. Source search
+      terms or topic similarity alone are not completion.
+    - Evidence may come from a different source or thread, including for a
+      manually added todo. In that case supply relationship_anchor: the exact
+      distinctive object/name/reference appearing in BOTH the todo's title,
+      summary or next_action and the evidence's subject or text. Use a specific
+      phrase with at least two meaningful words (e.g. "Acme renewal"), or an
+      exact URL, email, or ticket reference. Generic phrases like "all done"
+      are not a relationship. The anchor establishes which work this is;
+      evidence_quote must separately prove that work is finished. If no such
+      relationship can be verified, leave the item open.
+    - Evidence must be AFTER the item's captured_at timestamp. For reopened
+      work this is the user's correction time; earlier evidence was rejected
+      and cannot be used to close it again.
+    - Topic overlap alone is NOT completion. Future intent ("will pay
+      tomorrow"), questions, reminders, or partial progress are NOT
+      completion.
+    - When an item's `direction` is `owed_to_me`, a reply FROM the
+      counterparty (not from the user — check the evidence item's `kind`,
+      e.g. `email received`, `slack message`, `message received`, never
+      `... sent by the user`) that actually answers or resolves what the
+      workflow outcome describes is completion for that item, exactly like
+      the user doing the work. Return "completed": true, "outcome_confirmed": true
+      and "reply_outcome": "answered" only when that outcome is fulfilled.
+      If their answer only unlocks the user's next step, return a workflow_transition
+      to you_own with completed:false instead. A reply that only
+      acknowledges ("got your message, will look at it") or defers ("will
+      get back to you Friday") is NOT completion — return that item with
+      "completed": false and "reply_outcome": "acknowledged_only", still
+      quoting the acknowledgment as evidence_quote, and leave it open. Omit
+      reply_outcome (or use "no_reply") when there is no counterparty-reply
+      signal for an item.
+    - If a relevant connected source is unavailable or the source window is too
+      weak to prove completion, leave the item open.
+    - When unsure, leave the item open. Wrongly closing real work is worse
+      than showing a finished item.
+    - An evidence item can list several source_refs when identical activity
+      appeared in multiple acquired messages. It is one activity with several
+      coverage references, not independent confirmations.
+
+    RECENT_ACTIVITY_JSON:
+    #{evidence_json}
+
+    OPEN_WORK_ITEMS_JSON:
+    #{todos_json}
+
+    Current time: #{DateTime.to_iso8601(now)}
+
+    #{resolution_coverage_instruction(exhaustive?)}Respond with only this JSON shape, no prose:
+    {
+      "resolutions": [
+        {
+          "todo_id": "uuid of a completed item",
+          "completed": true,
+          "evidence_channel": "slack | gmail | google_calendar | local_calendar | imessage | reminders | notes | files | browser_history | voice_memos | crm",
+          "evidence_quote": "the exact activity text that proves completion",
+          "relationship_anchor": "shared distinctive object/name/reference when crossing sources or threads",
+          "reasoning": "one short sentence",
+          "confidence": 0.0,
+          "reply_outcome": "answered | acknowledged_only | no_reply — only for owed_to_me items with a counterparty-reply signal; omit otherwise"
+        }
+      ]
+    }
+    #{empty_resolution_instruction(exhaustive?)}
+    """
+  end
+
+  defp resolution_coverage_instruction(true) do
+    """
+    This is an exact closure sweep. Return exactly one resolution for every
+    OPEN_WORK_ITEMS_JSON entry, using each todo_id exactly once. For unchanged
+    work with no counterparty acknowledgment, return only
+    {"todo_id": "the item's uuid", "completed": false}; omit reasoning,
+    confidence, and empty evidence fields. Keep the full cited resolution for
+    completed work, workflow transitions and acknowledged_only replies. Do not omit any item. The
+    response is rejected unless its todo_id set exactly matches the input set.
+    """
+  end
+
+  defp resolution_coverage_instruction(false), do: ""
+
+  defp empty_resolution_instruction(true),
+    do: "Never return an empty resolutions list when work items were supplied."
+
+  defp empty_resolution_instruction(false),
+    do:
+      ~s(Return {"resolutions": []} only when there is no grounded completion, workflow transition or acknowledgment.)
+
+  defp default_llm_complete(prompt, opts) when is_binary(prompt) do
+    config = Application.get_env(:maraithon, :todos, [])
+    llm_request = Keyword.get(opts, :llm_request, &LLM.complete/1)
+
+    params = %{
+      "messages" => [%{"role" => "user", "content" => prompt}],
+      "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
+      "temperature" => 0.1,
+      # The prompt already asks for explicit, evidence-backed reasoning in
+      # the JSON payload. Hidden chain-of-thought consumed the entire output
+      # budget on hybrid models and left no parseable response.
+      "reasoning_effort" => Keyword.get(config, :reasoning_effort, "none"),
+      "timeout_ms" => Keyword.get(opts, :timeout_ms, @default_timeout_ms)
+    }
+
+    params =
+      case Keyword.get(opts, :llm_session_id) do
+        session_id when is_binary(session_id) -> Map.put(params, "session_id", session_id)
+        _none -> params
+      end
+
+    llm_request.(params)
+  end
+
+  defp decode_response(response) do
+    content =
+      case response do
+        %{"content" => content} when is_binary(content) -> content
+        %{content: content} when is_binary(content) -> content
+        content when is_binary(content) -> content
+        _other -> nil
+      end
+
+    with content when is_binary(content) and byte_size(content) <= 128_000 <- content,
+         json when is_binary(json) <- extract_json(content),
+         {:ok, %{"resolutions" => resolutions}} when is_list(resolutions) <- Jason.decode(json),
+         prefix = Enum.take(resolutions, @max_todos + 1),
+         true <- length(prefix) <= @max_todos do
+      {:ok, prefix}
+    else
+      _other -> {:error, :cross_source_completion_invalid_response}
+    end
+  end
+
+  defp require_decision_coverage?(opts),
+    do: Keyword.get(opts, :exhaustive_completion, false) or Keyword.has_key?(opts, :review_memo)
+
+  defp validate_resolution_coverage(resolutions, todos, opts) do
+    if require_decision_coverage?(opts) do
+      expected_ids = todos |> Enum.map(& &1.id) |> Enum.sort()
+
+      actual_ids =
+        Enum.map(resolutions, fn
+          %{"todo_id" => todo_id, "completed" => completed}
+          when is_binary(todo_id) and is_boolean(completed) ->
+            todo_id
+
+          _other ->
+            nil
+        end)
+
+      if Enum.all?(actual_ids, &is_binary/1) and Enum.sort(actual_ids) == expected_ids do
+        :ok
+      else
+        {:error, :cross_source_completion_incomplete_decisions}
+      end
+    else
+      :ok
+    end
+  end
+
+  # Byte offsets are safe here: the braces are ASCII, so slicing between
+  # them keeps any multibyte content in the middle intact.
+  defp extract_json(content) do
+    with {start, _length} <- :binary.match(content, "{"),
+         [_ | _] = closers <- :binary.matches(content, "}") do
+      {finish, _length} = List.last(closers)
+      binary_part(content, start, finish - start + 1)
+    else
+      _other -> nil
+    end
+  end
+
+  # SPEC 05 shared contract (05 owns this dispatch; 01 only consumes it):
+  # the model emits exactly one `owed_to_me` reply-outcome per resolved item —
+  # "answered" closes (identical in effect to the user doing the work),
+  # "acknowledged_only" keeps the item open but clears its nudge cadence,
+  # "no_reply"/omitted leaves the item and its cadence untouched.
+  defp apply_resolutions(user_id, todos_by_id, resolutions, evidence, opts) do
+    resolutions
+    |> Enum.filter(&is_map/1)
+    # The model can emit the same todo twice; only the first resolution per
+    # todo applies, so a duplicate can never double-close or double-notify.
+    |> Enum.uniq_by(& &1["todo_id"])
+    |> Enum.reduce_while({:ok, 0}, fn resolution, {:ok, count} ->
+      with todo_id when is_binary(todo_id) <- resolution["todo_id"],
+           %Todo{} = todo <- Map.get(todos_by_id, todo_id) do
+        case apply_resolution(user_id, todo, resolution, evidence, opts, count) do
+          {:ok, next_count} -> {:cont, {:ok, next_count}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      else
+        _other -> {:cont, {:ok, count}}
+      end
+    end)
+  end
+
+  # `owed_to_me` + acknowledgment-only counterparty reply (SPEC 05 R7): never
+  # a completion, regardless of what else the resolution claims — stop the
+  # old chase cadence but keep the item open, and never notify (an
+  # acknowledged-only reply is not a completion event worth a push).
+  defp apply_resolution(
+         _user_id,
+         %Todo{status: "triage"},
+         %{"completed" => false},
+         _evidence,
+         _opts,
+         count
+       ),
+       do: {:ok, count}
+
+  defp apply_resolution(
+         user_id,
+         %Todo{} = todo,
+         %{"completed" => false, "workflow_transition" => %{} = transition} = resolution,
+         evidence,
+         _opts,
+         count
+       ) do
+    with confidence when is_number(confidence) and confidence >= @min_confidence <-
+           resolution["confidence"],
+         quote when is_binary(quote) and quote != "" <- resolution["evidence_quote"],
+         matched when is_map(matched) <-
+           matching_evidence(todo, resolution, evidence, fn _ -> true end),
+         true <- transition["state"] in ~w(you_own working waiting they_own) do
+      attrs =
+        transition
+        |> Map.take(~w(state owner next_action waiting_until))
+        |> Map.put("expected_revision", Maraithon.Todos.Workflow.current(todo)["revision"])
+        |> Map.put("reason", bounded_prompt_string(quote, 500))
+
+      case Todos.transition_workflow(user_id, todo.id, attrs,
+             actor_type: "agent",
+             actor_label: "Maraithon",
+             expected_todo: todo
+           ) do
+        {:ok, _} -> {:ok, count}
+        {:error, :stale_workflow} -> {:ok, count}
+        {:error, :stale_todo} -> {:ok, count}
+        {:error, :invalid_workflow_owner} -> {:ok, count}
+        {:error, _} -> {:error, :workflow_transition_failed}
+      end
+    else
+      _ -> {:ok, count}
+    end
+  end
+
+  defp apply_resolution(
+         user_id,
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "acknowledged_only"} = resolution,
+         evidence,
+         _opts,
+         count
+       ) do
+    if authorized_acknowledgement_evidence?(todo, resolution, evidence) do
+      case Todos.clear_nudge_cadence(user_id, todo.id) do
+        {:ok, _todo} ->
+          Logger.info("Cross-source completion cleared nudge cadence (acknowledged-only reply)",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id)
+          )
+
+          {:ok, count}
+
+        {:error, reason} ->
+          Logger.warning("Cross-source completion could not clear nudge cadence",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
+          {:error, :completion_acknowledgement_write_failed}
+      end
+    else
+      {:ok, count}
+    end
+  end
+
+  defp apply_resolution(user_id, %Todo{} = todo, resolution, evidence, opts, count) do
+    with true <- resolution["completed"] == true,
+         true <-
+           not Maraithon.Todos.Workflow.outcome_tracked?(todo) or
+             resolution["outcome_confirmed"] == true,
+         confidence when is_number(confidence) and confidence >= @min_confidence <-
+           resolution["confidence"],
+         quote_text when is_binary(quote_text) and quote_text != "" <-
+           resolution["evidence_quote"],
+         matched when is_map(matched) <-
+           matching_evidence(todo, resolution, evidence, fn _item -> true end) do
+      note = resolution_note(todo, resolution, quote_text)
+
+      provenance = %{
+        "method" => "cross_source_llm",
+        "outcome_confirmed" => resolution["outcome_confirmed"] == true,
+        "confidence" => confidence,
+        "evidence_quote" => bounded_prompt_string(quote_text, 500),
+        "relationship_anchor" => bounded_prompt_string(resolution["relationship_anchor"], 200),
+        "evidence" =>
+          Map.take(matched, ~w(channel at sender source_ref source_item_id thread_id account))
+      }
+
+      case Todos.mark_done_if_current(todo, provenance, note: note) do
+        {:ok, _todo} ->
+          Logger.info("Cross-source completion closed todo",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+            todo_source: todo.source,
+            evidence_channel: resolution["evidence_channel"]
+          )
+
+          maybe_push_completion_confirmation(user_id, todo, resolution, opts)
+          {:ok, count + 1}
+
+        {:error, :todo_no_longer_open} ->
+          {:ok, count}
+
+        {:error, reason} ->
+          Logger.warning("Cross-source completion could not close todo",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
+          {:error, :completion_write_failed}
+      end
+    else
+      _other -> {:ok, count}
+    end
+  end
+
+  defp authorized_resolution_evidence?(todo, resolution, evidence) do
+    not is_nil(matching_evidence(todo, resolution, evidence, fn _item -> true end))
+  end
+
+  defp authorized_acknowledgement_evidence?(todo, resolution, evidence) do
+    not is_nil(matching_evidence(todo, resolution, evidence, &inbound_reply_evidence?/1))
+  end
+
+  defp matching_evidence(todo, resolution, evidence, kind_authorized?) do
+    quote = bounded_prompt_string(resolution["evidence_quote"], 500)
+    channel = bounded_prompt_string(resolution["evidence_channel"], 64)
+    todo_at = Todo.completion_evidence_after(todo)
+    confidence = resolution["confidence"]
+
+    if is_number(confidence) and confidence >= @min_confidence and is_binary(quote) and
+         byte_size(quote) >= 4 and allowed_evidence_channel?(channel) do
+      Enum.find(evidence, fn item ->
+        evidence_channel = read_string(item, "channel", nil)
+        evidence_at = item |> read_string("at", nil) |> parse_datetime()
+        text = exact_string(item, "text", "")
+        subject = read_string(item, "subject", "")
+
+        kind_authorized?.(item) and evidence_channel == channel and
+          evidence_channel != "source_health" and resolution_linked?(todo, resolution, item) and
+          evidence_after_todo?(evidence_at, todo_at) and
+          evidence_quote_matches?(quote, text, subject)
+      end)
+    end
+  end
+
+  defp evidence_after_todo?(%DateTime{} = evidence_at, %DateTime{} = todo_at),
+    do: DateTime.compare(evidence_at, todo_at) == :gt
+
+  defp evidence_after_todo?(_evidence_at, _todo_at), do: false
+
+  defp resolution_linked?(todo, resolution, item) do
+    account = read_string(item, "account", nil)
+
+    same_account? =
+      is_nil(todo.source_account_label) or is_nil(account) or todo.source_account_label == account
+
+    (same_account? and evidence_linked_to_todo?(todo, item)) or
+      shared_relationship_anchor?(todo, resolution, item)
+  end
+
+  @generic_relationship_words ~w(
+    a an and are as at be been by complete completed confirm confirmed do done for
+    from get got has have i in is it me my of on our please send sent task thanks
+    that the their them this to today tomorrow update updated we will with work you your
+  )
+
+  defp shared_relationship_anchor?(todo, resolution, item) do
+    anchor = normalize_evidence_quote(resolution["relationship_anchor"])
+
+    meaningful_words =
+      Regex.scan(~r/[\p{L}\p{N}]+/u, anchor)
+      |> List.flatten()
+      |> Enum.reject(&(String.length(&1) < 3 or &1 in @generic_relationship_words))
+      |> Enum.uniq()
+
+    specific_reference? =
+      Regex.match?(~r/\A(?:https?:\/\/\S+|[^\s@]+@[^\s@]+\.[^\s@]+|[a-z]+-\d{2,})\z/u, anchor)
+
+    byte_size(anchor) in 8..200 and
+      (length(meaningful_words) >= 2 or specific_reference?) and
+      Enum.any?([todo.title, todo.summary, todo.next_action], fn text ->
+        String.contains?(normalize_evidence_quote(text), anchor)
+      end) and
+      Enum.any?([read_string(item, "subject", ""), exact_string(item, "text", "")], fn text ->
+        String.contains?(normalize_evidence_quote(text), anchor)
+      end)
+  end
+
+  defp inbound_reply_evidence?(item) do
+    read_string(item, "kind", nil) in ["email received", "message received", "slack mention"]
+  end
+
+  defp allowed_evidence_channel?(channel) do
+    channel in ~w(
+      slack gmail google_calendar local_calendar imessage reminders notes files browser_history
+      voice_memos crm
+    )
+  end
+
+  defp evidence_quote_matches?(quote, text, subject) do
+    quote = normalize_evidence_quote(quote)
+
+    byte_size(quote) >= 4 and
+      Enum.any?([text, subject], fn candidate ->
+        candidate = normalize_evidence_quote(candidate)
+        candidate != "" and String.contains?(candidate, quote)
+      end)
+  end
+
+  # Exact evidence fragments can be substantially larger than the ordinary
+  # compact prompt excerpts. Authorization must search the same lossless text
+  # the model saw; rejecting every fragment over 2KB would make a valid quote
+  # near the end of an oversized Gmail/Slack item impossible to authorize.
+  # A fragment can never exceed the request cap because it was admitted by
+  # `build_prompt/5`, so this remains bounded.
+  defp normalize_evidence_quote(value)
+       when is_binary(value) and byte_size(value) <= @max_prompt_bytes do
+    value
+    |> String.downcase()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp normalize_evidence_quote(_value), do: ""
+
+  # Distinct confirmation copy for the counterparty-answered close (SPEC 05
+  # R7); everything else keeps the pre-existing generic note.
+  defp resolution_note(
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "answered"} = resolution,
+         quote_text
+       ) do
+    "#{counterparty_name(todo)} replied — closing that loop. " <>
+      "#{evidence_channel_label(resolution["evidence_channel"])} " <>
+      "shows it: \"#{truncate(quote_text, 200)}\""
+  end
+
+  defp resolution_note(_todo, resolution, quote_text) do
+    "Handled already — #{evidence_channel_label(resolution["evidence_channel"])} " <>
+      "shows it: \"#{truncate(quote_text, 200)}\""
+  end
+
+  # SPEC 05 R8: Telegram confirmation for the `owed_to_me` inbound-reply close
+  # only — `owed_by_me`/`fyi` closes stay silent exactly as before. Goes
+  # through `PushBroker.deliver/1` (the only path that respects quiet hours,
+  # the interruption budget, and push-receipt dedupe), never `TelegramResponder`
+  # directly. `chat_id` must be resolved explicitly — `deliver/1` hard-requires
+  # it and never supplies it.
+  defp maybe_push_completion_confirmation(
+         user_id,
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "answered"},
+         opts
+       ) do
+    case ConnectedAccounts.telegram_destination(user_id) do
+      nil ->
+        Logger.info(
+          "Cross-source completion skipped closing-loop push: no Telegram destination",
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          todo_reference: Maraithon.Redaction.fingerprint(todo.id)
+        )
+
+        :ok
+
+      chat_id ->
+        deliver = Keyword.get(opts, :push_deliver) || (&PushBroker.deliver/1)
+
+        candidate = %{
+          user_id: user_id,
+          chat_id: chat_id,
+          origin_type: "todo_completion_confirm",
+          origin_id: todo.id,
+          # Defense-in-depth idempotency: a todo can only close once (closing
+          # exits the open/snoozed candidate pool), but the receipt dedupe on
+          # this key means even a hypothetical double-apply cannot double-notify.
+          dedupe_key: "todo_completion_confirm:#{todo.id}",
+          # Low urgency, never the >= 0.9 quiet-hours exemption; rides the
+          # normal budget/quiet-hours path like any other low-urgency notice.
+          urgency: 0.3,
+          interrupt_now: false,
+          body: "#{counterparty_name(todo)} replied — closing that loop on: #{todo.title}."
+        }
+
+        case deliver.(candidate) do
+          {:ok, _result} ->
+            :ok
+
+          {:fallback, _reason} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Cross-source completion closing-loop push failed",
+              user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+              todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+              failure_code: Maraithon.Redaction.error_class(reason)
+            )
+
+            :ok
+        end
+    end
+  end
+
+  defp maybe_push_completion_confirmation(_user_id, _todo, _resolution, _opts), do: :ok
+
+  defp counterparty_name(%Todo{counterparty_label: label}) when is_binary(label) do
+    case String.trim(label) do
+      "" -> "They"
+      trimmed -> trimmed
+    end
+  end
+
+  defp counterparty_name(_todo), do: "They"
+
+  defp evidence_channel_label("gmail"), do: "your email activity"
+  defp evidence_channel_label("slack"), do: "your Slack activity"
+  defp evidence_channel_label("google_calendar"), do: "your Google Calendar"
+  defp evidence_channel_label("local_calendar"), do: "your calendar"
+  defp evidence_channel_label("imessage"), do: "a message you sent"
+  defp evidence_channel_label("reminders"), do: "your reminders"
+  defp evidence_channel_label("notes"), do: "your notes"
+  defp evidence_channel_label("files"), do: "your files"
+  defp evidence_channel_label("browser_history"), do: "your browser history"
+  defp evidence_channel_label("voice_memos"), do: "your voice memos"
+  defp evidence_channel_label(_other), do: "your recent activity"
+
+  defp evidence_item(attrs) when is_map(attrs) do
+    text = read_string(attrs, "text", nil)
+    subject = read_string(attrs, "subject", nil)
+
+    if blank?(text) and blank?(subject) do
+      nil
+    else
+      attrs
+      |> Map.update("text", nil, &truncate(&1, @max_excerpt))
+      |> Map.update("subject", nil, &truncate(&1, 180))
+      |> compact_map()
+    end
+  end
+
+  defp evidence_item(_attrs), do: nil
+
+  defp evidence_item(attrs, true) when is_map(attrs) do
+    # A successfully acquired blank message still belongs to the exact source
+    # window. Keep its identity for coverage; without text or a subject it
+    # cannot match a completion quote or justify a model call on its own.
+    compact_map(attrs)
+  end
+
+  defp evidence_item(attrs, false), do: evidence_item(attrs)
+
+  defp dedupe_evidence(evidence) when is_list(evidence) do
+    evidence
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(fn item ->
+      {
+        read_string(item, "channel", nil),
+        read_string(item, "source_ref", nil),
+        read_string(item, "account", nil),
+        read_string(item, "at", nil),
+        read_string(item, "kind", nil),
+        read_string(item, "source_item_id", nil),
+        read_string(item, "target_source_item_id", nil),
+        read_string(item, "thread_id", nil),
+        read_string(item, "subject", nil),
+        read_string(item, "text", nil)
+      }
+    end)
+  end
+
+  defp evidence_sort_key(item) when is_map(item) do
+    case item |> read_string("at", nil) |> parse_datetime() do
+      %DateTime{} = at -> DateTime.to_unix(at, :microsecond)
+      _ -> 0
+    end
+  end
+
+  defp evidence_sort_key(_item), do: 0
+
+  # Gmail's raw internalDate is milliseconds, unlike Slack's seconds. Sealed
+  # account deltas may retain the raw integer/string or the connector's ISO
+  # timestamp. Losing this time would incorrectly rule out later evidence.
+  defp gmail_evidence_time(message) do
+    value = read_value(message, "internal_date") || read_value(message, "internalDate")
+    normalize_gmail_time(value) || evidence_time(message, ["date"])
+  end
+
+  defp normalize_gmail_time(value) when is_integer(value) and value >= 0 do
+    case DateTime.from_unix(value, :millisecond) do
+      {:ok, datetime} -> DateTime.to_iso8601(datetime)
+      _ -> nil
+    end
+  end
+
+  defp normalize_gmail_time(value) when is_binary(value) and byte_size(value) <= 15 do
+    if Regex.match?(~r/^\d+$/, value),
+      do: value |> String.to_integer() |> normalize_gmail_time(),
+      else: normalize_evidence_time(value)
+  end
+
+  defp normalize_gmail_time(value), do: normalize_evidence_time(value)
+
+  defp evidence_time(map, keys) when is_map(map) and is_list(keys) do
+    keys
+    |> Enum.find_value(fn key ->
+      map
+      |> read_value(key)
+      |> normalize_evidence_time()
+    end)
+  end
+
+  defp evidence_time(_map, _keys), do: nil
+
+  defp normalize_evidence_time(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+
+  defp normalize_evidence_time(%NaiveDateTime{} = datetime),
+    do: datetime |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
+  defp normalize_evidence_time(%{date: date}), do: normalize_evidence_time(date)
+  defp normalize_evidence_time(%{"date" => date}), do: normalize_evidence_time(date)
+
+  defp normalize_evidence_time(value)
+       when is_binary(value) and byte_size(value) <= 100 do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
+        DateTime.to_iso8601(datetime)
+
+      _invalid_iso8601 ->
+        normalize_unix_evidence_time(value)
+    end
+  end
+
+  defp normalize_evidence_time(_value), do: nil
+
+  defp normalize_unix_evidence_time(value) do
+    with true <- Regex.match?(~r/^\d{1,12}(?:\.\d{1,6})?$/, value),
+         {seconds, ""} <- Float.parse(value),
+         true <- seconds >= 0 and seconds <= 253_402_300_799,
+         microseconds <- round(seconds * 1_000_000),
+         {:ok, datetime} <- DateTime.from_unix(microseconds, :microsecond) do
+      DateTime.to_iso8601(datetime)
+    else
+      _invalid -> nil
+    end
+  end
+
+  defp parse_datetime(nil), do: nil
+  defp parse_datetime(%DateTime{} = datetime), do: datetime
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp parse_datetime(_value), do: nil
+
+  defp attendee_summary([]), do: nil
+
+  defp attendee_summary(attendees) when is_list(attendees) do
+    attendees
+    |> Enum.take(12)
+    |> Enum.map(fn
+      attendee when is_map(attendee) ->
+        identity =
+          [
+            read_string(attendee, "display_name", read_string(attendee, "displayName", nil)),
+            read_string(attendee, "email", nil)
+          ]
+          |> Enum.reject(&blank?/1)
+          |> Enum.uniq()
+          |> Enum.join(" ")
+          |> bounded_prompt_string(180)
+
+        response =
+          read_string(attendee, "response_status", read_string(attendee, "responseStatus", nil))
+
+        if blank?(identity),
+          do: nil,
+          else: Enum.reject([identity, response], &blank?/1) |> Enum.join("; ")
+
+      attendee when is_binary(attendee) ->
+        attendee
+
+      _other ->
+        nil
+    end)
+    |> Enum.reject(&blank?/1)
+    |> case do
+      [] -> nil
+      names -> "Attendees: " <> Enum.join(names, ", ")
+    end
+  end
+
+  defp attendee_summary(_attendees), do: nil
+
+  defp slack_source_item_id(channel_id, ts) when is_binary(channel_id) and is_binary(ts),
+    do: "#{channel_id}:#{ts}"
+
+  defp slack_source_item_id(_channel_id, _ts), do: nil
+
+  defp read_list(map, key) when is_map(map) do
+    case read_value(map, key) do
+      value when is_list(value) -> value
+      _other -> []
+    end
+  end
+
+  defp read_list(_map, _key), do: []
+
+  defp source_evidence_text(map, keys, true) when is_map(map) and is_list(keys) do
+    Enum.find_value(keys, fn key ->
+      case exact_string(map, key, nil) do
+        value when is_binary(value) -> if(String.trim(value) == "", do: nil, else: value)
+        _missing -> nil
+      end
+    end)
+  end
+
+  defp source_evidence_text(map, keys, false) when is_map(map) and is_list(keys) do
+    keys
+    |> Enum.map(&read_string(map, &1, nil))
+    |> first_present()
+  end
+
+  defp exact_string(map, key, default) when is_map(map) do
+    case read_value(map, key) do
+      value when is_binary(value) -> if(String.valid?(value), do: value, else: default)
+      _other -> default
+    end
+  end
+
+  defp exact_string(_map, _key, default), do: default
+
+  defp read_string(map, key, default) when is_map(map) do
+    case read_value(map, key) do
+      value when is_binary(value) ->
+        value
+        |> PromptBudget.truncate_utf8(64_000)
+        |> String.trim()
+        |> case do
+          "" -> default
+          trimmed -> trimmed
+        end
+
+      nil ->
+        default
+
+      value when is_atom(value) ->
+        value |> Atom.to_string() |> read_string_value(default)
+
+      value when is_integer(value) or is_float(value) ->
+        to_string(value)
+
+      _other ->
+        default
+    end
+  end
+
+  defp read_string(_map, _key, default), do: default
+
+  defp read_string_value("", default), do: default
+  defp read_string_value(value, _default), do: value
+
+  defp read_value(map, key) when is_map(map) and is_binary(key) do
+    Map.get(map, key) || Map.get(map, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> Map.get(map, key)
+  end
+
+  defp read_value(_map, _key), do: nil
+
+  defp first_present(values) when is_list(values) do
+    Enum.find(values, fn
+      value when is_binary(value) and byte_size(value) <= 64_000 ->
+        String.valid?(value) and String.trim(value) != ""
+
+      value when is_binary(value) ->
+        false
+
+      nil ->
+        false
+
+      _value ->
+        true
+    end)
+  end
+
+  defp first_present(_values), do: nil
+
+  defp truthy?(value) when value in [true, 1], do: true
+
+  defp truthy?(value) when is_binary(value) and byte_size(value) <= 16 do
+    value
+    |> String.downcase()
+    |> String.trim()
+    |> then(&(&1 in ["true", "yes", "1"]))
+  end
+
+  defp truthy?(_value), do: false
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> blank?(value) end)
+    |> Map.new()
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?([]), do: true
+  defp blank?(%{}), do: true
+  defp blank?(_value), do: false
+
+  defp truncate(nil, _max), do: nil
+
+  defp truncate(text, max) when is_binary(text) do
+    text = String.trim(text)
+
+    if String.length(text) <= max do
+      text
+    else
+      String.slice(text, 0, max - 1) <> "…"
+    end
+  end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+  defp positive_integer(_value, default), do: default
+end

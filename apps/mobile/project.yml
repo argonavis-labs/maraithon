@@ -1,0 +1,84 @@
+name: MaraithonMobile
+options:
+  minimumXcodeGenVersion: 2.42.0
+  createIntermediateGroups: true
+settings:
+  base:
+    CURRENT_PROJECT_VERSION: 20260912151937
+    MARKETING_VERSION: 1.0.1
+    # Swift *language mode*, not the toolchain version — 6.3 is not a valid
+    # language mode and Xcode silently coerces it. 6 turns on full
+    # strict-concurrency checking, which this codebase is written for.
+    SWIFT_VERSION: 6
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: 26.0
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEVELOPMENT_TEAM: PS5W7BFTQ2
+    CODE_SIGN_STYLE: Automatic
+packages:
+  AssistantProgressKit:
+    path: ../assistant-progress
+  PeopleNetworkKit:
+    path: ../people-network
+targets:
+  MaraithonMobile:
+    type: application
+    platform: iOS
+    deploymentTarget: 26.0
+    configFiles:
+      Debug: Config/MaraithonMobile.xcconfig
+      Release: Config/MaraithonMobile.xcconfig
+    sources:
+      - path: MaraithonMobile
+    dependencies:
+      - package: AssistantProgressKit
+      - package: PeopleNetworkKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bliss.maraithonmobile
+        INFOPLIST_FILE: MaraithonMobile/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MaraithonMobile/Resources/MaraithonMobile.entitlements
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  MaraithonMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: 26.0
+    sources:
+      - path: MaraithonMobileTests
+    dependencies:
+      - target: MaraithonMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bliss.maraithonmobile.tests
+        INFOPLIST_FILE: MaraithonMobileTests/Info.plist
+  MaraithonMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: 26.0
+    sources:
+      - path: MaraithonMobileUITests
+    dependencies:
+      - target: MaraithonMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bliss.maraithonmobile.uitests
+        INFOPLIST_FILE: MaraithonMobileUITests/Info.plist
+schemes:
+  MaraithonMobile:
+    build:
+      targets:
+        MaraithonMobile: all
+        MaraithonMobileTests: [test]
+        MaraithonMobileUITests: [test]
+    test:
+      gatherCoverageData: false
+      environmentVariables:
+        MARAITHON_MAGIC_CODE: "$(MARAITHON_MAGIC_CODE)"
+        MARAITHON_MAGIC_TOKEN: "$(MARAITHON_MAGIC_TOKEN)"
+        MARAITHON_VERIFY_RUN_ID: "$(MARAITHON_VERIFY_RUN_ID)"
+        MARAITHON_VERIFY_CONTACT_EMAIL_DOMAIN: "$(MARAITHON_VERIFY_CONTACT_EMAIL_DOMAIN)"
+        MARAITHON_VISUAL_SNAPSHOT_DIR: "$(MARAITHON_VISUAL_SNAPSHOT_DIR)"
+      targets:
+        - MaraithonMobileTests
+        - MaraithonMobileUITests

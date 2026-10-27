@@ -1,0 +1,50 @@
+{
+  "blockers": [],
+  "completed_at": "2026-05-20T09:07:06Z",
+  "created_at": "2026-05-14T18:35:48Z",
+  "history": [
+    {
+      "at": "2026-05-14T18:35:48Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task 1A2AF4F9-E618-4797-B97A-D1E1C3FECAC4.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:07:06Z",
+      "event": "codebase_verified_done",
+      "from_stage": "ready",
+      "note": "Evidence includes Anthropic cache-control support, parallel tool calls, routing model config, ContextCache, liveness edit delivery, pg_trgm CRM fuzzy resolve, parallel context fetch, and rolling conversation summarization.",
+      "to_stage": "done"
+    }
+  ],
+  "next_action": "No build action. Keep monitoring targeted tests if the Telegram assistant hot path changes.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/fast-context-aware-telegram-answers-spec-1a2af4f9.md"
+    ],
+    "last_completed_step": "Spectacula codebase verification completed on 2026-05-20.",
+    "notes": "Evidence includes Anthropic cache-control support, parallel tool calls, routing model config, ContextCache, liveness edit delivery, pg_trgm CRM fuzzy resolve, parallel context fetch, and rolling conversation summarization.",
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "1A2AF4F9-E618-4797-B97A-D1E1C3FECAC4"
+  },
+  "slug": "fast-context-aware-telegram-answers-spec-1a2af4f9",
+  "spec_id": "fast-context-aware-telegram-answers-spec-1a2af4f9",
+  "spec_path": "../specs/fast-context-aware-telegram-answers-spec-1a2af4f9.md",
+  "stage": "done",
+  "summary": "Reviewed against current codebase; all eight fast/context-aware Telegram answer fixes are implemented. The remaining ready entry was a closeout/verification duplicate, not new build work.",
+  "title": "Fast & Context-Aware Telegram Answers \u2014 Spec",
+  "updated_at": "2026-05-20T09:07:06Z",
+  "verification": {
+    "build": "not_run",
+    "codebase_review": "passed",
+    "format": "generated",
+    "lint": "not_run",
+    "notes": "Evidence includes Anthropic cache-control support, parallel tool calls, routing model config, ContextCache, liveness edit delivery, pg_trgm CRM fuzzy resolve, parallel context fetch, and rolling conversation summarization.",
+    "reviewed_at": "2026-05-20T09:07:06Z",
+    "spec_review": "passed",
+    "tests": "not_run",
+    "typecheck": "not_run"
+  }
+}

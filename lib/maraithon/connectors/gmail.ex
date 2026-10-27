@@ -1,0 +1,1786 @@
+defmodule Maraithon.Connectors.Gmail do
+  @moduledoc """
+  Gmail connector.
+
+  Sets up push notifications for email changes and publishes normalized events to PubSub.
+
+  ## Topic Format
+
+  Events are published to `email:{user_id}`
+
+  Example: `email:user_123`
+
+  ## Event Types
+
+  - `email_received` - New email received
+  - `email_sync` - Batch of email changes
+
+  ## How it Works
+
+  Gmail push notifications use Google Cloud Pub/Sub:
+
+  1. Create a Cloud Pub/Sub topic in Google Cloud Console
+  2. Grant Gmail API service account publish access
+  3. Create a push subscription pointing to your webhook
+  4. Call Gmail API to "watch" the user's mailbox
+  5. Google publishes messages to Pub/Sub when mail changes
+  6. Pub/Sub pushes to your webhook
+
+  ## Configuration
+
+  Requires:
+  - `GOOGLE_PUBSUB_TOPIC` - Full topic name (e.g., projects/my-project/topics/gmail-push)
+  """
+
+  @behaviour Maraithon.Connectors.Connector
+
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.Crm.Ingest
+  alias Maraithon.Crm.Observation
+  alias Maraithon.Connectors.GmailAccess
+  alias Maraithon.Connectors.Connector
+  alias Maraithon.Runtime.BackgroundJobs
+
+  import Ecto.Query, only: [from: 2]
+
+  require Logger
+
+  @default_api_base "https://gmail.googleapis.com/gmail/v1"
+  @history_cursor_kind "gmail_history_id"
+  @default_message_fetch_timeout_ms 15_000
+  @default_failed_precondition_retry_delay_ms 1_000
+  @max_failed_precondition_retry_delay_ms 5_000
+  @gmail_id_pattern ~r/\A[0-9A-Fa-f]+\z/
+  # Gmail's maximum `history.list` page size. Walking the history log 500
+  # records at a time keeps a stale cursor from needing hundreds of requests
+  # to catch up.
+  @history_page_size 500
+  # Safety cap on how many `history.list` pages one bounded sync step follows.
+  # Reaching it is not a failure: the step hydrates what it read and advances
+  # the cursor to the last history record it consumed, so the next step
+  # resumes exactly there. A stale cursor therefore converges in a handful of
+  # bounded steps instead of escalating into a complete-mailbox rebuild that
+  # a large mailbox can never finish (which left the stale cursor in place and
+  # replayed the same doomed rebuild on every mailbox notification).
+  @max_history_pages 25
+  # Stop following history pages once a step has this many new message ids to
+  # hydrate. Hydration is sequential and one rate limit discards the whole
+  # step, so each step stays short enough to succeed under normal quota.
+  @history_step_message_limit 250
+  # Bounded steps one `sync_history/3` call drains before handing the
+  # remainder back to the caller (`complete?: false`).
+  @max_history_steps 4
+  # Expired-cursor rebuild bounds. Gmail no longer has the history the cursor
+  # points at, so the rebuild starts from the newest message already ingested
+  # for the mailbox (minus a margin) rather than enumerating the whole mailbox.
+  @resync_margin_seconds 2 * 24 * 60 * 60
+  @default_resync_lookback_seconds 30 * 24 * 60 * 60
+  @max_resync_messages 5_000
+  # Per-chunk cap on concurrent-ish full-content fetches during an
+  # incremental history sync. Every message id from the history delta is
+  # processed (in chunks of this size) — the old behavior of truncating to
+  # the first 20 while the caller still advanced the history cursor
+  # permanently dropped everything past the truncation point.
+  @messages_page_size 500
+  @max_message_list_pages 200
+
+  @doc "Returns true when a connected Google account granted a Gmail service scope."
+  def enabled_for_account?(%{metadata: metadata, scopes: scopes}) do
+    metadata = metadata || %{}
+    services = metadata["services"] || metadata[:services] || []
+
+    Enum.member?(List.wrap(services), "gmail") or
+      Enum.any?(List.wrap(scopes), fn scope ->
+        is_binary(scope) and String.contains?(String.downcase(scope), "gmail")
+      end)
+  end
+
+  def enabled_for_account?(_account), do: false
+
+  # ===========================================================================
+  # Watch Management
+  # ===========================================================================
+
+  @doc """
+  Sets up a watch on the user's mailbox.
+
+  This registers the user's mailbox with Google Cloud Pub/Sub for push notifications.
+
+  Returns `{:ok, watch_info}` or `{:error, reason}`.
+  """
+  def setup_watch(user_id, access_token \\ nil) do
+    with {:ok, token} <- get_access_token(user_id, access_token),
+         {:ok, watch} <- create_watch(user_id, token) do
+      Logger.info("Gmail watch created",
+        user_id: user_id,
+        history_id: watch.history_id,
+        expiration: watch.expiration
+      )
+
+      {:ok, watch}
+    end
+  end
+
+  @doc """
+  Stops watching the user's mailbox.
+
+  Should be called when a user disconnects their email.
+  """
+  def stop_watch(user_id) do
+    case GmailAccess.for_user(user_id) do
+      {:ok, token} ->
+        url = "#{api_base_url()}/users/me/stop"
+
+        case GmailAccess.request(:post, url, token, %{}) do
+          {:ok, _} -> :ok
+          # Gmail returns 404 if not watching - that's fine
+          {:error, {:http_status, 404, _}} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # ===========================================================================
+  # Webhook Handling
+  # ===========================================================================
+
+  @impl true
+  def verify_signature(_conn, _raw_body) do
+    # Cloud Pub/Sub push subscriptions can be configured to require authentication
+    # For now, we rely on the subscription being properly configured
+    # In production, you should verify the JWT token from Pub/Sub
+    :ok
+  end
+
+  @impl true
+  def handle_webhook(_conn, params) do
+    # Cloud Pub/Sub sends messages in this format:
+    # {
+    #   "message": {
+    #     "data": "<base64 encoded>",
+    #     "messageId": "...",
+    #     "publishTime": "..."
+    #   },
+    #   "subscription": "projects/.../subscriptions/..."
+    # }
+    #
+    # We only decode enough to identify the mailbox and enqueue a durable
+    # background job; the actual history fetch (and any Google API calls)
+    # happen out-of-request in `Maraithon.Runtime.BackgroundJobHandler` so the
+    # webhook can ack quickly and Pub/Sub never times out waiting on us.
+    case decode_pubsub_message(params) do
+      {:ok, claimed_user_id, _history_id, _message_id}
+      when not is_binary(claimed_user_id) or claimed_user_id == "" ->
+        {:error, :invalid_pubsub_message}
+
+      {:ok, claimed_user_id, history_id, message_id} ->
+        # The Pub/Sub push carries no verified identity (verify_signature/2 is
+        # a no-op), so the body's emailAddress is attacker-controlled. Only
+        # enqueue when it resolves to a known connected-account row — the same
+        # lookup the background job itself performs — and derive the job's
+        # user_id from the resolved row, never the raw claim. Unknown
+        # mailboxes are acked-and-dropped so unauthenticated POSTs cannot
+        # flood the job queue.
+        case connected_mailbox_account(claimed_user_id) do
+          nil ->
+            Logger.debug("Gmail webhook for unknown mailbox ignored")
+            {:ignore, "unknown mailbox"}
+
+          account ->
+            enqueue_incremental_sync(account.user_id, account.provider, history_id, message_id)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp connected_mailbox_account(claimed_mailbox) when is_binary(claimed_mailbox) do
+    mailbox = claimed_mailbox |> String.trim() |> String.downcase()
+
+    ConnectedAccounts.get_connected_by_provider("google:#{mailbox}") ||
+      ConnectedAccounts.get_connected_by_external_account("google", mailbox) ||
+      ConnectedAccounts.get(mailbox, "google")
+  end
+
+  defp connected_mailbox_account(_claimed_mailbox), do: nil
+
+  defp enqueue_incremental_sync(user_id, provider, history_id, message_id) do
+    topic = "email:#{user_id}"
+
+    dedupe_key = gmail_webhook_dedupe_key(message_id, user_id, history_id)
+
+    # One sync per mailbox at a time: notifications arrive in bursts, and
+    # concurrent syncs of the same mailbox only contend for its request lane
+    # (surfacing as rate_limited retries) while draining the same history.
+    case BackgroundJobs.enqueue("gmail_incremental_sync", %{
+           "user_id" => user_id,
+           "queue" => "connectors",
+           "payload" => %{
+             "notification_history_id" => history_id,
+             "provider" => provider
+           },
+           "dedupe_key" => dedupe_key,
+           "partition_key" => Maraithon.Runtime.PeriodicJobs.provider_partition(user_id, provider)
+         }) do
+      {:ok, _job} ->
+        event =
+          Connector.build_event("email_webhook_enqueued", "gmail", %{
+            user_id: user_id,
+            history_id: history_id
+          })
+
+        {:ok, topic, event}
+
+      {:error, reason} ->
+        Logger.warning("Failed to enqueue Gmail incremental sync",
+          user_id: user_id,
+          history_id: history_id,
+          reason: inspect(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
+  # ===========================================================================
+  # Gmail API
+  # ===========================================================================
+
+  @doc """
+  Fetches mail history since a given history ID.
+
+  Returns `{:ok, messages}` or `{:error, reason}`.
+  """
+  def sync_mail_changes(user_id, history_id) do
+    case GmailAccess.for_user(user_id) do
+      {:ok, token} ->
+        case fetch_history(token, history_id) do
+          {:ok, %{messages: messages}} -> {:ok, messages}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Cursor-aware incremental sync used by the `gmail_incremental_sync`
+  background job.
+
+  Reads the stored `gmail_history_id` cursor for `account` and uses it as
+  `startHistoryId` (the *last processed* id, not the notification's own id).
+  The history log is drained in bounded steps: each step follows a capped
+  number of `history.list` pages, hydrates the messages it found, and
+  advances the cursor to the last history record it consumed. A step that
+  stops early therefore loses nothing, and a long backlog converges across
+  steps instead of growing until only a full rebuild could recover it. Up to
+  `max_history_steps` steps run per call; `complete?: false` in the result
+  tells the caller more history remains.
+
+  When the stored id has expired (Gmail 404s) or no cursor exists yet,
+  rebuilds a bounded window (from the newest message already ingested for
+  the mailbox, minus a margin) before resetting the cursor to the mailbox's
+  current history head.
+
+  Returns `{:ok, %{count: n, history_id: id, mode: :incremental | :full_resync, complete?: bool}}`
+  or `{:error, reason}`.
+  """
+  def sync_history(user_id, account, opts \\ []) do
+    provider = Keyword.get(opts, :provider, account.provider)
+
+    case if(provider == account.provider,
+           do: GmailAccess.for_account(user_id, account.id),
+           else: {:error, :invalid_google_account}
+         ) do
+      {:ok, token} ->
+        cursor = SourceCursors.get(account.id, @history_cursor_kind)
+
+        case cursor_history_id(cursor) do
+          nil -> full_resync(user_id, account, token, provider)
+          history_id -> incremental_sync(user_id, account, token, history_id, provider)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp cursor_history_id(nil), do: nil
+  defp cursor_history_id(%{value: value}) when is_binary(value) and value != "", do: value
+  defp cursor_history_id(_cursor), do: nil
+
+  defp incremental_sync(user_id, account, token, history_id, provider) do
+    incremental_sync(user_id, account, token, history_id, provider, 1, 0)
+  end
+
+  defp incremental_sync(user_id, account, token, history_id, provider, step, ingested) do
+    case fetch_history(token, history_id) do
+      {:ok, %{messages: messages, history_id: next_history_id, complete?: complete?}} ->
+        next_history_id = next_history_id || history_id
+
+        with :ok <- ingest_messages(user_id, messages, account: account, provider: provider),
+             {:ok, _cursor} <- persist_history_cursor(account, next_history_id) do
+          ingested = ingested + length(messages)
+
+          result = %{
+            count: ingested,
+            history_id: next_history_id,
+            mode: :incremental,
+            complete?: complete?
+          }
+
+          cond do
+            complete? ->
+              {:ok, result}
+
+            step >= max_history_steps() ->
+              Logger.info("Gmail history sync paused with history remaining",
+                history_id: next_history_id,
+                steps: step,
+                ingested: ingested
+              )
+
+              {:ok, result}
+
+            true ->
+              incremental_sync(
+                user_id,
+                account,
+                token,
+                next_history_id,
+                provider,
+                step + 1,
+                ingested
+              )
+          end
+        end
+
+      {:error, :history_expired} ->
+        full_resync(user_id, account, token, provider)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp full_resync(user_id, account, token, provider) do
+    # Gmail no longer has the history the cursor points at, so the exact gap is
+    # unknown. Everything up to the newest message already ingested for this
+    # mailbox was covered by earlier syncs, so rebuild from that point (minus a
+    # margin) and reset the cursor to the mailbox's current head. Enumerating
+    # the complete mailbox instead can never finish for a large mailbox, and a
+    # rebuild that cannot finish leaves the expired cursor in place, so every
+    # later notification repeats the same doomed rebuild.
+    window = resync_window(user_id, account, provider)
+
+    case fetch_messages(token,
+           query: "after:#{DateTime.to_unix(window.since)}",
+           label_ids: [],
+           message_format: :metadata,
+           access_token: true,
+           paginate: true,
+           max_total_results: max_resync_messages(),
+           include_fetch_metadata: true
+         ) do
+      {:ok, messages, %{detail_failure_count: 0, body_fallback_count: 0} = fetch_metadata} ->
+        if fetch_metadata.truncated? do
+          Logger.warning(
+            "Gmail resync window exceeded its message bound; its oldest messages were not rebuilt",
+            since: DateTime.to_iso8601(window.since),
+            anchor: window.anchor,
+            listed_count: fetch_metadata.listed_count,
+            message_bound: max_resync_messages()
+          )
+        end
+
+        with :ok <- ingest_messages(user_id, messages, account: account, provider: provider),
+             {:ok, history_id} <- current_history_id(token),
+             {:ok, _cursor} <- persist_history_cursor(account, history_id) do
+          Logger.info("Gmail resync rebuilt a bounded mailbox window and reset the cursor",
+            since: DateTime.to_iso8601(window.since),
+            anchor: window.anchor,
+            count: length(messages),
+            history_id: history_id
+          )
+
+          {:ok,
+           %{count: length(messages), history_id: history_id, mode: :full_resync, complete?: true}}
+        end
+
+      {:ok, _messages, fetch_metadata} ->
+        {:error, {:incomplete_gmail_resync, fetch_metadata}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The rebuild window starts at the newest message already ingested for this
+  # mailbox, minus a margin for late delivery, or at a default lookback when
+  # nothing has been ingested for it yet.
+  defp resync_window(user_id, account, provider) do
+    identity = ingestion_identity(user_id, account: account, provider: provider)
+
+    case newest_ingested_gmail_message_at(user_id, identity.provider) do
+      %DateTime{} = newest ->
+        %{
+          since: DateTime.add(newest, -resync_margin_seconds(), :second),
+          anchor: "newest_ingested_message"
+        }
+
+      _none ->
+        %{
+          since: DateTime.add(DateTime.utc_now(), -default_resync_lookback_seconds(), :second),
+          anchor: "default_lookback"
+        }
+    end
+  end
+
+  defp newest_ingested_gmail_message_at(user_id, provider) do
+    pattern = escape_like(gmail_observation_id(provider, "")) <> "%"
+
+    from(observation in Observation,
+      where: observation.user_id == ^user_id,
+      where: observation.source == "gmail",
+      where: like(observation.source_item_id, ^pattern),
+      select: max(observation.occurred_at)
+    )
+    |> Maraithon.Repo.one()
+    |> case do
+      %DateTime{} = newest -> newest
+      %NaiveDateTime{} = newest -> DateTime.from_naive!(newest, "Etc/UTC")
+      _none -> nil
+    end
+  end
+
+  defp escape_like(value) when is_binary(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+  end
+
+  defp persist_history_cursor(_account, nil), do: :ok
+
+  defp persist_history_cursor(account, history_id) do
+    SourceCursors.put(account, @history_cursor_kind, %{"value" => to_string(history_id)})
+  end
+
+  @doc """
+  Fetches the mailbox's current `historyId` (the head of the history log),
+  used to establish a fresh cursor baseline after a full resync.
+  """
+  def current_history_id(access_token) do
+    url = "#{api_base_url()}/users/me/profile"
+
+    case GmailAccess.request(:get, url, access_token) do
+      {:ok, %{"historyId" => history_id}} when not is_nil(history_id) ->
+        {:ok, history_id}
+
+      {:ok, _response} ->
+        {:error, :missing_history_id}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Fetches recent emails from the user's inbox.
+  """
+  def fetch_recent_emails(user_id_or_token, max_results \\ 10, opts \\ []) do
+    fetch_messages(
+      user_id_or_token,
+      Keyword.merge(opts, max_results: max_results, label_ids: ["INBOX"])
+    )
+  end
+
+  @doc """
+  Lists Gmail messages and hydrates each listed id.
+
+  The default body mode remains `:full`. Callers with a bounded acquisition
+  phase may request `message_format: :metadata`, tune timeouts, and
+  set `include_fetch_metadata: true` to receive completeness metadata as a
+  third tuple element. Hydration is sequential within each mailbox.
+  """
+  def fetch_messages(user_id_or_token, opts \\ [])
+      when is_list(opts) do
+    max_results = Keyword.get(opts, :max_results, 10)
+    label_ids = Keyword.get(opts, :label_ids, [])
+    query = Keyword.get(opts, :query)
+    paginate? = Keyword.get(opts, :paginate, false)
+    max_total_results = Keyword.get(opts, :max_total_results)
+
+    case request_access_token(user_id_or_token, opts) do
+      {:ok, token} ->
+        case list_message_refs(
+               token,
+               query,
+               label_ids,
+               max_results,
+               paginate?,
+               max_total_results
+             ) do
+          {:ok, selected, list_metadata} ->
+            with {:ok, detailed, detail_failure_count} <-
+                   fetch_message_details(selected, token, opts) do
+              body_fallback_count = Enum.count(detailed, &metadata_body_fallback?/1)
+
+              fetch_metadata = %{
+                listed_count: length(selected),
+                requested_count: length(selected),
+                detail_success_count: length(detailed),
+                detail_failure_count: detail_failure_count,
+                body_fallback_count: body_fallback_count,
+                page_count: list_metadata.page_count,
+                truncated?: list_metadata.truncated?
+              }
+
+              fetch_metadata =
+                Map.put(
+                  fetch_metadata,
+                  :complete?,
+                  detail_failure_count == 0 and body_fallback_count == 0 and
+                    not fetch_metadata.truncated?
+                )
+
+              if Keyword.get(opts, :include_fetch_metadata, false) do
+                {:ok, detailed, fetch_metadata}
+              else
+                {:ok, detailed}
+              end
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp list_message_refs(token, query, label_ids, max_results, false, _max_total_results) do
+    with {:ok, response} <- request_message_list_page(token, query, label_ids, max_results, nil) do
+      messages = normalize_message_refs(response["messages"])
+
+      {:ok, Enum.take(messages, max_results),
+       %{page_count: 1, truncated?: present?(response["nextPageToken"])}}
+    end
+  end
+
+  defp list_message_refs(token, query, label_ids, _max_results, true, max_total_results) do
+    case max_total_results do
+      limit when is_integer(limit) and limit > 0 ->
+        list_all_message_refs(token, query, label_ids, nil, [], 0, limit)
+
+      nil ->
+        list_all_message_refs(token, query, label_ids, nil, [], 0, nil)
+
+      _invalid ->
+        {:error, :invalid_gmail_message_pagination_limit}
+    end
+  end
+
+  defp list_all_message_refs(
+         token,
+         query,
+         label_ids,
+         page_token,
+         acc,
+         page_count,
+         max_total_results
+       )
+       when page_count < @max_message_list_pages do
+    page_size =
+      case max_total_results do
+        limit when is_integer(limit) -> min(@messages_page_size, max(limit - length(acc), 1))
+        nil -> @messages_page_size
+      end
+
+    with {:ok, response} <-
+           request_message_list_page(token, query, label_ids, page_size, page_token) do
+      messages =
+        (acc ++ normalize_message_refs(response["messages"]))
+        |> Enum.uniq_by(& &1["id"])
+
+      next_page_token = response["nextPageToken"]
+      next_page_count = page_count + 1
+
+      cond do
+        is_integer(max_total_results) and length(messages) > max_total_results ->
+          {:ok, Enum.take(messages, max_total_results),
+           %{page_count: next_page_count, truncated?: true}}
+
+        not present?(next_page_token) ->
+          {:ok, maybe_take_message_refs(messages, max_total_results),
+           %{page_count: next_page_count, truncated?: false}}
+
+        is_integer(max_total_results) and length(messages) >= max_total_results ->
+          {:ok, Enum.take(messages, max_total_results),
+           %{page_count: next_page_count, truncated?: true}}
+
+        true ->
+          list_all_message_refs(
+            token,
+            query,
+            label_ids,
+            next_page_token,
+            messages,
+            next_page_count,
+            max_total_results
+          )
+      end
+    end
+  end
+
+  defp list_all_message_refs(
+         _token,
+         _query,
+         _label_ids,
+         _page_token,
+         _acc,
+         _page_count,
+         _max_total_results
+       ),
+       do: {:error, :gmail_message_pagination_limit}
+
+  defp maybe_take_message_refs(messages, limit) when is_integer(limit),
+    do: Enum.take(messages, limit)
+
+  defp maybe_take_message_refs(messages, nil), do: messages
+
+  defp request_message_list_page(token, query, label_ids, max_results, page_token) do
+    params =
+      [{"maxResults", max_results}]
+      |> maybe_append_query("q", query)
+      |> append_repeated_query("labelIds", label_ids)
+      |> maybe_append_query("pageToken", page_token)
+      |> Enum.map(&URI.encode_query([&1]))
+      |> Enum.join("&")
+
+    GmailAccess.request(:get, "#{api_base_url()}/users/me/messages?#{params}", token)
+  end
+
+  defp normalize_message_refs(messages) when is_list(messages),
+    do: Enum.filter(messages, &(is_map(&1) and present?(&1["id"])))
+
+  defp normalize_message_refs(_messages), do: []
+
+  defp fetch_message_details(messages, token, opts) do
+    format = Keyword.get(opts, :message_format, :full)
+
+    messages
+    |> Task.async_stream(
+      fn message -> safe_fetch_message_detail(token, message, format, opts) end,
+      max_concurrency: 1,
+      ordered: true,
+      timeout: message_fetch_timeout_ms(opts),
+      on_timeout: :kill_task
+    )
+    |> Enum.reduce_while({:ok, [], 0}, fn
+      {:ok, {:ok, message}}, {:ok, detailed, failures} ->
+        {:cont, {:ok, [message | detailed], failures}}
+
+      {:ok, {:error, :not_found}}, acc ->
+        {:cont, acc}
+
+      {:ok, {:error, {:rate_limited, _} = reason}}, _acc ->
+        {:halt, {:error, reason}}
+
+      {:ok, {:error, {:rate_limited, _, _} = reason}}, _acc ->
+        {:halt, {:error, reason}}
+
+      _error, {:ok, detailed, failures} ->
+        {:cont, {:ok, detailed, failures + 1}}
+    end)
+    |> case do
+      {:ok, detailed, failures} -> {:ok, Enum.reverse(detailed), failures}
+      error -> error
+    end
+  end
+
+  defp safe_fetch_message_detail(token, %{"id" => id}, format, opts) when is_binary(id) do
+    try do
+      fetch_message_detail(token, id, format, opts)
+    rescue
+      error -> {:error, {:detail_exception, error.__struct__}}
+    catch
+      kind, reason -> {:error, {:detail_task_failure, kind, reason}}
+    end
+  end
+
+  defp safe_fetch_message_detail(_token, _message, _format, _opts),
+    do: {:error, :missing_message_id}
+
+  defp fetch_message_detail(token, id, format, opts) when format in [:metadata, "metadata"] do
+    fetch_message(token, id, listed_message_opts(opts))
+  end
+
+  defp fetch_message_detail(token, id, _format, opts) do
+    fetch_message_content(token, id, listed_message_opts(opts))
+  end
+
+  defp listed_message_opts(opts) do
+    opts
+    |> Keyword.take([:failed_precondition_retry_delay_ms])
+    |> Keyword.merge(access_token: true, listed_message: true)
+  end
+
+  defp message_fetch_timeout_ms(opts) do
+    case Keyword.get(opts, :message_fetch_timeout_ms, @default_message_fetch_timeout_ms) do
+      :infinity -> :infinity
+      value when is_integer(value) and value > 0 -> value
+      _value -> @default_message_fetch_timeout_ms
+    end
+  end
+
+  @doc """
+  Normalizes a raw Gmail message or thread id, returning `nil` for composite,
+  synthetic, or otherwise invalid values.
+  """
+  def normalize_id(value) when is_binary(value) do
+    id = String.trim(value)
+
+    if id != "" and Regex.match?(@gmail_id_pattern, id), do: id
+  end
+
+  def normalize_id(_value), do: nil
+
+  @doc """
+  Returns whether a value is a valid raw Gmail API message or thread id.
+  """
+  def valid_id?(value), do: is_binary(normalize_id(value))
+
+  @doc """
+  Fetches a single email message.
+  """
+  def fetch_message(user_id_or_token, message_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(message_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <-
+           fetch_gmail_point_resource(access_token, "messages", id, "metadata", opts) do
+      {:ok, parse_message(response)}
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Fetches a single Gmail message with decoded text and html body content.
+
+  Callers hydrating an id returned by a successful list or history request may
+  pass `listed_message: true`. Exact Gmail `FAILED_PRECONDITION` point-read
+  churn is then retried once before retaining metadata with an unavailable-body
+  marker. Direct lookups remain strict and noisy.
+  """
+  def fetch_message_content(user_id_or_token, message_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(message_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts) do
+      fetch_full_message_content(access_token, id, opts)
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Fetches all available messages in one Gmail thread using metadata format.
+  """
+  def fetch_thread(user_id_or_token, thread_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(thread_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "threads", id, "metadata") do
+      case response do
+        %{"messages" => messages} when is_list(messages) ->
+          {:ok, Enum.map(messages, &parse_message/1)}
+
+        _response ->
+          {:ok, []}
+      end
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Fetches all available messages in one Gmail thread with decoded bodies.
+
+  Gmail returns the complete thread in one request, which is both faster and
+  more consistent than hydrating every message with a separate point read.
+  """
+  def fetch_thread_content(user_id_or_token, thread_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(thread_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "threads", id, "full") do
+      case response do
+        %{"messages" => messages} when is_list(messages) ->
+          {:ok, Enum.map(messages, &parse_message_content/1)}
+
+        _response ->
+          {:ok, []}
+      end
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc "Normalized participants from a fetched message, without inferring reply-all."
+  def message_participants(message) when is_map(message) do
+    Enum.flat_map([:from, :to, :cc], fn role ->
+      parse_address_list(Map.get(message, role) || Map.get(message, to_string(role)), role)
+    end)
+    |> Enum.uniq_by(&{&1["role"], &1["identifier"]})
+  end
+
+  @doc """
+  Sends a Gmail message, optionally within an existing thread.
+  """
+  def send_message(user_id_or_token, attrs) when is_map(attrs) do
+    with {:ok, access_token, provider} <- access_token_for_send(user_id_or_token, attrs),
+         {:ok, to} <- required_attr(attrs, "to"),
+         {:ok, subject} <- required_attr(attrs, "subject"),
+         {:ok, body} <- required_attr(attrs, "body"),
+         :ok <- valid_send_headers(attrs),
+         :ok <- verified_sender(access_token, optional_attr(attrs, "from")),
+         {:ok, reply_headers} <-
+           fetch_reply_headers(access_token, optional_attr(attrs, "reply_to_message_id")),
+         :ok <- reply_thread_matches(attrs, reply_headers) do
+      thread_id = optional_attr(attrs, "thread_id")
+
+      raw =
+        Maraithon.Tools.GmailApiHelpers.raw_message(to, subject, body,
+          from: optional_attr(attrs, "from"),
+          from_name: optional_attr(attrs, "from_name"),
+          html_body: optional_attr(attrs, "html_body"),
+          cc: optional_attr(attrs, "cc"),
+          in_reply_to: reply_headers["message_id"],
+          references: reply_headers["references"],
+          message_id_header: optional_attr(attrs, "message_id_header")
+        )
+
+      request_body =
+        %{raw: raw}
+        |> maybe_put("threadId", thread_id)
+
+      url = "#{api_base_url()}/users/me/messages/send"
+
+      case GmailAccess.request(:post, url, access_token, request_body) do
+        {:ok, response} ->
+          {:ok,
+           %{
+             provider: provider,
+             message_id: response["id"],
+             thread_id: response["threadId"],
+             label_ids: response["labelIds"] || []
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Private Functions
+  # ===========================================================================
+
+  defp fetch_full_message_content(access_token, id, opts) do
+    case fetch_gmail_point_resource(access_token, "messages", id, "full", opts) do
+      {:ok, response} ->
+        {:ok, parse_message_content(response)}
+
+      {:error, {:http_status, status, body}} = error ->
+        if listed_message?(opts) and listed_message_failed_precondition?(status, body) do
+          fetch_message_metadata_fallback(access_token, id, opts)
+        else
+          error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp fetch_message_metadata_fallback(access_token, id, opts) do
+    case fetch_gmail_point_resource(access_token, "messages", id, "metadata", opts) do
+      {:ok, response} ->
+        message =
+          response
+          |> parse_message()
+          |> Map.merge(%{
+            text_body: nil,
+            html_body: nil,
+            body_unavailable_reason: "failed_precondition"
+          })
+
+        {:ok, message}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp metadata_body_fallback?(%{body_unavailable_reason: "failed_precondition"}), do: true
+  defp metadata_body_fallback?(_message), do: false
+
+  defp fetch_gmail_point_resource(access_token, resource, id, format) do
+    fetch_gmail_point_resource(access_token, resource, id, format, [])
+  end
+
+  defp fetch_gmail_point_resource(access_token, resource, id, format, opts) do
+    url = "#{api_base_url()}/users/me/#{resource}/#{id}?format=#{format}"
+
+    request_opts =
+      [expected_statuses: [404]]
+      |> maybe_expect_listed_message_error(opts)
+
+    request = fn -> GmailAccess.request(:get, url, access_token, nil, [], request_opts) end
+
+    request.()
+    |> maybe_retry_listed_message(request, opts)
+    |> case do
+      {:error, {:http_status, 404, _body}} -> {:error, :not_found}
+      result -> result
+    end
+  end
+
+  defp maybe_expect_listed_message_error(request_opts, opts) do
+    if listed_message?(opts) do
+      Keyword.put(request_opts, :expected_error?, &listed_message_failed_precondition?/2)
+    else
+      request_opts
+    end
+  end
+
+  defp maybe_retry_listed_message(
+         {:error, {:http_status, status, body}} = error,
+         request,
+         opts
+       ) do
+    if listed_message?(opts) and listed_message_failed_precondition?(status, body) do
+      delay_ms = failed_precondition_retry_delay_ms(opts)
+      if delay_ms > 0, do: Process.sleep(delay_ms)
+      request.()
+    else
+      error
+    end
+  end
+
+  defp maybe_retry_listed_message(result, _request, _opts), do: result
+
+  defp listed_message_failed_precondition?(400, body) when is_binary(body) do
+    String.contains?(body, "FAILED_PRECONDITION") and
+      String.contains?(body, "failedPrecondition") and
+      String.contains?(body, "Precondition check failed.")
+  end
+
+  defp listed_message_failed_precondition?(_status, _body), do: false
+
+  defp listed_message?(opts), do: Keyword.get(opts, :listed_message, false) == true
+
+  defp failed_precondition_retry_delay_ms(opts) do
+    case Keyword.get(
+           opts,
+           :failed_precondition_retry_delay_ms,
+           @default_failed_precondition_retry_delay_ms
+         ) do
+      delay_ms when is_integer(delay_ms) and delay_ms >= 0 ->
+        min(delay_ms, @max_failed_precondition_retry_delay_ms)
+
+      _delay_ms ->
+        @default_failed_precondition_retry_delay_ms
+    end
+  end
+
+  defp get_access_token(_user_id, %GmailAccess{} = access), do: {:ok, access}
+  defp get_access_token(user_id, nil), do: GmailAccess.for_user(user_id)
+  defp get_access_token(_, _), do: {:error, :gmail_account_required}
+
+  defp request_access_token(%GmailAccess{} = access, _opts), do: {:ok, access}
+  defp request_access_token("ya29." <> _, _opts), do: {:error, :gmail_account_required}
+
+  defp request_access_token(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    if Keyword.get(opts, :access_token, false),
+      do: {:error, :gmail_account_required},
+      else: GmailAccess.for_user(user_id, Keyword.get(opts, :provider) || "google")
+  end
+
+  defp access_token_for_send(%GmailAccess{} = access, _attrs),
+    do: {:ok, access, access.provider}
+
+  defp access_token_for_send(user_id, attrs) when is_binary(user_id) do
+    result =
+      case Map.get(attrs, :account_id, Map.get(attrs, "account_id")) do
+        nil ->
+          account = optional_attr(attrs, "account")
+
+          provider =
+            if is_binary(account) and account != "", do: "google:#{account}", else: "google"
+
+          GmailAccess.for_user(user_id, provider)
+
+        id ->
+          GmailAccess.for_account(user_id, id)
+      end
+
+    case result do
+      {:ok, access} -> {:ok, access, access.provider}
+      error -> error
+    end
+  end
+
+  defp create_watch(_user_id, access_token) do
+    pubsub_topic = get_pubsub_topic()
+
+    if is_nil(pubsub_topic) or pubsub_topic == "" do
+      {:error, :pubsub_topic_not_configured}
+    else
+      url = "#{api_base_url()}/users/me/watch"
+
+      body = %{
+        topicName: pubsub_topic,
+        labelIds: ["INBOX"]
+      }
+
+      case GmailAccess.request(:post, url, access_token, body) do
+        {:ok, response} ->
+          {:ok,
+           %{
+             history_id: response["historyId"],
+             expiration: parse_expiration(response["expiration"])
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # Walks `users/me/history` in one bounded step. Every page reports
+  # `historyId` (the mailbox's current head), but only a completed walk may
+  # advance the cursor there; a step that stops at its page or message cap
+  # advances only to the last history record it consumed, so nothing between
+  # that record and the head is skipped. Records are requested without a
+  # `historyTypes` filter: Gmail pages the raw log either way (filtered pages
+  # come back empty but still carry `nextPageToken`), and unfiltered pages
+  # always carry record ids, which is what makes a capped step resumable.
+  defp fetch_history(access_token, history_id) do
+    fetch_history_page(access_token, history_id, nil, new_history_walk(), 1)
+  end
+
+  defp new_history_walk do
+    %{message_ids: [], seen: MapSet.new(), message_count: 0, last_record_id: nil}
+  end
+
+  defp fetch_history_page(access_token, history_id, page_token, walk, page) do
+    params =
+      %{startHistoryId: history_id, maxResults: history_page_size()}
+      |> maybe_put_page_token(page_token)
+      |> URI.encode_query()
+
+    url = "#{api_base_url()}/users/me/history?#{params}"
+
+    case GmailAccess.request(:get, url, access_token) do
+      {:ok, response} ->
+        # Gmail omits the "history" key entirely when a page has no records.
+        walk = absorb_history_page(walk, response["history"] || [])
+        next_page_token = response["nextPageToken"]
+
+        cond do
+          not present?(next_page_token) ->
+            finish_history_walk(access_token, walk, response["historyId"], true, page)
+
+          page < max_history_pages() and walk.message_count < history_step_message_limit() ->
+            fetch_history_page(access_token, history_id, next_page_token, walk, page + 1)
+
+          is_nil(walk.last_record_id) ->
+            # Nothing on these pages carried a record id, so there is no safe
+            # point to resume from. Keep the cursor; the caller retries later.
+            Logger.warning("Gmail history step made no progress within its page cap",
+              history_id: history_id,
+              pages: page
+            )
+
+            {:error, {:gmail_history_no_progress, page}}
+
+          true ->
+            Logger.info("Gmail history step stopped at its cap with history remaining",
+              history_id: history_id,
+              next_history_id: walk.last_record_id,
+              pages: page,
+              message_count: walk.message_count
+            )
+
+            finish_history_walk(access_token, walk, walk.last_record_id, false, page)
+        end
+
+      {:error, {:http_status, 404, _}} ->
+        # History ID too old - need full sync
+        {:error, :history_expired}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp absorb_history_page(walk, records) when is_list(records) do
+    Enum.reduce(records, walk, fn
+      record, walk when is_map(record) ->
+        walk = track_history_record_id(walk, record["id"])
+
+        record
+        |> Map.get("messagesAdded")
+        |> List.wrap()
+        |> Enum.reduce(walk, fn added, walk -> track_added_message(walk, added) end)
+
+      _record, walk ->
+        walk
+    end)
+  end
+
+  defp track_history_record_id(walk, id) do
+    case parse_history_record_id(id) do
+      nil -> walk
+      value -> %{walk | last_record_id: max(value, walk.last_record_id || value)}
+    end
+  end
+
+  defp parse_history_record_id(id) when is_integer(id) and id > 0, do: id
+
+  defp parse_history_record_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {value, ""} when value > 0 -> value
+      _other -> nil
+    end
+  end
+
+  defp parse_history_record_id(_id), do: nil
+
+  defp track_added_message(walk, %{"message" => %{"id" => id}})
+       when is_binary(id) and id != "" do
+    if MapSet.member?(walk.seen, id) do
+      walk
+    else
+      %{
+        walk
+        | message_ids: [id | walk.message_ids],
+          seen: MapSet.put(walk.seen, id),
+          message_count: walk.message_count + 1
+      }
+    end
+  end
+
+  defp track_added_message(walk, _added), do: walk
+
+  defp finish_history_walk(access_token, walk, next_history_id, complete?, pages) do
+    # Never advance a history cursor past unread messages. Share the sequential
+    # hydration path so rate limits preserve their retry deadline in both modes.
+    message_ids = Enum.reverse(walk.message_ids)
+    refs = Enum.map(message_ids, &%{"id" => &1})
+
+    case fetch_message_details(refs, access_token, message_format: :full) do
+      {:ok, messages, 0} ->
+        {:ok,
+         %{
+           messages: messages,
+           history_id:
+             history_id_string(next_history_id) || history_id_string(walk.last_record_id),
+           complete?: complete?,
+           pages: pages
+         }}
+
+      {:ok, _messages, failure_count} ->
+        Logger.warning("Gmail history sync left messages unread; preserving the prior cursor",
+          listed_message_count: length(message_ids),
+          failed_message_count: failure_count
+        )
+
+        {:error, {:gmail_history_message_fetch_incomplete, failure_count}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp history_id_string(value) when is_integer(value), do: Integer.to_string(value)
+  defp history_id_string(value) when is_binary(value) and value != "", do: value
+  defp history_id_string(_value), do: nil
+
+  defp maybe_put_page_token(params, page_token) when is_binary(page_token) and page_token != "",
+    do: Map.put(params, :pageToken, page_token)
+
+  defp maybe_put_page_token(params, _page_token), do: params
+
+  defp max_history_pages, do: gmail_setting(:max_history_pages, @max_history_pages)
+  defp history_page_size, do: gmail_setting(:history_page_size, @history_page_size)
+
+  defp history_step_message_limit,
+    do: gmail_setting(:history_step_message_limit, @history_step_message_limit)
+
+  defp max_history_steps, do: gmail_setting(:max_history_steps, @max_history_steps)
+  defp max_resync_messages, do: gmail_setting(:max_resync_messages, @max_resync_messages)
+  defp resync_margin_seconds, do: gmail_setting(:resync_margin_seconds, @resync_margin_seconds)
+
+  defp default_resync_lookback_seconds,
+    do: gmail_setting(:default_resync_lookback_seconds, @default_resync_lookback_seconds)
+
+  defp gmail_setting(key, default) do
+    Application.get_env(:maraithon, :gmail, [])
+    |> Keyword.get(key, default)
+  end
+
+  defp parse_message(message) do
+    headers = message["payload"]["headers"] || []
+
+    %{
+      message_id: message["id"],
+      thread_id: message["threadId"],
+      snippet: message["snippet"],
+      labels: message["labelIds"] || [],
+      from: get_header(headers, "From"),
+      to: get_header(headers, "To"),
+      cc: get_header(headers, "Cc"),
+      subject: get_header(headers, "Subject"),
+      internet_message_id: get_header(headers, "Message-ID"),
+      original_internet_message_id: get_header(headers, "X-Google-Original-Message-ID"),
+      in_reply_to: get_header(headers, "In-Reply-To"),
+      references: get_header(headers, "References"),
+      auto_submitted: get_header(headers, "Auto-Submitted"),
+      precedence: get_header(headers, "Precedence"),
+      list_id: get_header(headers, "List-ID"),
+      return_path: get_header(headers, "Return-Path"),
+      content_type: get_header(headers, "Content-Type"),
+      date: get_header(headers, "Date"),
+      internal_date: parse_internal_date(message["internalDate"])
+    }
+  end
+
+  defp parse_message_content(message) do
+    {text_body, html_body} = extract_message_bodies(message["payload"] || %{})
+
+    parse_message(message)
+    |> Map.merge(%{
+      text_body: text_body,
+      html_body: html_body,
+      text_only: html_body in [nil, ""] and not attachment?(message["payload"] || %{})
+    })
+  end
+
+  defp attachment?(payload) when is_map(payload) do
+    payload["mimeType"] not in ~w(text/plain text/html multipart/alternative multipart/mixed multipart/related) or
+      payload["filename"] not in [nil, ""] or
+      String.starts_with?(
+        String.downcase(get_header(payload["headers"] || [], "Content-Disposition") || ""),
+        "attachment"
+      ) or
+      not is_nil(get_in(payload, ["body", "attachmentId"])) or
+      Enum.any?(List.wrap(payload["parts"]), &attachment?/1)
+  end
+
+  defp attachment?(_), do: true
+
+  defp extract_message_bodies(payload) when is_map(payload) do
+    plain = collect_body(payload, "text/plain")
+    html = collect_body(payload, "text/html")
+
+    {plain || fallback_body(payload), html}
+  end
+
+  defp collect_body(payload, mime_type) when is_map(payload) do
+    cond do
+      payload["mimeType"] == mime_type ->
+        decode_body(payload["body"])
+
+      is_list(payload["parts"]) ->
+        Enum.find_value(payload["parts"], &collect_body(&1, mime_type))
+
+      true ->
+        nil
+    end
+  end
+
+  defp fallback_body(payload) when is_map(payload) do
+    case decode_body(payload["body"]) do
+      nil ->
+        if is_list(payload["parts"]) do
+          Enum.find_value(payload["parts"], &fallback_body/1)
+        end
+
+      decoded ->
+        decoded
+    end
+  end
+
+  defp decode_body(%{"data" => data}) when is_binary(data) do
+    case Base.url_decode64(data, padding: false) do
+      {:ok, decoded} -> decoded
+      :error -> nil
+    end
+  end
+
+  defp decode_body(_body), do: nil
+
+  defp fetch_reply_headers(_access_token, nil), do: {:ok, %{}}
+  defp fetch_reply_headers(_access_token, ""), do: {:ok, %{}}
+
+  defp fetch_reply_headers(access_token, message_id) do
+    with id when is_binary(id) <- normalize_id(message_id) do
+      params =
+        [
+          {"format", "metadata"},
+          {"metadataHeaders", "Message-ID"},
+          {"metadataHeaders", "References"}
+        ]
+        |> Enum.map(&URI.encode_query([&1]))
+        |> Enum.join("&")
+
+      url = "#{api_base_url()}/users/me/messages/#{id}?#{params}"
+
+      case GmailAccess.request(:get, url, access_token, nil, [], expected_statuses: [404]) do
+        {:ok, response} ->
+          parsed = parse_message(response)
+
+          if valid_header?(parsed.internet_message_id) and present?(parsed.internet_message_id) and
+               valid_header?(parsed.references) do
+            references =
+              [parsed.references, parsed.internet_message_id]
+              |> Enum.reject(&is_nil/1)
+              |> Enum.join(" ")
+
+            {:ok,
+             %{
+               "message_id" => parsed.internet_message_id,
+               "references" => references,
+               "thread_id" => parsed.thread_id
+             }}
+          else
+            {:error, :reply_headers_unavailable}
+          end
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      nil -> {:error, :invalid_gmail_id}
+    end
+  end
+
+  defp valid_send_headers(attrs) do
+    if Enum.all?(
+         ~w(to cc from from_name subject message_id_header),
+         &valid_header?(optional_attr(attrs, &1))
+       ),
+       do: :ok,
+       else: {:error, :invalid_mail_headers}
+  end
+
+  defp valid_header?(nil), do: true
+
+  defp valid_header?(value),
+    do: byte_size(value) <= 8_192 and not String.contains?(value, ["\r", "\n", <<0>>])
+
+  defp verified_sender(_, nil), do: :ok
+
+  defp verified_sender(token, from) do
+    with {:ok, %{"sendAs" => aliases}} <-
+           GmailAccess.request(:get, "#{api_base_url()}/users/me/settings/sendAs", token),
+         true <-
+           Enum.any?(
+             aliases,
+             &(&1["sendAsEmail"] == from and
+                 (&1["isPrimary"] == true or &1["verificationStatus"] == "accepted"))
+           ) do
+      :ok
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :unverified_sender}
+    end
+  end
+
+  defp reply_thread_matches(attrs, headers) do
+    expected = optional_attr(attrs, "thread_id")
+
+    if expected == nil or headers == %{} or headers["thread_id"] == expected,
+      do: :ok,
+      else: {:error, :reply_thread_mismatch}
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_append_query(params, _key, nil), do: params
+  defp maybe_append_query(params, _key, ""), do: params
+  defp maybe_append_query(params, key, value), do: params ++ [{key, value}]
+
+  defp append_repeated_query(params, _key, []), do: params
+
+  defp append_repeated_query(params, key, values) when is_list(values) do
+    params ++ Enum.map(values, &{key, &1})
+  end
+
+  defp required_attr(attrs, key) do
+    case optional_attr(attrs, key) do
+      nil -> {:error, "#{key} is required"}
+      value -> {:ok, value}
+    end
+  end
+
+  defp optional_attr(attrs, key) when is_map(attrs) do
+    value =
+      case Map.fetch(attrs, key) do
+        {:ok, direct} ->
+          direct
+
+        :error ->
+          Enum.find_value(attrs, fn
+            {map_key, map_value} when is_atom(map_key) ->
+              if Atom.to_string(map_key) == key, do: map_value
+
+            _ ->
+              nil
+          end)
+      end
+
+    case value do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
+
+  defp get_header(headers, name) do
+    case Enum.find(headers, fn h -> String.downcase(h["name"] || "") == String.downcase(name) end) do
+      %{"value" => value} -> value
+      _ -> nil
+    end
+  end
+
+  defp parse_internal_date(nil), do: nil
+
+  defp parse_internal_date(ms) when is_binary(ms) do
+    case Integer.parse(ms) do
+      {millis, _} -> DateTime.from_unix!(millis, :millisecond)
+      :error -> nil
+    end
+  end
+
+  defp parse_expiration(nil), do: nil
+
+  defp parse_expiration(expiration) when is_binary(expiration) do
+    case Integer.parse(expiration) do
+      {ms, _} -> DateTime.from_unix!(ms, :millisecond)
+      :error -> nil
+    end
+  end
+
+  defp parse_expiration(expiration) when is_integer(expiration) do
+    DateTime.from_unix!(expiration, :millisecond)
+  end
+
+  defp decode_pubsub_message(%{"message" => %{"data" => data} = message}) do
+    with {:ok, json} <- Base.decode64(data),
+         {:ok, payload} <- Jason.decode(json) do
+      # Gmail sends: {"emailAddress": "user@example.com", "historyId": "12345"}
+      user_email = payload["emailAddress"]
+      history_id = payload["historyId"]
+      message_id = message["messageId"]
+
+      # We use email address as user_id for Gmail
+      # In production, you'd map this to your internal user_id
+      {:ok, user_email, history_id, message_id}
+    else
+      _ -> {:error, :invalid_pubsub_message}
+    end
+  end
+
+  defp decode_pubsub_message(_) do
+    {:error, :invalid_pubsub_format}
+  end
+
+  # Pub/Sub's `messageId` uniquely identifies a delivery attempt; fall back to
+  # the (user, historyId) pair if it is ever missing so we still dedupe.
+  defp gmail_webhook_dedupe_key(message_id, _user_id, _history_id)
+       when is_binary(message_id) and message_id != "" do
+    "gmail_webhook:#{message_id}"
+  end
+
+  defp gmail_webhook_dedupe_key(_message_id, user_id, history_id) do
+    "gmail_webhook:#{user_id}:#{history_id}"
+  end
+
+  defp get_pubsub_topic do
+    Application.get_env(:maraithon, :google, [])
+    |> Keyword.get(:pubsub_topic, "")
+  end
+
+  defp api_base_url do
+    Application.get_env(:maraithon, :gmail, [])
+    |> Keyword.get(:api_base_url, @default_api_base)
+  end
+
+  # ===========================================================================
+  # CRM ingestion
+  # ===========================================================================
+
+  @doc """
+  Fan a list of parsed Gmail messages into `Crm.Ingest.observe/2` calls.
+
+  Used by the webhook handler and by the backfill seed. Account-aware callers
+  pass `:account` and `:provider` so Gmail's account-local message ids remain
+  collision-safe across multiple connected mailboxes.
+  """
+  def ingest_messages(user_id, messages, opts \\ [])
+
+  def ingest_messages(user_id, messages, opts)
+      when is_binary(user_id) and is_list(messages) and is_list(opts) do
+    identity = ingestion_identity(user_id, opts)
+
+    route? =
+      is_integer(identity.connected_account_id) and Maraithon.Delegations.Ingress.active?(user_id)
+
+    assistant? = identity.provider in Maraithon.AssistantIdentities.assistant_providers(user_id)
+
+    failure_count =
+      Enum.reduce(messages, 0, fn message, failures ->
+        case if(assistant?, do: :skip, else: to_observation(message, user_id, identity)) do
+          {:ok, changeset} ->
+            case with_delegation_ingress(user_id, identity, message, route?, fn ->
+                   Ingest.observe(user_id, changeset)
+                 end) do
+              {:ok, _} ->
+                failures
+
+              {:ok, _, _} ->
+                failures
+
+              {:ok, _, _, _} ->
+                failures
+
+              {:error, reason} ->
+                Logger.warning("CRM ingest could not persist a Gmail message",
+                  user_id: user_id,
+                  source_item_id: message[:message_id] || message["message_id"],
+                  reason: inspect(reason)
+                )
+
+                failures + 1
+
+              other ->
+                Logger.warning("CRM ingest returned an unexpected Gmail result",
+                  user_id: user_id,
+                  source_item_id: message[:message_id] || message["message_id"],
+                  result: inspect(other)
+                )
+
+                failures + 1
+            end
+
+          :skip ->
+            # Some Gmail metadata records legitimately omit address headers.
+            # They are still acquired source items for Chief-of-Staff work;
+            # they simply cannot produce a relationship observation.
+            case with_delegation_ingress(user_id, identity, message, route?, fn ->
+                   {:ok, :skipped}
+                 end) do
+              {:ok, _} -> failures
+              _ -> failures + 1
+            end
+        end
+      end)
+
+    cond do
+      failure_count > 0 ->
+        {:error, {:gmail_ingest_incomplete, failure_count}}
+
+      true ->
+        case Ingest.flush_pending(user_id, "gmail") do
+          {:error, reason} ->
+            Logger.warning("CRM ingest could not flush Gmail observations",
+              user_id: user_id,
+              reason: inspect(reason)
+            )
+
+            {:error, {:gmail_ingest_flush_failed, reason}}
+
+          _result ->
+            if route?, do: Maraithon.Delegations.Outbox.publish_pending(user_id)
+            :ok
+        end
+    end
+  end
+
+  def ingest_messages(_user_id, _messages, _opts), do: :ok
+
+  defp with_delegation_ingress(_user_id, _identity, _message, false, fun), do: fun.()
+
+  defp with_delegation_ingress(user_id, identity, message, true, fun) do
+    Maraithon.Repo.transaction(fn ->
+      Maraithon.PrivacyErasure.WriteFence.lock_user_writable!(user_id)
+
+      case fun.() do
+        {:error, reason} ->
+          Maraithon.Repo.rollback(reason)
+
+        result ->
+          :ok =
+            Maraithon.Delegations.Ingress.gmail!(user_id, identity.connected_account_id, message)
+
+          result
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      error -> error
+    end
+  end
+
+  defp to_observation(message, user_id, identity) when is_map(message) and is_map(identity) do
+    case Map.get(message, :message_id) || Map.get(message, "message_id") do
+      nil ->
+        :skip
+
+      message_id ->
+        participants = message_participants(message) |> Enum.uniq_by(& &1["identifier"])
+
+        if participants == [] do
+          :skip
+        else
+          direction = direction_for(participants, identity.account_email)
+
+          occurred_at =
+            Map.get(message, :internal_date) || Map.get(message, "internal_date") ||
+              DateTime.utc_now()
+
+          {:ok,
+           Observation.new(%{
+             "user_id" => user_id,
+             "source" => "gmail",
+             "source_account" => identity.source_account,
+             "source_item_id" => gmail_observation_id(identity.provider, message_id),
+             "occurred_at" => occurred_at,
+             "direction" => Atom.to_string(direction),
+             "participants" => participants,
+             "subject" => Map.get(message, :subject) || Map.get(message, "subject"),
+             "excerpt" => Map.get(message, :snippet) || Map.get(message, "snippet"),
+             "metadata" => %{
+               "thread_id" => Map.get(message, :thread_id) || Map.get(message, "thread_id"),
+               "internet_message_id" =>
+                 Map.get(message, :internet_message_id) || Map.get(message, "internet_message_id"),
+               "in_reply_to" => Map.get(message, :in_reply_to) || Map.get(message, "in_reply_to"),
+               "references" => Map.get(message, :references) || Map.get(message, "references"),
+               "labels" => Map.get(message, :labels) || Map.get(message, "labels") || [],
+               "google_provider" => identity.provider,
+               "connected_account_id" => identity.connected_account_id,
+               "account_email" => identity.account_email
+             }
+           })}
+        end
+    end
+  end
+
+  defp to_observation(_message, _user_id, _identity), do: :skip
+
+  defp ingestion_identity(user_id, opts) do
+    account = Keyword.get(opts, :account)
+    provider = Keyword.get(opts, :provider) || account_field(account, :provider) || "google"
+
+    account_email =
+      account_field(account, :external_account_id) ||
+        account_metadata_email(account) || provider_email(provider) || user_id
+
+    %{
+      provider: provider,
+      source_account: account_email,
+      account_email: String.downcase(account_email),
+      connected_account_id: account_field(account, :id)
+    }
+  end
+
+  defp gmail_observation_id(provider, message_id), do: "#{provider}:#{message_id}"
+
+  defp account_field(account, field) when is_map(account),
+    do: Map.get(account, field) || Map.get(account, Atom.to_string(field))
+
+  defp account_field(_account, _field), do: nil
+
+  defp account_metadata_email(account) when is_map(account) do
+    metadata = account_field(account, :metadata) || %{}
+
+    Map.get(metadata, "account_email") || Map.get(metadata, :account_email) ||
+      Map.get(metadata, "email") || Map.get(metadata, :email)
+  end
+
+  defp account_metadata_email(_account), do: nil
+
+  defp provider_email("google:" <> email) when email != "", do: email
+  defp provider_email(_provider), do: nil
+
+  defp parse_address_list(nil, _role), do: []
+  defp parse_address_list("", _role), do: []
+
+  defp parse_address_list(raw, role) when is_binary(raw) do
+    raw
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&parse_address(&1, role))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp parse_address_list(_raw, _role), do: []
+
+  defp parse_address(address, role) do
+    case Regex.run(~r/^\s*(?:"?([^"<]*)"?\s*)?<([^>]+)>\s*$/, address) do
+      [_, name, email] ->
+        %{
+          "role" => Atom.to_string(role),
+          "identifier" => %{"email" => String.trim(email) |> String.downcase()},
+          "display_name" => name |> String.trim() |> presence_or_nil()
+        }
+
+      _ ->
+        case Regex.run(~r/^\s*([^\s<>]+@[^\s<>]+)\s*$/, address) do
+          [_, email] ->
+            %{
+              "role" => Atom.to_string(role),
+              "identifier" => %{"email" => String.downcase(email)},
+              "display_name" => nil
+            }
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp presence_or_nil(""), do: nil
+  defp presence_or_nil(value), do: value
+
+  defp direction_for(participants, user_email) do
+    self_in_from? =
+      Enum.any?(participants, fn %{"role" => role, "identifier" => identifier} ->
+        role == "from" and String.downcase(Map.get(identifier, "email", "")) == user_email
+      end)
+
+    if self_in_from?, do: :outbound, else: :inbound
+  end
+end

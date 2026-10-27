@@ -1,0 +1,40 @@
+# fly.toml app configuration file generated for maraithon on 2026-03-08T22:56:55-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'maraithon'
+primary_region = 'yyz'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[deploy]
+  release_command = "/bin/sh -lc 'if [ -n \"$DIRECT_DATABASE_URL\" ]; then export DATABASE_URL=\"$DIRECT_DATABASE_URL\"; fi; exec /app/bin/maraithon eval \"Maraithon.Release.migrate\"'"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[env]
+  PHX_HOST = 'maraithon.com'
+  PHX_SERVER = 'true'
+  PORT = '8080'
+  ECTO_IPV6 = 'true'
+  DNS_CLUSTER_QUERY = 'maraithon.internal'
+  DATABASE_POOL_MODE = 'transaction'
+  POOL_SIZE = '8'
+  DB_QUEUE_TARGET_MS = '250'
+  DB_QUEUE_INTERVAL_MS = '2000'
+
+[[vm]]
+  # 1GB OOM-killed the BEAM under the 10-min CoS cadence (2026-07-03:
+  # briefing generation died mid-run every morning attempt).
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 2048

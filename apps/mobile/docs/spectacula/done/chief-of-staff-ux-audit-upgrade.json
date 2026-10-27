@@ -1,0 +1,74 @@
+{
+  "spec_id": "chief-of-staff-ux-audit-upgrade",
+  "slug": "chief-of-staff-ux-audit-upgrade",
+  "title": "Chief-of-Staff UX Audit Upgrade Specification",
+  "stage": "done",
+  "spec_path": "../specs/chief-of-staff-ux-audit-upgrade.md",
+  "created_at": "2026-05-26T02:13:25Z",
+  "approved_at": "2026-05-26T02:13:25Z",
+  "started_at": "2026-05-26T02:13:25Z",
+  "completed_at": "2026-05-26T02:36:53Z",
+  "updated_at": "2026-05-26T02:36:53Z",
+  "summary": "Upgraded Today from passive metrics into a compact Chief-of-Staff command center with deterministic recommendations, action routing, hardened production verification, and production-verified flows.",
+  "next_action": "Optional polish: expand the Chief-of-Staff recommendation model beyond deterministic local signals when server-side ranking is available.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Production simulator verification passed against maraithon.com for kent@runner.now after final Today layout polish.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Audit Findings",
+      "2. Upgrade Contract",
+      "3. Technical Design",
+      "4. Definition Of Done",
+      "5. Verification",
+      "6. Assumptions"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/chief-of-staff-ux-audit-upgrade.md",
+      "MaraithonMobile/Features/Today/TodayView.swift",
+      "MaraithonMobile/Features/Today/TodayInsightEngine.swift",
+      "MaraithonMobile/Features/AppShell/AppNavigation.swift",
+      "MaraithonMobile/Features/Todos/TodosView.swift",
+      "MaraithonMobileTests/TodayInsightEngineTests.swift",
+      "MaraithonMobileUITests/ProductionIntegrationUITests.swift",
+      "scripts/verify-production-simulator.sh",
+      "build/verification/chief-of-staff-today-final.png"
+    ],
+    "notes": "User delegated product decisions. The implemented direction treats Today as a decision surface, Todos as the execution queue, People as relationship care, and Chat as the Chief-of-Staff pane."
+  },
+  "verification": {
+    "format": "passed: xcodegen generate",
+    "lint": "not_configured",
+    "typecheck": "passed: xcodebuild build",
+    "build": "passed",
+    "tests": "passed: MaraithonMobileTests",
+    "production_simulator": "passed: scripts/verify-production-simulator.sh run 20260526023525",
+    "production_assertions": "passed: todo created/completed, person created/updated for kent@runner.now",
+    "spec_review": "passed",
+    "notes": "The verified app was launched in Simulator as com.bliss.maraithonmobile after the production run. The verification script now builds once, mints the UI-test magic token immediately before launch, and retries with a fresh token/run id if production rejects a one-time token."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T02:13:25Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial Chief-of-Staff UX audit spec saved."
+    },
+    {
+      "at": "2026-05-26T02:13:25Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "User requested audit and implementation with delegated product decisions."
+    },
+    {
+      "at": "2026-05-26T02:36:53Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed Chief-of-Staff UX upgrade and passed final production simulator verification for run 20260526023525."
+    }
+  ]
+}

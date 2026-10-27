@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+project="${MARAITHON_GCP_PROJECT:-maraithon}"
+region="${MARAITHON_GCP_REGION:-us-central1}"
+service="${MARAITHON_GCP_SERVICE:-maraithon}"
+target="${MARAITHON_SLACK_REPLAY_USER:-}"
+lower="${MARAITHON_SLACK_REPLAY_LOWER:-}"
+upper="${MARAITHON_SLACK_REPLAY_UPPER:-}"
+job="${service}-todo-validation"
+
+require_command gcloud
+
+if [[ "${project}" != "maraithon" ]]; then
+  echo "Refusing to replay an unpinned GCP project: ${project}" >&2
+  exit 64
+fi
+
+if [[ "${target}" != "kent@runner.now" ]]; then
+  echo "Refusing Slack replay for an unauthorized account" >&2
+  exit 64
+fi
+
+if [[ ! "${lower}" =~ ^[0-9]+$ || ! "${upper}" =~ ^[0-9]+$ || "${upper}" -le "${lower}" ]]; then
+  echo "Slack replay bounds must be a valid half-open Unix-second window" >&2
+  exit 64
+fi
+
+audit_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+if ! gcloud run jobs execute "${job}" \
+  --project "${project}" \
+  --region "${region}" \
+  --args="^@^eval@Maraithon.Release.replay_authorized_slack_source_window" \
+  --update-env-vars "POOL_SIZE=2,SLACK_REPLAY_USER=${target},SLACK_REPLAY_LOWER=${lower},SLACK_REPLAY_UPPER=${upper}" \
+  --wait \
+  --quiet; then
+  audit_error=""
+
+  for _attempt in $(seq 1 20); do
+    audit_error="$(gcloud logging read \
+      "resource.type=cloud_run_job AND resource.labels.job_name=${job} AND timestamp>=\"${audit_started_at}\" AND textPayload:\"SLACK_SOURCE_REPLAY_AUDIT_ERROR=\"" \
+      --project "${project}" \
+      --limit 1 \
+      --order=desc \
+      --format 'value(textPayload)' 2>/dev/null || true)"
+
+    if [[ "${audit_error}" == SLACK_SOURCE_REPLAY_AUDIT_ERROR=* ]]; then
+      break
+    fi
+
+    sleep 3
+  done
+
+  if [[ "${audit_error}" == SLACK_SOURCE_REPLAY_AUDIT_ERROR=* ]]; then
+    echo "${audit_error}" >&2
+  else
+    echo "Slack source replay failed before an aggregate-only report was available" >&2
+  fi
+
+  exit 1
+fi
+
+audit_report=""
+for _attempt in $(seq 1 20); do
+  audit_report="$(gcloud logging read \
+    "resource.type=cloud_run_job AND resource.labels.job_name=${job} AND timestamp>=\"${audit_started_at}\" AND textPayload:\"SLACK_SOURCE_REPLAY_AUDIT=\"" \
+    --project "${project}" \
+    --limit 1 \
+    --order=desc \
+    --format 'value(textPayload)' 2>/dev/null || true)"
+
+  if [[ "${audit_report}" == SLACK_SOURCE_REPLAY_AUDIT=* ]]; then
+    break
+  fi
+
+  sleep 3
+done
+
+if [[ "${audit_report}" != SLACK_SOURCE_REPLAY_AUDIT=* ]]; then
+  echo "Slack source replay completed without its aggregate report" >&2
+  exit 1
+fi
+
+echo "${audit_report}"

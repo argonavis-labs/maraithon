@@ -1,0 +1,167 @@
+name: Mobile Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'apps/mobile/**'
+      - 'apps/assistant-progress/**'
+      - 'apps/people-network/**'
+      - 'scripts/ci/assign-testflight-group.mjs'
+      - '.github/workflows/mobile-release.yml'
+      - 'Makefile'
+  workflow_dispatch:
+    inputs:
+      release_environment:
+        description: "Which TestFlight track to publish"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+# Keep build uploads and TestFlight group assignment ordered across every ref.
+concurrency:
+  group: mobile-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.repository == 'argonavis-labs/maraithon' && vars.MARAITHON_MOBILE_RELEASE_ENABLED == 'true'
+    name: Build & Upload to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      MOBILE_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || (startsWith(github.ref, 'refs/tags/v') && 'production') || 'staging' }}
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      ASC_APP_ID: '6773374784'
+      APPLE_TEAM_ID: PS5W7BFTQ2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # We only build the iOS app; subtree only.
+          sparse-checkout: |
+            apps/mobile
+            apps/assistant-progress
+            apps/people-network
+            scripts/ci
+            Makefile
+          fetch-depth: 1
+
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Check required secrets
+        env:
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPSTORE_CERTIFICATES_FILE_BASE64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          APPSTORE_CERTIFICATES_PASSWORD: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in ASC_KEY_ID ASC_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8 APPSTORE_CERTIFICATES_FILE_BASE64 APPSTORE_CERTIFICATES_PASSWORD; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error title=Missing GitHub secret::${key} is required for mobile TestFlight releases"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Materialize App Store Connect API key
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "APP_STORE_CONNECT_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      # Reuse the team distribution identity. A fresh runner must not create
+      # development certificates or revoke other runners' signing assets.
+      - name: Import distribution certificate
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        with:
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+
+      - name: Download App Store provisioning profile
+        uses: apple-actions/download-provisioning-profiles@2126b5f86a0e2863cbf4d2d312112b22b943a594 # v6.1.0
+        with:
+          bundle-id: com.bliss.maraithonmobile
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          api-private-key: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
+      - name: Set build number from GitHub run
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER="$(date -u +%Y%m%d%H%M%S)"
+          echo "MARAITHON_MOBILE_BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Build and upload to TestFlight
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: make testflight-mobile
+
+      - name: Resolve TestFlight group names
+        id: tf_groups
+        run: |
+          set -euo pipefail
+          if [ "$MOBILE_ENV" = "production" ]; then
+            echo "names=Founders" >> "$GITHUB_OUTPUT"
+            echo "optional_names=" >> "$GITHUB_OUTPUT"
+          else
+            echo "names=Founders" >> "$GITHUB_OUTPUT"
+            echo "optional_names=Staging" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read app version
+        id: app_version
+        working-directory: apps/mobile
+        run: |
+          VERSION="$(awk '/MARKETING_VERSION:/ {print $2; exit}' project.yml)"
+          BUILD="$(awk '/CURRENT_PROJECT_VERSION:/ {print $2; exit}' project.yml)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+
+      - name: Assign build to TestFlight group
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          ASC_VERSION_STRING: ${{ steps.app_version.outputs.version }}
+          ASC_BUILD_NUMBER: ${{ steps.app_version.outputs.build }}
+          TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.names }}
+          OPTIONAL_TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.optional_names }}
+          REQUIRED_TESTER_EMAILS: kent.fenwick@gmail.com
+        run: node scripts/ci/assign-testflight-group.mjs
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## Mobile Release"
+            echo ""
+            echo "- Environment: \`${MOBILE_ENV}\`"
+            echo "- Version: \`${{ steps.app_version.outputs.version }}\`"
+            echo "- Build: \`${{ steps.app_version.outputs.build }}\`"
+            echo "- TestFlight groups: \`${{ steps.tf_groups.outputs.names }}\`"
+            echo "- Optional TestFlight groups: \`${{ steps.tf_groups.outputs.optional_names }}\`"
+            echo "- Required tester: \`kent.fenwick@gmail.com\`"
+            echo "- Trigger: \`${{ github.event_name }}\` on \`${{ github.ref }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

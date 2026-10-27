@@ -1,0 +1,88 @@
+[
+  {
+    "id": "proactive_send_hold_001",
+    "category": "proactive_send_hold",
+    "summary": "Urgent evidence-backed todo sends now.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_ids": ["todo-001"], "urgency": 0.94},
+    "mock_output": {"decision": "send_now", "dedupe_key": "proactive:todo-001", "message_class": "todo_digest"},
+    "expected": {
+      "output": {"decision": "send_now", "dedupe_key": "proactive:todo-001"},
+      "ledger": {"event_type": "proactive.sent", "status": "sent", "result_object_refs": {"dedupe_key": "proactive:todo-001"}}
+    }
+  },
+  {
+    "id": "proactive_send_hold_002",
+    "category": "proactive_send_hold",
+    "summary": "Duplicate nudge holds.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_ids": ["todo-002"], "recent_push": true},
+    "mock_output": {"decision": "hold", "dedupe_key": "proactive:todo-002", "reason": "recent duplicate"},
+    "expected": {
+      "output": {"decision": "hold", "dedupe_key": "proactive:todo-002"},
+      "ledger": {"event_type": "proactive.held", "status": "held", "result_object_refs": {"dedupe_key": "proactive:todo-002"}}
+    }
+  },
+  {
+    "id": "proactive_send_hold_003",
+    "category": "proactive_send_hold",
+    "summary": "Low-confidence open loop holds.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_ids": ["todo-003"], "confidence": 0.36},
+    "mock_output": {"decision": "hold", "dedupe_key": "proactive:todo-003"},
+    "expected": {"output": {"decision": "hold", "dedupe_key": "proactive:todo-003"}}
+  },
+  {
+    "id": "proactive_send_hold_004",
+    "category": "proactive_send_hold",
+    "summary": "Time-sensitive external deadline sends.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_ids": ["todo-004"], "deadline": "today"},
+    "mock_output": {"decision": "send_now", "dedupe_key": "proactive:todo-004"},
+    "expected": {"output": {"decision": "send_now", "dedupe_key": "proactive:todo-004"}}
+  },
+  {
+    "id": "proactive_send_hold_005",
+    "category": "proactive_send_hold",
+    "summary": "Weekend non-urgent work holds.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_ids": ["todo-005"], "context": "weekend"},
+    "mock_output": {"decision": "hold", "dedupe_key": "proactive:todo-005"},
+    "expected": {"output": {"decision": "hold", "dedupe_key": "proactive:todo-005"}}
+  },
+  {
+    "id": "proactive_send_hold_006",
+    "category": "proactive_send_hold",
+    "summary": "Source freshness error holds rather than inventing urgency.",
+    "input": {"user_id": "assistant-eval@example.com", "source_status": "error"},
+    "mock_output": {"decision": "hold", "reason": "source freshness error"},
+    "expected": {"output": {"decision": "hold"}}
+  },
+  {
+    "id": "proactive_send_hold_007",
+    "category": "proactive_send_hold",
+    "summary": "Repeated ignored digest holds.",
+    "input": {"user_id": "assistant-eval@example.com", "dismissed_recently": true},
+    "mock_output": {"decision": "hold", "reason": "user ignored recent nudges"},
+    "expected": {"output": {"decision": "hold"}}
+  },
+  {
+    "id": "proactive_send_hold_008",
+    "category": "proactive_send_hold",
+    "summary": "Important family logistics sends.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_ids": ["todo-008"], "life_domain": "home"},
+    "mock_output": {"decision": "send_now", "dedupe_key": "proactive:todo-008"},
+    "expected": {"output": {"decision": "send_now", "dedupe_key": "proactive:todo-008"}}
+  },
+  {
+    "id": "proactive_send_hold_009",
+    "category": "proactive_send_hold",
+    "summary": "Already completed todo holds.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_status": "done"},
+    "mock_output": {"decision": "hold", "reason": "already done"},
+    "expected": {"output": {"decision": "hold"}}
+  },
+  {
+    "id": "proactive_send_hold_010",
+    "category": "proactive_send_hold",
+    "summary": "No open loops holds.",
+    "input": {"user_id": "assistant-eval@example.com", "open_loop_count": 0},
+    "mock_output": {"decision": "hold", "reason": "nothing actionable"},
+    "expected": {"output": {"decision": "hold"}}
+  }
+]

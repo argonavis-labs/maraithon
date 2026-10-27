@@ -1,0 +1,474 @@
+defmodule Maraithon.Accounts do
+  @moduledoc """
+  User identity and session management.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.Accounts.{MagicLink, User, UserSession}
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.PrivacyErasure.WriteFence
+  alias Maraithon.Repo
+
+  @magic_link_ttl_seconds 900
+  @session_ttl_seconds 60 * 24 * 60 * 60
+  @magic_code_length 8
+  @magic_code_alphabet "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+  def normalize_email(email) when is_binary(email) do
+    email
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  def normalize_email(_), do: ""
+
+  def get_user(id) when is_binary(id), do: Repo.get(User, id)
+  def get_user(_), do: nil
+
+  @doc "The model id this user chose in Settings, or nil for the workspace default."
+  def assistant_model(user_id) when is_binary(user_id) do
+    case Repo.get(User, user_id) do
+      %User{assistant_model: model} -> model
+      _ -> nil
+    end
+  end
+
+  def assistant_model(_), do: nil
+
+  @doc "Sets or clears the user's model id. Every assistant call for the user follows it."
+  def update_assistant_model(%User{} = user, value) do
+    user
+    |> User.assistant_model_changeset(%{assistant_model: value})
+    |> Repo.update()
+  end
+
+  def get_user_by_email(email) when is_binary(email) do
+    normalized = normalize_email(email)
+
+    case normalized do
+      "" -> nil
+      value -> Repo.get_by(User, email: value)
+    end
+  end
+
+  def get_or_create_user_by_email(email) when is_binary(email) do
+    normalized = normalize_email(email)
+
+    cond do
+      not valid_email?(normalized) ->
+        {:error, :invalid_email}
+
+      true ->
+        case Repo.get(User, normalized) do
+          nil ->
+            %User{}
+            |> User.changeset(%{
+              id: normalized,
+              email: normalized,
+              is_admin: admin_email?(normalized)
+            })
+            |> Repo.insert()
+            |> normalize_user_changeset_error()
+
+          user ->
+            with :ok <- WriteFence.check_user(user.id) do
+              maybe_promote_admin(user)
+            end
+        end
+    end
+  end
+
+  def ensure_primary_admin_user! do
+    case primary_admin_email() do
+      nil ->
+        {:ok, :not_configured}
+
+      primary ->
+        case get_or_create_user_by_email(primary) do
+          {:ok, user} -> {:ok, user}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  rescue
+    error in [DBConnection.ConnectionError, Postgrex.Error] ->
+      {:error, error}
+  end
+
+  def request_magic_link(email, opts \\ []) when is_binary(email) do
+    with {:ok, user} <- get_or_create_user_by_email(email) do
+      token = generate_token()
+      now = DateTime.utc_now()
+      expires_at = DateTime.add(now, @magic_link_ttl_seconds, :second)
+
+      attrs = %{
+        user_id: user.id,
+        token_hash: hash_token(token),
+        expires_at: expires_at,
+        sent_to_email: user.email,
+        ip: Keyword.get(opts, :ip),
+        user_agent: Keyword.get(opts, :user_agent)
+      }
+
+      case insert_magic_link(user, attrs) do
+        {:ok, _record} ->
+          {:ok, %{user: user, token: token, expires_at: expires_at}}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  @doc """
+  App Store review demo account ("bypass") configuration.
+
+  Apple's reviewer signs in with the email + code listed in App Store
+  Connect; the email skips Postmark delivery and the listed code acts as
+  the magic code. Returns `{:ok, %{email: ..., code_hash: ...}}` when both
+  `APP_REVIEW_BYPASS_EMAIL` and `APP_REVIEW_BYPASS_CODE` are configured,
+  `:disabled` otherwise — dev/test leave them unset so the bypass no-ops.
+  """
+  def app_review_bypass_config do
+    config = Application.get_env(:maraithon, :app_review_bypass) || []
+    email = normalize_email(config[:email] || "")
+    code = normalize_magic_code(config[:code] || "")
+
+    if valid_email?(email) and valid_magic_code?(code) do
+      {:ok, %{email: email, code_hash: hash_token(code)}}
+    else
+      :disabled
+    end
+  end
+
+  def request_magic_code(email, opts \\ []) when is_binary(email) do
+    case app_review_bypass_config() do
+      {:ok, %{email: bypass_email}} ->
+        if normalize_email(email) == bypass_email do
+          request_bypass_magic_code(email)
+        else
+          request_real_magic_code(email, opts)
+        end
+
+      :disabled ->
+        request_real_magic_code(email, opts)
+    end
+  end
+
+  # The reviewer gets a real user row but no MagicLink insert and no email:
+  # the code they already have (from App Store Connect) is the bypass code.
+  defp request_bypass_magic_code(email) do
+    with {:ok, user} <- get_or_create_user_by_email(email) do
+      expires_at = DateTime.add(DateTime.utc_now(), @magic_link_ttl_seconds, :second)
+      {:ok, %{user: user, code: :bypass, expires_at: expires_at}}
+    end
+  end
+
+  defp request_real_magic_code(email, opts) do
+    with {:ok, user} <- get_or_create_user_by_email(email) do
+      token = generate_token()
+      code = generate_magic_code()
+      now = DateTime.utc_now()
+      expires_at = DateTime.add(now, @magic_link_ttl_seconds, :second)
+
+      attrs = %{
+        user_id: user.id,
+        token_hash: hash_token(token),
+        code_hash: hash_token(normalize_magic_code(code)),
+        expires_at: expires_at,
+        sent_to_email: user.email,
+        ip: Keyword.get(opts, :ip),
+        user_agent: Keyword.get(opts, :user_agent)
+      }
+
+      case insert_magic_link(user, attrs) do
+        {:ok, _record} ->
+          {:ok, %{user: user, code: format_magic_code(code), expires_at: expires_at}}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  def consume_magic_link(token, opts \\ []) when is_binary(token) do
+    now = DateTime.utc_now()
+    token_hash = hash_token(token)
+
+    query =
+      from(link in MagicLink,
+        where: link.token_hash == ^token_hash,
+        where: is_nil(link.used_at),
+        where: link.expires_at > ^now,
+        preload: [:user]
+      )
+
+    consume_magic_record(Repo.one(query), now, opts)
+  end
+
+  def consume_magic_code(code, opts \\ []) when is_binary(code) do
+    normalized_code = normalize_magic_code(code)
+
+    case app_review_bypass_config() do
+      {:ok, %{email: bypass_email, code_hash: code_hash}} ->
+        if valid_magic_code?(normalized_code) and
+             Plug.Crypto.secure_compare(hash_token(normalized_code), code_hash) do
+          consume_bypass_magic_code(bypass_email, opts)
+        else
+          consume_real_magic_code(normalized_code, opts)
+        end
+
+      :disabled ->
+        consume_real_magic_code(normalized_code, opts)
+    end
+  end
+
+  defp consume_bypass_magic_code(bypass_email, opts) do
+    case get_user_by_email(bypass_email) do
+      nil ->
+        {:error, :invalid_or_expired_code}
+
+      user ->
+        maybe_confirm_user(user)
+        create_session_for_user(user, opts)
+    end
+  end
+
+  defp consume_real_magic_code(normalized_code, opts) do
+    if valid_magic_code?(normalized_code) do
+      now = DateTime.utc_now()
+      code_hash = hash_token(normalized_code)
+
+      query =
+        from(link in MagicLink,
+          where: link.code_hash == ^code_hash,
+          where: is_nil(link.used_at),
+          where: link.expires_at > ^now,
+          order_by: [desc: link.inserted_at],
+          limit: 1,
+          preload: [:user]
+        )
+
+      consume_magic_record(Repo.one(query), now, opts, :invalid_or_expired_code)
+    else
+      {:error, :invalid_or_expired_code}
+    end
+  end
+
+  def create_session_for_user(%User{} = user, opts \\ []) do
+    token = generate_token()
+    now = DateTime.utc_now()
+    expires_at = DateTime.add(now, @session_ttl_seconds, :second)
+
+    attrs = %{
+      user_id: user.id,
+      token_hash: hash_token(token),
+      expires_at: expires_at,
+      last_seen_at: now,
+      ip: Keyword.get(opts, :ip),
+      user_agent: Keyword.get(opts, :user_agent)
+    }
+
+    Repo.transaction(fn ->
+      locked_user = WriteFence.lock_user_writable!(user.id)
+
+      case %UserSession{} |> UserSession.changeset(attrs) |> Repo.insert() do
+        {:ok, session} ->
+          %{user: locked_user, token: token, session: session, expires_at: expires_at}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, session} -> {:ok, session}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def get_user_by_session_token(token) when is_binary(token) do
+    now = DateTime.utc_now()
+    token_hash = hash_token(token)
+
+    query =
+      from(session in UserSession,
+        join: user in User,
+        on: user.id == session.user_id,
+        where: session.token_hash == ^token_hash,
+        where: is_nil(session.revoked_at),
+        where: session.expires_at > ^now,
+        select: user
+      )
+
+    Repo.one(query)
+  end
+
+  def get_active_session(token) when is_binary(token) do
+    now = DateTime.utc_now()
+    token_hash = hash_token(token)
+
+    query =
+      from(session in UserSession,
+        where: session.token_hash == ^token_hash,
+        where: is_nil(session.revoked_at),
+        where: session.expires_at > ^now
+      )
+
+    Repo.one(query)
+  end
+
+  def revoke_session(token) when is_binary(token) do
+    case get_active_session(token) do
+      nil -> :ok
+      session -> Repo.update(Ecto.Changeset.change(session, revoked_at: DateTime.utc_now()))
+    end
+  end
+
+  def connected_accounts?(user_id) when is_binary(user_id) do
+    if ConnectedAccounts.has_any?(user_id) do
+      true
+    else
+      _ = ConnectedAccounts.sync_from_oauth_tokens(user_id)
+      ConnectedAccounts.has_any?(user_id)
+    end
+  end
+
+  def connected_accounts?(_), do: false
+
+  def primary_admin_email do
+    System.get_env("PRIMARY_ADMIN_EMAIL", "")
+    |> normalize_email()
+    |> case do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp maybe_promote_admin(%User{} = user) do
+    if admin_email?(user.email) and not user.is_admin do
+      user
+      |> Ecto.Changeset.change(is_admin: true)
+      |> Repo.update()
+    else
+      {:ok, user}
+    end
+  end
+
+  defp valid_email?(email) when is_binary(email) do
+    email != "" and byte_size(email) <= 320 and String.match?(email, ~r/^[^\s]+@[^\s]+$/)
+  end
+
+  defp valid_email?(_email), do: false
+
+  defp normalize_user_changeset_error({:error, %Ecto.Changeset{errors: errors}}) do
+    if Keyword.has_key?(errors, :email) do
+      {:error, :invalid_email}
+    else
+      {:error, :invalid_user}
+    end
+  end
+
+  defp normalize_user_changeset_error(result), do: result
+
+  defp maybe_confirm_user(%User{confirmed_at: nil} = user) do
+    user
+    |> Ecto.Changeset.change(confirmed_at: DateTime.utc_now())
+    |> Repo.update()
+  end
+
+  defp maybe_confirm_user(_user), do: :ok
+
+  defp insert_magic_link(%User{} = user, attrs) do
+    Repo.transaction(fn ->
+      _user = WriteFence.lock_user_writable!(user.id)
+
+      case %MagicLink{} |> MagicLink.changeset(attrs) |> Repo.insert() do
+        {:ok, link} -> link
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, link} -> {:ok, link}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp consume_magic_record(record, now, opts, error_reason \\ :invalid_or_expired_link)
+
+  defp consume_magic_record(nil, _now, _opts, error_reason), do: {:error, error_reason}
+
+  defp consume_magic_record(%MagicLink{} = link, now, opts, error_reason) do
+    Repo.transaction(fn ->
+      locked_user = WriteFence.lock_user_writable!(link.user_id)
+
+      locked_link =
+        Repo.one(
+          from(candidate in MagicLink, where: candidate.id == ^link.id, lock: "FOR UPDATE")
+        ) ||
+          Repo.rollback(error_reason)
+
+      case Repo.update(Ecto.Changeset.change(locked_link, used_at: now)) do
+        {:ok, _used_link} ->
+          maybe_confirm_user(locked_user)
+          create_session_for_user(locked_user, opts)
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+    |> case do
+      {:ok, {:ok, session}} -> {:ok, session}
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp admin_email?(email) do
+    case primary_admin_email() do
+      nil -> false
+      primary -> normalize_email(email) == primary
+    end
+  end
+
+  defp generate_token do
+    :crypto.strong_rand_bytes(32)
+    |> Base.url_encode64(padding: false)
+  end
+
+  defp generate_magic_code do
+    alphabet = String.graphemes(@magic_code_alphabet)
+    alphabet_size = length(alphabet)
+
+    @magic_code_length
+    |> :crypto.strong_rand_bytes()
+    |> :binary.bin_to_list()
+    |> Enum.map_join(fn byte ->
+      Enum.at(alphabet, rem(byte, alphabet_size))
+    end)
+  end
+
+  defp format_magic_code(code) do
+    normalized = normalize_magic_code(code)
+    {first, second} = String.split_at(normalized, 4)
+    first <> "-" <> second
+  end
+
+  defp normalize_magic_code(code) when is_binary(code) do
+    code
+    |> String.upcase()
+    |> String.replace(~r/[^A-Z0-9]/, "")
+  end
+
+  defp normalize_magic_code(_code), do: ""
+
+  defp valid_magic_code?(code) when is_binary(code) do
+    String.length(code) == @magic_code_length and
+      String.match?(code, ~r/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]+$/)
+  end
+
+  defp valid_magic_code?(_code), do: false
+
+  defp hash_token(token) do
+    :crypto.hash(:sha256, token)
+  end
+end

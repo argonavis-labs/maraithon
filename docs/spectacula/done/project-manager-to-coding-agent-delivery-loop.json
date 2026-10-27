@@ -1,0 +1,75 @@
+{
+  "spec_id": "project-manager-to-coding-agent-delivery-loop",
+  "slug": "project-manager-to-coding-agent-delivery-loop",
+  "title": "Project Manager To Coding Agent Delivery Loop",
+  "stage": "done",
+  "spec_path": "../specs/project-manager-to-coding-agent-delivery-loop.md",
+  "created_at": "2026-04-02T09:52:05Z",
+  "approved_at": "2026-04-02T09:52:05Z",
+  "started_at": "2026-04-02T10:12:00Z",
+  "completed_at": "2026-04-02T10:47:45Z",
+  "updated_at": "2026-04-02T10:47:45Z",
+  "summary": "Completed the first delivery-loop slice: project recommendations are durable workflow decisions, repo access is explicit and auditable, implementation runs launch through the runtime with stable ids, and branch/PR status is persisted and visible in chat and on the dashboard.",
+  "next_action": "Add deeper GitHub delivery execution on top of the run spine when a dedicated coding-agent or PR opener is ready to consume the stable implementation-run ids.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/project-oriented-conversational-operator.md",
+    "docs/spectacula/specs/unified-telegram-operator-chat.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "The recommendation-decision, repo-grant, implementation-run, assistant-tool, and dashboard surfaces passed targeted tests and the repository later passed `mix precommit` on the completed stack."
+  },
+  "resume_context": {
+    "last_completed_step": "Closed the workflow loop from recommendation acceptance through explicit repo access, tracked implementation runs, and persisted branch/PR status.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "4. Product Workflow",
+      "5. Data Model",
+      "6. Backend and Assistant Changes",
+      "9. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/project-manager-to-coding-agent-delivery-loop.md",
+      "priv/repo/migrations/20260402102333_create_project_delivery_workflows.exs",
+      "lib/maraithon/projects.ex",
+      "lib/maraithon/projects/recommendation_decision.ex",
+      "lib/maraithon/projects/repo_grant.ex",
+      "lib/maraithon/projects/implementation_run.ex",
+      "lib/maraithon/projects/delivery_launcher.ex",
+      "lib/maraithon/telegram_assistant/toolbox.ex",
+      "lib/maraithon/telegram_assistant/client/llm_json.ex",
+      "lib/maraithon_web/live/dashboard_live.ex"
+    ],
+    "notes": "The first pass now has a durable run spine and explicit repo-grant boundary, so later coding-agent or GitHub-specific execution can extend the same objects instead of inventing a parallel workflow."
+  },
+  "history": [
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "ready",
+      "note": "Created and immediately approved the follow-on spec for recommendation acceptance, repo grants, coding runs, and PR lifecycle."
+    },
+    {
+      "at": "2026-04-02T10:12:00Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "Started implementation of recommendation decisions, repo grants, tracked implementation runs, and the assistant/dashboard workflow surface."
+    },
+    {
+      "at": "2026-04-02T10:47:45Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Marked the delivery-loop slice done after the run-launch, run-update, branch/PR visibility, and dashboard/chat workflows matched the canonical spec."
+    }
+  ]
+}

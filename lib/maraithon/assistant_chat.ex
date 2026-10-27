@@ -1,0 +1,1215 @@
+defmodule Maraithon.AssistantChat do
+  @moduledoc """
+  Surface-neutral assistant chat entrypoint for native mobile.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.Repo
+  alias Maraithon.PrivacyErasure.WriteFence
+
+  alias Maraithon.AssistantChat.{
+    DirectIntent,
+    Execution,
+    SecretRequestGuard,
+    ThreadNaming,
+    TodoThreadPrimer
+  }
+
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.{PreparedAction, Run, Runner}
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.Todos
+
+  @max_message_bytes 16_384
+  @max_thread_title_bytes 160
+  @max_pending_requests_per_user 50
+
+  def list_threads(user_id, opts \\ []) when is_binary(user_id) do
+    {:ok, TelegramConversations.list_mobile_threads(user_id, opts)}
+  end
+
+  @doc """
+  Cheap collection version for conditional GETs: one aggregate over the
+  user's mobile threads. Conversation `updated_at` is a reliable message
+  signal — every turn insert goes through
+  `TelegramConversations.append_turn/2`, which updates the conversation row
+  (last_turn_at/summary) inside the same transaction, and `delete_turn/2`
+  does the same — so new or deleted messages bump the thread's updated_at
+  without needing a join over turns.
+  """
+  def collection_version(user_id, opts \\ []) when is_binary(user_id) do
+    TelegramConversations.mobile_threads_query(user_id, opts)
+    |> select([c], {count(c.id), max(c.updated_at)})
+    |> Repo.one()
+  end
+
+  def create_thread(user_id, attrs \\ %{}) when is_binary(user_id) and is_map(attrs) do
+    with :ok <- WriteFence.check_user(user_id),
+         {:ok, title} <- thread_title(attrs, default: ThreadNaming.default_title()) do
+      TelegramConversations.create_mobile_thread(user_id, Map.put(attrs, "title", title))
+    end
+  end
+
+  @doc """
+  Finds or creates the mobile chat thread linked to a todo and primes it.
+
+  Options are passed to `TodoThreadPrimer.ensure/3`; web callers use
+  `prepare_timeout_ms` to give Gmail/Slack target resolution more room than
+  the mobile default.
+  """
+  def get_or_create_todo_thread(user_id, todo_id, opts \\ [])
+
+  def get_or_create_todo_thread(user_id, todo_id, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_list(opts) do
+    with :ok <- WriteFence.check_user(user_id) do
+      do_get_or_create_todo_thread(user_id, todo_id, opts)
+    end
+  end
+
+  defp do_get_or_create_todo_thread(user_id, todo_id, opts) do
+    case Todos.get_for_user(user_id, todo_id) do
+      nil ->
+        {:error, :not_found}
+
+      todo ->
+        metadata = todo_thread_metadata(todo)
+
+        case TelegramConversations.get_mobile_thread_for_todo(user_id, todo.id) do
+          %Conversation{} = conversation ->
+            conversation
+            |> TelegramConversations.update_metadata(metadata)
+            |> case do
+              {:ok, updated_conversation} -> prime_todo_thread(updated_conversation, todo, opts)
+              {:error, reason} -> {:error, reason}
+            end
+
+          nil ->
+            attrs = %{
+              "client_thread_id" => "todo-#{todo.id}",
+              "root_message_id" => "todo:#{todo.id}",
+              "title" => todo_thread_title(todo),
+              "metadata" => metadata
+            }
+
+            case TelegramConversations.create_mobile_thread(user_id, attrs) do
+              {:ok, conversation} ->
+                prime_todo_thread(conversation, todo, opts)
+
+              {:error, _changeset} ->
+                case TelegramConversations.get_mobile_thread_for_todo(user_id, todo.id) do
+                  %Conversation{} = conversation -> prime_todo_thread(conversation, todo, opts)
+                  nil -> {:error, :thread_create_failed}
+                end
+            end
+        end
+    end
+  end
+
+  def get_thread(user_id, thread_id) when is_binary(user_id) and is_binary(thread_id) do
+    case TelegramConversations.get_mobile_thread(user_id, thread_id) do
+      %Conversation{} = conversation -> {:ok, conversation}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def update_thread(user_id, thread_id, attrs)
+      when is_binary(user_id) and is_binary(thread_id) and is_map(attrs) do
+    with %Conversation{} = conversation <-
+           TelegramConversations.get_mobile_thread(user_id, thread_id),
+         {:ok, title} <- thread_title(attrs),
+         {:ok, updated_conversation} <-
+           TelegramConversations.update_metadata(conversation, %{"title" => title}) do
+      {:ok, reload_thread(updated_conversation)}
+    else
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def delete_message(user_id, thread_id, message_id)
+      when is_binary(user_id) and is_binary(thread_id) and is_binary(message_id) do
+    with %Conversation{} = conversation <-
+           TelegramConversations.get_mobile_thread(user_id, thread_id),
+         nil <- TelegramConversations.active_run_for_conversation(conversation.id),
+         {:ok, updated_conversation} <-
+           TelegramConversations.delete_turn(conversation, message_id) do
+      {:ok, reload_thread(updated_conversation)}
+    else
+      %Run{} -> {:error, :assistant_run_in_progress}
+      nil -> {:error, :not_found}
+      {:error, :not_found} -> {:error, :message_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def send_message(user_id, thread_id, attrs)
+      when is_binary(user_id) and is_binary(thread_id) and is_map(attrs) do
+    with :ok <- WriteFence.check_user(user_id),
+         %Conversation{} = conversation <-
+           TelegramConversations.get_mobile_thread(user_id, thread_id),
+         {:ok, body} <- message_body(attrs),
+         {:ok, client_message_id} <- client_message_id(attrs) do
+      accept_message(conversation, body, client_message_id)
+    else
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def get_run(user_id, run_id) when is_binary(user_id) and is_binary(run_id) do
+    case Repo.get_by(Run, id: run_id, user_id: user_id, surface: "mobile") do
+      %Run{} = run -> {:ok, Run.hydrate_payloads(run)}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def decide_prepared_action(user_id, prepared_action_id, decision, attrs \\ %{})
+      when is_binary(user_id) and is_binary(prepared_action_id) and is_map(attrs) do
+    normalized_decision = normalize_decision(decision)
+
+    with :ok <- WriteFence.check_user(user_id),
+         decision when decision in [:confirm, :reject] <- normalized_decision,
+         %PreparedAction{} = prepared_action <-
+           PreparedAction
+           |> Repo.get_by(id: prepared_action_id, user_id: user_id, surface: "mobile")
+           |> PreparedAction.hydrate_payload(),
+         %Conversation{} = conversation <-
+           Repo.get(Conversation, prepared_action.conversation_id),
+         {:ok, client_message_id} <- optional_client_message_id(attrs) do
+      apply_prepared_action_decision(
+        prepared_action,
+        conversation,
+        decision,
+        client_message_id,
+        attrs
+      )
+    else
+      :invalid -> {:error, :invalid_decision}
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Only the durable job handler executes requests. This compatibility entrypoint
+  # now queues work instead of creating a second, unowned execution path.
+  def run_queued_request(request), do: Maraithon.AssistantChat.ThreadWorker.enqueue(request)
+
+  @doc false
+  def execute_request(run, conversation, user_turn, resume? \\ false) do
+    previous_metadata = Logger.metadata()
+    Logger.metadata(target_reference: run.id, prompt_kind: "chat")
+    # The run's user picks the model for every provider call in this request.
+    Maraithon.LLM.UserModel.bind(run.user_id)
+
+    try do
+      do_execute_request(run, conversation, user_turn, resume?)
+    after
+      Logger.reset_metadata(previous_metadata)
+    end
+  end
+
+  defp do_execute_request(run, conversation, user_turn, resume?) do
+    if resume? do
+      attrs = model_request_attrs(run, conversation, user_turn)
+      Runner.resume_request(attrs)
+    else
+      dispatch_user_message(
+        conversation,
+        run,
+        user_turn,
+        user_turn.text,
+        local_intent_for(user_turn.text, conversation)
+      )
+    end
+  end
+
+  defp run_model_request(run, conversation, user_turn) do
+    Runner.run_inbound(model_request_attrs(run, conversation, user_turn))
+  end
+
+  defp model_request_attrs(run, conversation, user_turn) do
+    %{
+      user_id: run.user_id,
+      chat_id: run.chat_id,
+      text: user_turn.text,
+      conversation: conversation,
+      user_turn: user_turn,
+      surface: "mobile",
+      request_focus: request_focus_for(conversation),
+      linked_todo_id: linked_todo_id(conversation),
+      run: run,
+      started_at: run.started_at,
+      durable_processing: true,
+      source_message_id: user_turn.id
+    }
+  end
+
+  defp accept_message(conversation, body, client_message_id) do
+    # Acceptance is local. Model routing belongs to the owned execution job,
+    # so reconnects and duplicate requests never pay for another classifier.
+    route_profile = route_profile_for(body, local_intent_for(body, conversation), conversation)
+
+    # Privacy fence first, then the conversation. Concurrent retries serialize
+    # here, before either the run or the client-message identity is inserted.
+    result =
+      Repo.transaction(fn ->
+        _ = WriteFence.lock_user_writable!(conversation.user_id)
+
+        conversation =
+          Conversation
+          |> where([c], c.id == ^conversation.id and c.user_id == ^conversation.user_id)
+          |> lock("FOR UPDATE")
+          |> Repo.one!()
+          |> Conversation.hydrate()
+
+        case TelegramConversations.find_turn_by_client_message_id(
+               conversation.id,
+               client_message_id
+             ) do
+          %Turn{role: "user"} = existing ->
+            if existing.text != body, do: Repo.rollback(:client_message_id_conflict)
+            run_id = Turn.effective_assistant_run_id(existing)
+
+            run =
+              if run_id,
+                do:
+                  Repo.get_by(Run,
+                    id: run_id,
+                    conversation_id: conversation.id,
+                    user_id: conversation.user_id,
+                    surface: "mobile"
+                  )
+                  |> Run.hydrate_payloads()
+
+            # Never return some later run as the receipt for an earlier message.
+            %{thread: conversation, run: run, message: existing, duplicate?: true}
+
+          nil ->
+            insert_message_and_run(conversation, body, client_message_id, route_profile)
+
+          _ ->
+            Repo.rollback(:client_message_id_conflict)
+        end
+      end)
+
+    case result do
+      {:ok, accepted} ->
+        Maraithon.AssistantChat.Progress.changed(conversation.user_id, conversation.id)
+        {:ok, %{accepted | thread: reload_thread(accepted.thread)}}
+
+      error ->
+        error
+    end
+  end
+
+  defp insert_message_and_run(
+         %Conversation{} = conversation,
+         body,
+         client_message_id,
+         route_profile
+       ) do
+    pending =
+      Repo.all(
+        from r in Run,
+          where:
+            r.user_id == ^conversation.user_id and r.surface == "mobile" and
+              r.status in ["queued", "running"],
+          limit: ^@max_pending_requests_per_user,
+          select: r.id
+      )
+
+    if length(pending) >= @max_pending_requests_per_user, do: Repo.rollback(:assistant_queue_full)
+
+    now = DateTime.utc_now()
+    linked_todo = linked_todo_for(conversation)
+
+    with {:ok, run} <- create_queued_run(conversation, now, route_profile),
+         {:ok, {updated_conversation, user_turn}} <-
+           TelegramConversations.append_turn(conversation, %{
+             "role" => "user",
+             "client_message_id" => client_message_id,
+             "delivery_state" => "sent",
+             "text" => body,
+             "turn_kind" => "user_message",
+             "origin_type" => "chat",
+             "structured_data" =>
+               %{
+                 "surface" => "mobile",
+                 "client_message_id" => client_message_id,
+                 "run_id" => run.id
+               }
+               |> maybe_put_linked_todo(linked_todo)
+           }),
+         {:ok, updated_conversation} <-
+           TelegramConversations.update_metadata(updated_conversation, %{
+             "last_mobile_run_id" => run.id,
+             "title" => mobile_title(updated_conversation, body)
+           }),
+         {:ok, _job} <- Execution.enqueue(run, user_turn) do
+      %{thread: updated_conversation, run: run, message: user_turn, duplicate?: false}
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp local_intent_for(body, conversation) do
+    case SecretRequestGuard.response(body) do
+      {:ok, reply, structured_data} ->
+        {:ok,
+         %{
+           type: :credential_disclosure_guard,
+           reply: reply,
+           structured_data: structured_data
+         }}
+
+      :pass ->
+        DirectIntent.classify(body, conversation)
+    end
+  end
+
+  defp dispatch_user_message(
+         %Conversation{} = conversation,
+         %Run{} = run,
+         %Turn{} = user_turn,
+         _body,
+         {:ok,
+          %{
+            type: :credential_disclosure_guard,
+            reply: reply,
+            structured_data: structured_data
+          }}
+       ) do
+    with {:ok, _conversation, _turn, _delivery} <-
+           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+             conversation,
+             conversation.chat_id,
+             reply,
+             intent: "credential_disclosure_guard",
+             confidence: 1.0,
+             turn_kind: "assistant_reply",
+             origin_type: "system",
+             origin_id: user_turn.id,
+             structured_data:
+               Map.merge(structured_data, %{
+                 "surface" => "mobile",
+                 "run_id" => run.id,
+                 "message_class" => "assistant_reply",
+                 "direct_intent" => "credential_disclosure_guard"
+               })
+           ) do
+      TelegramAssistant.complete_run(run, %{
+        status: "completed",
+        result_summary: %{
+          surface: "mobile",
+          model_tier: "deterministic",
+          model_name: "secret_request_guard",
+          model_reasoning_effort: "none",
+          task_class: "credential_disclosure_guard",
+          route_reason: "direct_intent:credential_disclosure_guard",
+          message_class: "assistant_reply",
+          direct_intent: "credential_disclosure_guard",
+          tool_steps: 0,
+          llm_turns: 0
+        }
+      })
+    end
+  end
+
+  defp dispatch_user_message(
+         %Conversation{} = conversation,
+         %Run{} = run,
+         %Turn{} = user_turn,
+         _body,
+         {:ok, intent}
+       ) do
+    DirectIntent.execute(conversation, run, user_turn, intent)
+  end
+
+  defp dispatch_user_message(
+         %Conversation{} = conversation,
+         %Run{} = run,
+         %Turn{} = user_turn,
+         _body,
+         :nomatch
+       ) do
+    run_model_request(run, conversation, user_turn)
+  end
+
+  defp create_queued_run(%Conversation{} = conversation, now, route_profile) do
+    TelegramAssistant.start_run(%{
+      user_id: conversation.user_id,
+      chat_id: conversation.chat_id,
+      conversation_id: conversation.id,
+      surface: "mobile",
+      trigger_type: "inbound_message",
+      status: "queued",
+      model_provider: Map.fetch!(route_profile, :model_provider),
+      model_name: route_model_name(route_profile),
+      prompt_snapshot: %{},
+      result_summary: route_result_summary(route_profile),
+      started_at: now
+    })
+  end
+
+  defp route_profile_for(_body, {:ok, %{type: type}}, _conversation) do
+    type = Atom.to_string(type)
+
+    %{
+      tier: :deterministic,
+      task_class: type,
+      route_reason: "direct_intent:#{type}",
+      model_provider: "deterministic",
+      model_name: "direct_intent",
+      reasoning_effort: "none"
+    }
+  end
+
+  defp route_profile_for(_body, :nomatch, _conversation) do
+    %{
+      tier: :pending,
+      task_class: :pending,
+      route_reason: "awaiting_execution",
+      model_provider: TelegramAssistant.model_provider_name(),
+      model_name: TelegramAssistant.model_name()
+    }
+  end
+
+  defp route_result_summary(route_profile) do
+    %{
+      surface: "mobile",
+      model_tier: route_profile |> Map.get(:tier) |> route_value(),
+      task_class: route_profile |> Map.get(:task_class) |> route_value(),
+      route_reason: route_profile |> Map.get(:route_reason) |> route_value(),
+      model_name: route_model_name(route_profile),
+      model_reasoning_effort: Map.get(route_profile, :reasoning_effort)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp route_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp route_value(value), do: value
+
+  defp route_model_name(route_profile) do
+    Map.get(route_profile, :model_name) || Map.get(route_profile, :model)
+  end
+
+  defp apply_prepared_action_decision(
+         prepared_action,
+         conversation,
+         :reject,
+         client_message_id,
+         _attrs
+       ) do
+    case TelegramAssistant.reject_prepared_action(prepared_action) do
+      {:ok, updated_action} ->
+        _ = TelegramConversations.reopen(conversation)
+        _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+
+        with {:ok, _conversation, _turn, _result} <-
+               Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+                 conversation,
+                 updated_action.chat_id,
+                 "Understood. I cancelled that action.",
+                 client_message_id: client_message_id,
+                 turn_kind: "system_notice",
+                 origin_type: "prepared_action",
+                 origin_id: updated_action.id,
+                 structured_data: %{
+                   "surface" => "mobile",
+                   "prepared_action_id" => updated_action.id,
+                   "decision" => "reject"
+                 }
+               ) do
+          {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+        end
+
+      {:error, expired_action, :confirmation_expired} ->
+        {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
+
+      {:error, current_action, :already_handled} ->
+        {:ok, %{prepared_action: current_action, thread: reload_thread(conversation)}}
+
+      {:error, _current_action, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp apply_prepared_action_decision(
+         prepared_action,
+         conversation,
+         :confirm,
+         client_message_id,
+         attrs
+       ) do
+    execute_opts =
+      [durable: true]
+      |> maybe_put_payload_updater(prepared_action, attrs)
+
+    case TelegramAssistant.confirm_and_execute(prepared_action, execute_opts) do
+      {:ok, updated_action, result} ->
+        deliver_mobile_prepared_action_success(
+          updated_action,
+          result,
+          conversation,
+          client_message_id
+        )
+
+      {:ok, updated_action, result, :already_executed} ->
+        if TelegramAssistant.prepared_action_result_delivered?(updated_action) do
+          {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+        else
+          deliver_mobile_prepared_action_success(
+            updated_action,
+            result,
+            conversation,
+            client_message_id
+          )
+        end
+
+      {:error, expired_action, :confirmation_expired} ->
+        {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
+
+      {:error, updated_action, reason, failure_state}
+      when failure_state in [:already_failed, :permanent_failure, :manual_reconciliation] ->
+        if TelegramAssistant.prepared_action_result_delivered?(updated_action) do
+          {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+        else
+          deliver_mobile_prepared_action_failure(
+            updated_action,
+            reason,
+            conversation,
+            client_message_id
+          )
+        end
+
+      {:error, current_action, :already_handled} ->
+        {:ok, %{prepared_action: current_action, thread: reload_thread(conversation)}}
+
+      {:error, %PreparedAction{status: "confirmed"}, reason} ->
+        {:error,
+         {:prepared_action_execution_retryable,
+          TelegramAssistant.prepared_action_error_class(reason)}}
+
+      {:error, updated_action, reason} ->
+        deliver_mobile_prepared_action_failure(
+          updated_action,
+          reason,
+          conversation,
+          client_message_id
+        )
+    end
+  end
+
+  defp deliver_mobile_prepared_action_success(
+         updated_action,
+         result,
+         conversation,
+         _client_message_id
+       ) do
+    deliver_reserved_mobile_prepared_action_result(
+      updated_action,
+      conversation,
+      fn reserved_action ->
+        todo_completion = maybe_mark_linked_todo_done(reserved_action, conversation)
+
+        structured_data =
+          %{
+            "surface" => "mobile",
+            "prepared_action_id" => reserved_action.id,
+            "decision" => "confirm",
+            "result" => serialize_result(result)
+          }
+          |> Map.merge(todo_completion_structured_data(todo_completion))
+
+        Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+          conversation,
+          reserved_action.chat_id,
+          prepared_action_result_text(reserved_action, result),
+          client_message_id: prepared_action_result_client_message_id(reserved_action),
+          turn_kind: "action_result",
+          origin_type: "prepared_action",
+          origin_id: reserved_action.id,
+          structured_data: structured_data
+        )
+      end
+    )
+  end
+
+  defp deliver_mobile_prepared_action_failure(
+         updated_action,
+         reason,
+         conversation,
+         _client_message_id
+       ) do
+    terminal_status =
+      if updated_action.status == "execution_unknown", do: "execution_unknown", else: "failed"
+
+    deliver_reserved_mobile_prepared_action_result(
+      updated_action,
+      conversation,
+      fn reserved_action ->
+        Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+          conversation,
+          reserved_action.chat_id,
+          prepared_action_failure_text(reserved_action, reason),
+          client_message_id: prepared_action_result_client_message_id(reserved_action),
+          turn_kind: "action_result",
+          origin_type: "prepared_action",
+          origin_id: reserved_action.id,
+          structured_data: %{
+            "surface" => "mobile",
+            "prepared_action_id" => reserved_action.id,
+            "decision" => "confirm",
+            "status" => terminal_status,
+            "error" => Maraithon.Redaction.error_summary(reason)
+          }
+        )
+      end
+    )
+  end
+
+  defp deliver_reserved_mobile_prepared_action_result(action, conversation, deliver) do
+    case TelegramAssistant.reserve_prepared_action_result_delivery(action) do
+      {:ok, reserved_action, token} when is_binary(token) ->
+        _ = TelegramConversations.reopen(conversation)
+        _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+
+        case deliver.(reserved_action) do
+          {:ok, _conversation, _turn, _delivery} ->
+            with {:ok, checkpointed_action} <-
+                   TelegramAssistant.complete_prepared_action_result_delivery(
+                     reserved_action,
+                     token
+                   ) do
+              {:ok,
+               %{
+                 prepared_action: checkpointed_action,
+                 thread: reload_thread(conversation)
+               }}
+            end
+
+          {:error, reason} = error ->
+            _ =
+              TelegramAssistant.fail_prepared_action_result_delivery(
+                reserved_action,
+                token,
+                reason,
+                :retryable
+              )
+
+            error
+
+          other ->
+            _ =
+              TelegramAssistant.fail_prepared_action_result_delivery(
+                reserved_action,
+                token,
+                {:invalid_mobile_prepared_action_delivery_result, other},
+                :retryable
+              )
+
+            {:error, :prepared_action_delivery_failed}
+        end
+
+      {:ok, delivered_action, :already_delivered} ->
+        {:ok, %{prepared_action: delivered_action, thread: reload_thread(conversation)}}
+
+      {:error, _action, :prepared_action_result_delivery_in_progress} ->
+        {:error, {:prepared_action_execution_retryable, :transient}}
+
+      {:error, _action, :prepared_action_result_delivery_unknown} ->
+        {:error, :prepared_action_delivery_unknown}
+
+      {:error, _action, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_put_payload_updater(opts, %PreparedAction{}, attrs) do
+    case draft_edits(attrs) do
+      edits when map_size(edits) > 0 ->
+        Keyword.put(opts, :payload_updater, fn locked_action ->
+          # `locked_action`, not the controller's stale struct, is the source
+          # for the edit. TelegramAssistant invokes this function under the
+          # same row lock that freezes awaiting -> confirmed.
+          prepared_action_draft_edit_attrs(locked_action, edits)
+        end)
+
+      _empty ->
+        opts
+    end
+  end
+
+  defp draft_edits(attrs) when is_map(attrs) do
+    case Map.get(attrs, "draft_edits") || Map.get(attrs, :draft_edits) || Map.get(attrs, "draft") do
+      edits when is_map(edits) -> stringify_map(edits)
+      _other -> %{}
+    end
+  end
+
+  defp prepared_action_draft_edit_attrs(
+         %PreparedAction{action_type: "imessage_send"} = prepared_action,
+         edits
+       ) do
+    body = read_string(edits, "body")
+
+    if is_binary(body) and byte_size(body) <= 16_384 do
+      {:ok, %{payload: Map.put(prepared_action.payload, "body", body)}}
+    else
+      {:error, :invalid_message_body}
+    end
+  end
+
+  defp prepared_action_draft_edit_attrs(
+         %PreparedAction{action_type: "slack_post"} = prepared_action,
+         edits
+       ) do
+    payload =
+      prepared_action.payload || %{}
+
+    body = read_string(edits, "body") || read_string(edits, "text")
+
+    payload =
+      payload
+      |> maybe_put_payload("text", body)
+
+    {:ok, %{payload: payload}}
+  end
+
+  defp prepared_action_draft_edit_attrs(
+         %PreparedAction{action_type: "gmail_send"} = prepared_action,
+         edits
+       ) do
+    payload = gmail_payload_with_edits(prepared_action.payload || %{}, edits)
+    {:ok, %{payload: payload}}
+  end
+
+  defp prepared_action_draft_edit_attrs(
+         %PreparedAction{action_type: "gmail_draft_send"} = prepared_action,
+         edits
+       ) do
+    payload =
+      prepared_action.payload
+      |> Kernel.||(%{})
+      |> gmail_payload_with_edits(edits)
+      |> Map.put("_maraithon_update_draft_before_send", true)
+
+    {:ok, %{payload: payload}}
+  end
+
+  defp prepared_action_draft_edit_attrs(%PreparedAction{} = prepared_action, _edits),
+    do: {:ok, %{payload: prepared_action.payload || %{}}}
+
+  defp gmail_payload_with_edits(payload, edits) do
+    body = read_string(edits, "body") || read_string(edits, "text")
+
+    payload =
+      if body && body != payload["body"], do: Map.delete(payload, "html_body"), else: payload
+
+    payload
+    |> maybe_put_payload("to", read_string(edits, "to") || read_string(edits, "recipient"))
+    |> maybe_put_payload("recipient", read_string(edits, "to") || read_string(edits, "recipient"))
+    |> put_clearable_draft_field("cc", edits)
+    |> put_clearable_draft_field("bcc", edits)
+    |> put_clearable_draft_field("subject", edits)
+    |> maybe_put_payload("body", read_string(edits, "body") || read_string(edits, "text"))
+  end
+
+  defp put_clearable_draft_field(payload, key, edits) do
+    case Map.fetch(edits, key) do
+      {:ok, value} when is_binary(value) -> Map.put(payload, key, String.trim(value))
+      _ -> payload
+    end
+  end
+
+  defp maybe_put_payload(payload, _key, nil), do: payload
+  defp maybe_put_payload(payload, key, value), do: Map.put(payload, key, value)
+
+  defp message_body(attrs) do
+    body =
+      attrs
+      |> read_string("body")
+      |> case do
+        nil -> attrs |> Map.get("message", %{}) |> read_string("body")
+        value -> value
+      end
+
+    cond do
+      is_nil(body) -> {:error, :empty_message}
+      byte_size(body) > @max_message_bytes -> {:error, :message_too_long}
+      true -> {:ok, body}
+    end
+  end
+
+  defp client_message_id(attrs) do
+    attrs
+    |> read_string("client_message_id")
+    |> case do
+      nil -> attrs |> Map.get("message", %{}) |> read_string("client_message_id")
+      value -> value
+    end
+    |> case do
+      nil -> {:error, :missing_client_message_id}
+      value when byte_size(value) <= 128 -> {:ok, value}
+      _ -> {:error, :invalid_client_message_id}
+    end
+  end
+
+  defp thread_title(attrs, opts \\ []) do
+    default = Keyword.get(opts, :default)
+
+    title =
+      attrs
+      |> read_string("title")
+      |> case do
+        nil -> attrs |> Map.get("thread", %{}) |> read_string("title")
+        value -> value
+      end
+      |> normalize_title(default)
+
+    cond do
+      is_nil(title) -> {:error, :empty_thread_title}
+      byte_size(title) > @max_thread_title_bytes -> {:error, :thread_title_too_long}
+      true -> {:ok, title}
+    end
+  end
+
+  defp normalize_title(nil, default), do: default
+
+  defp normalize_title(title, _default) when is_binary(title) do
+    title
+    |> String.trim()
+    |> String.replace(~r/\s+/, " ")
+    |> case do
+      "" -> nil
+      value -> ThreadNaming.safe_title(value)
+    end
+  end
+
+  defp optional_client_message_id(attrs) do
+    case read_string(attrs, "client_message_id") do
+      nil -> {:ok, nil}
+      value when byte_size(value) <= 128 -> {:ok, value}
+      _ -> {:error, :invalid_client_message_id}
+    end
+  end
+
+  defp reload_thread(%Conversation{} = conversation) do
+    TelegramConversations.get_mobile_thread(conversation.user_id, conversation.id)
+  end
+
+  defp mobile_title(%Conversation{} = conversation, body) do
+    current = get_in(conversation.metadata || %{}, ["title"])
+
+    if ThreadNaming.placeholder?(current) do
+      ThreadNaming.title_for_message(body)
+    else
+      current
+    end
+  end
+
+  defp todo_thread_title(todo) do
+    todo.title
+    |> then(&"Work: #{&1}")
+    |> ThreadNaming.safe_title()
+  end
+
+  defp todo_thread_metadata(todo) do
+    %{
+      "thread_kind" => "todo_detail",
+      "source" => "mobile_todo_detail",
+      "request_focus" => "linked_item_context",
+      "linked_todo_id" => todo.id,
+      "linked_todo" => Todos.serialize_for_prompt(todo),
+      "title" => todo_thread_title(todo)
+    }
+  end
+
+  defp prime_todo_thread(%Conversation{} = conversation, todo, opts) do
+    with {:ok, primed_conversation} <- TodoThreadPrimer.ensure(conversation, todo, opts) do
+      Maraithon.AssistantChat.LegacyMessageDrafts.prepare(primed_conversation, todo)
+      {:ok, reload_thread(primed_conversation)}
+    end
+  end
+
+  defp request_focus_for(%Conversation{} = conversation) do
+    case get_in(conversation.metadata || %{}, ["request_focus"]) do
+      "linked_item_context" -> :linked_item_context
+      :linked_item_context -> :linked_item_context
+      _ -> nil
+    end
+  end
+
+  defp request_focus_for(_conversation), do: nil
+
+  defp linked_todo_id(%Conversation{} = conversation) do
+    case get_in(conversation.metadata || %{}, ["linked_todo_id"]) do
+      value when is_binary(value) -> value
+      value when is_integer(value) -> Integer.to_string(value)
+      _ -> nil
+    end
+  end
+
+  defp linked_todo_id(_conversation), do: nil
+
+  defp linked_todo_for(%Conversation{} = conversation) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(conversation),
+         todo when not is_nil(todo) <- Todos.get_for_user(conversation.user_id, todo_id) do
+      todo
+    else
+      _ -> nil
+    end
+  end
+
+  defp maybe_put_linked_todo(structured_data, nil), do: structured_data
+
+  defp maybe_put_linked_todo(structured_data, todo) do
+    Map.put(structured_data, "linked_todo", Todos.serialize_for_prompt(todo))
+  end
+
+  defp maybe_mark_linked_todo_done(
+         %PreparedAction{payload: %{"keep_todo_open" => true}},
+         _conversation
+       ),
+       do: :skip
+
+  defp maybe_mark_linked_todo_done(%PreparedAction{action_type: action_type}, _conversation)
+       when action_type not in ["gmail_send", "gmail_draft_send", "slack_post"],
+       do: :skip
+
+  defp maybe_mark_linked_todo_done(
+         %PreparedAction{} = prepared_action,
+         %Conversation{} = conversation
+       ) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(prepared_action, conversation) do
+      case Todos.mark_done(prepared_action.user_id, todo_id,
+             actor_type: "user",
+             actor_id: prepared_action.user_id,
+             actor_label: "User",
+             note: prepared_action_completion_note(prepared_action)
+           ) do
+        {:ok, todo} -> {:ok, todo}
+        {:error, reason} -> {:error, todo_id, reason}
+      end
+    else
+      _ -> :skip
+    end
+  end
+
+  defp linked_todo_id(%PreparedAction{} = prepared_action, %Conversation{} = conversation) do
+    first_present([
+      read_string(prepared_action.payload || %{}, "todo_id"),
+      linked_todo_id(conversation)
+    ])
+  end
+
+  defp todo_completion_structured_data({:ok, todo}) do
+    %{
+      "linked_todo_id" => todo.id,
+      "linked_todo_status" => todo.status,
+      "linked_todo_completed" => true
+    }
+  end
+
+  defp todo_completion_structured_data({:error, todo_id, reason}) do
+    %{
+      "linked_todo_id" => todo_id,
+      "linked_todo_completed" => false,
+      "linked_todo_completion_error" => normalize_error(reason)
+    }
+  end
+
+  defp todo_completion_structured_data(:skip), do: %{}
+
+  defp prepared_action_completion_note(%PreparedAction{action_type: "gmail_draft_send"}),
+    do: "Completed from mobile todo chat after sending the Gmail draft."
+
+  defp prepared_action_completion_note(%PreparedAction{action_type: "gmail_send"}),
+    do: "Completed from mobile todo chat after sending the Gmail message."
+
+  defp prepared_action_completion_note(%PreparedAction{action_type: "slack_post"}),
+    do: "Completed from mobile todo chat after sending the Slack message."
+
+  defp prepared_action_completion_note(_prepared_action),
+    do: "Completed from mobile todo chat after running the prepared action."
+
+  defp normalize_decision("confirm"), do: :confirm
+  defp normalize_decision("reject"), do: :reject
+  defp normalize_decision(:confirm), do: :confirm
+  defp normalize_decision(:reject), do: :reject
+  defp normalize_decision(_decision), do: :invalid
+
+  defp prepared_action_result_client_message_id(%PreparedAction{id: id}),
+    do: "prepared-action-result:#{id}"
+
+  defp prepared_action_result_text(prepared_action, result) do
+    case Map.get(serialize_result(result), "message") do
+      value when is_binary(value) and value != "" -> value
+      _ -> "Completed #{prepared_action_label(prepared_action.action_type)}."
+    end
+  end
+
+  defp prepared_action_failure_text(
+         %PreparedAction{status: "execution_unknown", action_type: action_type},
+         _reason
+       ) do
+    "Maraithon could not verify whether #{prepared_action_uncertain_label(action_type)}. " <>
+      "Check the connected service before trying again."
+  end
+
+  defp prepared_action_failure_text(%PreparedAction{} = prepared_action, reason) do
+    "Maraithon could not #{prepared_action_failure_label(prepared_action.action_type)}. " <>
+      prepared_action_failure_detail(reason)
+  end
+
+  defp prepared_action_uncertain_label("gmail_send"), do: "the Gmail message was sent"
+  defp prepared_action_uncertain_label("gmail_draft_send"), do: "the Gmail draft was sent"
+  defp prepared_action_uncertain_label("slack_post"), do: "the Slack message was posted"
+  defp prepared_action_uncertain_label("imessage_send"), do: "the Messages message was sent"
+  defp prepared_action_uncertain_label(_action_type), do: "the confirmed action completed"
+
+  defp prepared_action_label("gmail_send"), do: "the Gmail message"
+  defp prepared_action_label("gmail_draft_send"), do: "the Gmail draft"
+  defp prepared_action_label("slack_post"), do: "the Slack message"
+  defp prepared_action_label("imessage_send"), do: "the Messages message"
+  defp prepared_action_label("linear_create_issue"), do: "the Linear issue"
+  defp prepared_action_label("linear_create_comment"), do: "the Linear comment"
+  defp prepared_action_label("linear_update_issue_state"), do: "the Linear issue status update"
+  defp prepared_action_label("notaui_complete_task"), do: "the Notaui task"
+  defp prepared_action_label("notaui_update_task"), do: "the Notaui task update"
+  defp prepared_action_label("agent_create"), do: "the agent creation"
+  defp prepared_action_label("agent_update"), do: "the agent update"
+  defp prepared_action_label("agent_delete"), do: "the agent removal"
+  defp prepared_action_label("project_create"), do: "the project creation"
+  defp prepared_action_label("project_update"), do: "the project update"
+  defp prepared_action_label(_action_type), do: "that action"
+
+  defp prepared_action_failure_label("gmail_send"), do: "send the Gmail message"
+  defp prepared_action_failure_label("gmail_draft_send"), do: "send the Gmail draft"
+  defp prepared_action_failure_label("slack_post"), do: "send the Slack message"
+  defp prepared_action_failure_label("imessage_send"), do: "send the Messages message"
+  defp prepared_action_failure_label("linear_create_issue"), do: "create the Linear issue"
+  defp prepared_action_failure_label("linear_create_comment"), do: "add the Linear comment"
+
+  defp prepared_action_failure_label("linear_update_issue_state"),
+    do: "update the Linear issue status"
+
+  defp prepared_action_failure_label("notaui_complete_task"), do: "complete the Notaui task"
+  defp prepared_action_failure_label("notaui_update_task"), do: "update the Notaui task"
+  defp prepared_action_failure_label("agent_create"), do: "create the automation"
+  defp prepared_action_failure_label("agent_update"), do: "update the automation"
+  defp prepared_action_failure_label("agent_delete"), do: "remove the automation"
+  defp prepared_action_failure_label("project_create"), do: "create the project"
+  defp prepared_action_failure_label("project_update"), do: "update the project"
+  defp prepared_action_failure_label(_action_type), do: "complete that action"
+
+  defp prepared_action_failure_detail(:confirmation_expired),
+    do: "The confirmation expired before it could run."
+
+  defp prepared_action_failure_detail(:project_not_found),
+    do: "The project it referenced is no longer available."
+
+  defp prepared_action_failure_detail(:agent_not_found),
+    do: "The agent it referenced is no longer available."
+
+  defp prepared_action_failure_detail(:gmail_not_connected),
+    do: "Gmail is not connected."
+
+  defp prepared_action_failure_detail(:slack_not_connected),
+    do: "Slack is not connected."
+
+  defp prepared_action_failure_detail(:linear_not_connected),
+    do: "Linear is not connected."
+
+  defp prepared_action_failure_detail(:linear_reauth_required),
+    do: "Linear needs to be reconnected before this action can run."
+
+  defp prepared_action_failure_detail(reason) when is_binary(reason) do
+    reason
+    |> String.downcase()
+    |> prepared_action_failure_detail_from_text()
+  end
+
+  defp prepared_action_failure_detail(reason) do
+    reason
+    |> normalize_error()
+    |> String.downcase()
+    |> prepared_action_failure_detail_from_text()
+  end
+
+  defp prepared_action_failure_detail_from_text(reason) do
+    cond do
+      String.contains?(reason, "confirmation_expired") ->
+        "The confirmation expired before it could run."
+
+      String.contains?(reason, "project_not_found") ->
+        "The project it referenced is no longer available."
+
+      String.contains?(reason, "agent_not_found") ->
+        "The agent it referenced is no longer available."
+
+      String.contains?(reason, "invalid_user_context") ->
+        "Sign in again so the account can be confirmed."
+
+      String.contains?(reason, "reauth") ->
+        "The required account needs to be reconnected before this action can run."
+
+      String.contains?(reason, "gmail") or String.contains?(reason, "google_account") ->
+        "Gmail is not connected."
+
+      String.contains?(reason, "slack") ->
+        "Slack is not connected."
+
+      String.contains?(reason, "linear") ->
+        "Linear is not connected."
+
+      String.contains?(reason, "not_connected") ->
+        "The required account is not connected."
+
+      true ->
+        "Review the action before running it again."
+    end
+  end
+
+  defp serialize_result(%{} = result), do: stringify_map(result)
+  defp serialize_result(result), do: %{"value" => inspect(result)}
+
+  defp first_present(values), do: Enum.find(values, &present?/1)
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
+
+  defp stringify_map(map) when is_map(map) do
+    Enum.reduce(map, %{}, fn {key, value}, acc ->
+      Map.put(acc, to_string(key), stringify_value(value))
+    end)
+  end
+
+  defp stringify_value(value) when is_map(value), do: stringify_map(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value), do: value
+
+  defp read_string(map, key) when is_map(map) do
+    case Map.get(map, key) || Map.get(map, known_atom_key(key)) do
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: nil, else: value
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_string(_map, _key), do: nil
+
+  defp known_atom_key("body"), do: :body
+  defp known_atom_key("client_message_id"), do: :client_message_id
+  defp known_atom_key("title"), do: :title
+  defp known_atom_key(_key), do: nil
+
+  defp normalize_error(error) when is_binary(error), do: error
+  defp normalize_error(error), do: inspect(error)
+end

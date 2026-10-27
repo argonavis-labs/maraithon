@@ -1,0 +1,377 @@
+defmodule Maraithon.TelegramAssistant.ProactiveTest do
+  use Maraithon.DataCase, async: false
+
+  import Ecto.Query
+
+  alias Maraithon.Accounts
+  alias Maraithon.ActionLedger
+  alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.PushReceipt
+  alias Maraithon.TestSupport.CapturingAPNS
+  alias Maraithon.TestSupport.CapturingTelegram
+  alias Maraithon.Todos
+
+  setup do
+    start_supervised!(%{
+      id: :capturing_telegram_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    original_insights = Application.get_env(:maraithon, :insights, [])
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.merge(original_insights, telegram_module: CapturingTelegram)
+    )
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(original_assistant,
+        telegram_proactive_checkins_enabled: true,
+        telegram_unified_push_enabled: true,
+        proactive_delivery_planner_enabled: false
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :insights, original_insights)
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+    end)
+
+    user_id = "proactive-assistant-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    CapturingAPNS.enable(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "12345",
+        metadata: %{"username" => "kent"}
+      })
+
+    %{user_id: user_id}
+  end
+
+  test "proactive triggers use the active offset from a named briefing timezone", %{
+    user_id: user_id
+  } do
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "timezone" => "America/Toronto",
+          "timezone_name" => "America/Toronto",
+          "timezone_offset_hours" => -5,
+          "morning_brief_hour_local" => 9
+        }
+      })
+
+    llm_complete = fn params ->
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+
+      assert prompt =~ ~r/"local_timezone"\s*:\s*"ET"/
+      assert prompt =~ ~r/"timezone_name"\s*:\s*"America\/Toronto"/
+      assert prompt =~ ~r/"timezone_offset_hours"\s*:\s*-4/
+      assert prompt =~ ~r/"hour"\s*:\s*11/
+      refute prompt =~ ~r/"hour"\s*:\s*10/
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:hold:timezone",
+             "todo_ids" => [],
+             "summary" => "Nothing needs a proactive interruption."
+           })
+       }}
+    end
+
+    assert {:ok, %{"decision" => "hold"}} =
+             TelegramAssistant.plan_proactive_check_in(user_id,
+               now: ~U[2026-05-09 15:00:00Z],
+               context: %{todos: []},
+               llm_complete: llm_complete
+             )
+  end
+
+  test "public proactive planning projects production-sized context before the model", %{
+    user_id: user_id
+  } do
+    escaped = String.duplicate("🙂\"\n", 3_000)
+
+    context = %{
+      preference_memory: List.duplicate(%{"instruction" => escaped}, 20),
+      todos: List.duplicate(%{"id" => "todo", "title" => escaped}, 20),
+      calendar: List.duplicate(%{"title" => escaped}, 20),
+      relationships: List.duplicate(%{"name" => escaped}, 20),
+      dropped_blob: escaped
+    }
+
+    llm_complete = fn params ->
+      prompt_bytes =
+        params["messages"]
+        |> Maraithon.AssistantHarness.PromptStability.encode!()
+        |> byte_size()
+
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+      assert prompt_bytes <= Maraithon.AssistantHarness.proactive_prompt_byte_cap()
+      assert prompt =~ "preference_memory"
+      assert prompt =~ "todos"
+      assert prompt =~ "ref_"
+      refute prompt =~ user_id
+      refute prompt =~ "private-chat-id"
+      refute prompt =~ "dropped_blob"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:bounded-context",
+             "todo_ids" => [],
+             "summary" => "No interruption is needed."
+           })
+       }}
+    end
+
+    assert {:ok, %{"decision" => "hold"}} =
+             TelegramAssistant.plan_proactive_check_in(user_id,
+               chat_id: "private-chat-id",
+               context: context,
+               llm_complete: llm_complete
+             )
+  end
+
+  test "model-backed proactive planner sends a mobile check-in and records a receipt", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("rippling-eligibility", "Reply to Rippling about employment eligibility")
+      ])
+
+    llm_complete = fn params ->
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+
+      assert prompt =~ "Proactive decision contract:"
+      assert prompt =~ "Reply to Rippling about employment eligibility"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "send_now",
+             "assistant_message" =>
+               "The Rippling todo still needs the employment eligibility reply today.\nNext: reply with the requested eligibility details.",
+             "message_class" => "todo_digest",
+             "urgency" => 0.94,
+             "interrupt_now" => true,
+             "dedupe_key" => "proactive:rippling:#{todo.id}",
+             "todo_ids" => [todo.id],
+             "summary" => "The open todo is high priority and timely."
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             TelegramAssistant.deliver_proactive_check_in(user_id,
+               force: true,
+               llm_complete: llm_complete
+             )
+
+    assert result["decision"] == "sent_now"
+    assert result["todo_items_sent"] == 0
+    assert telegram_messages() == []
+
+    [push] = CapturingAPNS.recorded()
+    assert get_in(push.payload, ["aps", "alert", "title"]) == "Maraithon check-in"
+    assert get_in(push.payload, ["aps", "alert", "body"]) =~ "Rippling"
+    assert push.payload["deeplink"] == "maraithon://todos"
+
+    receipt =
+      Repo.one!(
+        from receipt in PushReceipt,
+          where: receipt.user_id == ^user_id,
+          where: receipt.origin_type == "assistant_digest",
+          limit: 1
+      )
+
+    assert receipt.decision == "sent_now"
+    assert receipt.dedupe_key == "proactive:rippling:#{todo.id}"
+
+    [ledger_entry] = ActionLedger.list_recent(user_id, event_type: "proactive.sent", limit: 1)
+    assert ledger_entry.status == "sent"
+    assert ledger_entry.model_summary == "The open todo is high priority and timely."
+    assert ledger_entry.source_evidence["todo_ids"] == [todo.id]
+    assert ledger_entry.result_object_refs["dedupe_key"] == "proactive:rippling:#{todo.id}"
+  end
+
+  test "model hold decisions do not send Telegram messages", %{user_id: user_id} do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:hold",
+             "todo_ids" => [],
+             "summary" => "Nothing needs a proactive interruption."
+           })
+       }}
+    end
+
+    assert {:ok, %{"decision" => "hold"}} =
+             TelegramAssistant.deliver_proactive_check_in(user_id,
+               force: true,
+               context: %{
+                 todos: [
+                   %{
+                     "id" => "reviewable-work",
+                     "title" => "Review a low-priority work item",
+                     "status" => "open"
+                   }
+                 ]
+               },
+               llm_complete: llm_complete
+             )
+
+    assert telegram_messages() == []
+
+    [ledger_entry] = ActionLedger.list_recent(user_id, event_type: "proactive.held", limit: 1)
+    assert ledger_entry.status == "held"
+    assert ledger_entry.model_summary == "Nothing needs a proactive interruption."
+    assert ledger_entry.source_evidence["dedupe_key"] == "proactive:hold"
+  end
+
+  test "feedback verification rewrites stale backlog dumps before interruption policy", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Dan Bourke artifact status",
+          "summary" =>
+            "Commitment to Dan Bourke remains open and overdue with no evidence of completion.",
+          "next_action" => "Confirm whether this is still important to handle.",
+          "priority" => 40,
+          "source_occurred_at" => "2026-05-01T14:00:00Z",
+          "dedupe_key" => "gmail:dan-bourke-stale",
+          "metadata" => %{
+            "record" => %{
+              "person" => "Dan Bourke",
+              "company" => "A-Team",
+              "relationship_context" => "video project contact",
+              "commitment" => "Dan asked about the Claude Cowork killer artifact."
+            }
+          }
+        }
+      ])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Application.get_env(:maraithon, :telegram_assistant, [])
+      |> Keyword.put(:max_immediate_pushes_per_hour, 1)
+    )
+
+    {:ok, _receipt} =
+      TelegramAssistant.record_push_receipt(%{
+        user_id: user_id,
+        dedupe_key: "proactive:budget-seed",
+        origin_type: "assistant_digest",
+        origin_id: "budget-seed",
+        decision: "sent_now"
+      })
+
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "send_now",
+             "assistant_message" => """
+             You have several overdue follow-ups that need your attention:
+             • Dan Bourke: confirm the artifact status and give a concrete ETA.
+             • Matthew Diakonov: confirm the artifact status and give a concrete ETA.
+             • Faye Pang: update on shared materials and next steps.
+             • Halah AlQahtani: confirm introduction and follow-up status.
+             Also, several recent meetings need a follow-up recap with owners and next steps, including Emma's Soccer Practice.
+             Prioritize sending these follow-ups now to keep commitments on track and maintain relationships.
+             """,
+             "message_class" => "assistant_push",
+             "urgency" => 0.92,
+             "interrupt_now" => true,
+             "dedupe_key" => "proactive:bad-backlog",
+             "todo_ids" => [todo.id],
+             "summary" => "Several overdue follow-ups need attention."
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             TelegramAssistant.deliver_proactive_check_in(user_id,
+               force: true,
+               context: %{todos: [Todos.serialize_for_prompt(todo)]},
+               llm_complete: llm_complete
+             )
+
+    assert result["decision"] == "held_rate_limit"
+    assert result["urgency"] == 0.45
+    assert result["interrupt_now"] == false
+    assert result["assistant_message"] =~ "Older follow-up, not urgent"
+    assert result["assistant_message"] =~ "Dan Bourke"
+    assert result["assistant_message"] =~ "Keep it active"
+    refute result["assistant_message"] =~ "several overdue follow-ups"
+    refute result["assistant_message"] =~ "Emma's Soccer Practice"
+    assert telegram_messages() == []
+    assert CapturingAPNS.recorded() == []
+  end
+
+  defp telegram_messages do
+    :capturing_telegram_recorder
+    |> Agent.get(&Enum.reverse/1)
+    |> Enum.filter(&(&1.type == :send))
+  end
+
+  defp todo_attrs(thread_id, title) do
+    %{
+      "source" => "gmail",
+      "kind" => "gmail_triage",
+      "attention_mode" => "act_now",
+      "title" => title,
+      "summary" => "This Gmail thread still needs a user response.",
+      "next_action" => "Reply in-thread and close the loop.",
+      "priority" => 95,
+      "source_item_id" => thread_id,
+      "source_occurred_at" => "2026-05-09T14:00:00Z",
+      "dedupe_key" => "gmail:gmail_triage:#{thread_id}",
+      "metadata" => %{
+        "thread_id" => thread_id,
+        "person" => "Rippling",
+        "company" => "Rippling",
+        "relationship_context" => "HR/employment platform"
+      }
+    }
+  end
+end

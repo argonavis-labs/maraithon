@@ -1,0 +1,101 @@
+import Foundation
+import SwiftData
+import AssistantProgressKit
+
+@Model
+final class ChatThread {
+    @Attribute(.unique) var id: UUID
+    var title: String
+    var createdAt: Date
+    var updatedAt: Date
+    var remoteID: UUID?
+    // Optional fields allow lightweight migration. Existing remote threads are
+    // classified on sync before appearing in the standalone Chat list.
+    var kindRawValue: String?
+    var linkedTodoID: UUID?
+    var remoteStatusRawValue: String?
+    var syncStatusRawValue: String?
+    var pendingRunID: UUID?
+    var pendingRunWorkSummary: Data?
+    var lastSyncedAt: Date?
+    // Additive optional storage uses SwiftData's lightweight migration.
+    var todoTimelineData: Data?
+
+    var todoTimeline: [TodoActivity] {
+        guard let todoTimelineData else { return [] }
+        return (try? JSONDecoder().decode([TodoActivity].self, from: todoTimelineData)) ?? []
+    }
+    @Relationship(deleteRule: .cascade, inverse: \ChatMessage.thread) var messages: [ChatMessage] = []
+
+    var sortedMessages: [ChatMessage] {
+        messages.sorted { $0.sentAt < $1.sentAt }
+    }
+
+    var isStandaloneChat: Bool {
+        kindRawValue == "chat" && linkedTodoID == nil
+    }
+
+    var syncStatus: ChatSyncStatus {
+        get { ChatSyncStatus(rawValue: syncStatusRawValue ?? "") ?? .local }
+        set { syncStatusRawValue = newValue.rawValue }
+    }
+
+    var pendingRunStatus: ChatRunStatus? {
+        guard let value = remoteStatusRawValue else { return nil }
+        return ChatRunStatus(rawValue: value)
+    }
+
+    /// Memoizes the decoded pending-run work summary per raw payload; the chat
+    /// pending row reads this on every render while a run is polling. The box
+    /// keeps cache writes off observed properties and self-invalidates when
+    /// `pendingRunWorkSummary` changes.
+    @Transient private var workSummaryCache = DecodedWorkSummaryCache()
+
+    /// `JSONDecoder` is stateless after configuration and safe to share.
+    private static let workSummaryDecoder = JSONDecoder()
+
+    var pendingWorkSummary: ChatWorkSummary? {
+        guard let pendingRunWorkSummary else { return nil }
+
+        if workSummaryCache.raw == pendingRunWorkSummary {
+            return workSummaryCache.decoded
+        }
+
+        let decoded = try? Self.workSummaryDecoder.decode(ChatWorkSummary.self, from: pendingRunWorkSummary)
+        workSummaryCache.raw = pendingRunWorkSummary
+        workSummaryCache.decoded = decoded
+        return decoded
+    }
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        remoteID: UUID? = nil,
+        remoteStatusRawValue: String? = nil,
+        syncStatus: ChatSyncStatus = .local,
+        pendingRunID: UUID? = nil,
+        pendingRunWorkSummary: Data? = nil,
+        lastSyncedAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.remoteID = remoteID
+        self.kindRawValue = "chat"
+        self.remoteStatusRawValue = remoteStatusRawValue
+        self.syncStatusRawValue = syncStatus.rawValue
+        self.pendingRunID = pendingRunID
+        self.pendingRunWorkSummary = pendingRunWorkSummary
+        self.lastSyncedAt = lastSyncedAt
+    }
+}
+
+/// Per-instance memo for the decoded pending-run work summary. A reference-type
+/// box keeps cache writes off the model's observed properties.
+private final class DecodedWorkSummaryCache {
+    var raw: Data?
+    var decoded: ChatWorkSummary?
+}

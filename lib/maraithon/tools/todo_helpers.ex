@@ -1,0 +1,75 @@
+defmodule Maraithon.Tools.TodoHelpers do
+  @moduledoc false
+
+  import Maraithon.Tools.ActionHelpers
+
+  alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Todos.SurfaceQuality
+  alias Maraithon.Todos.{Todo, UserFacingCopy}
+
+  def list_opts(args, default_limit \\ 50) when is_map(args) do
+    limit =
+      args
+      |> optional_integer("limit")
+      |> case do
+        nil -> default_limit
+        value -> value |> max(1) |> min(100)
+      end
+
+    []
+    |> Keyword.put(:limit, limit)
+    |> maybe_put(:source, optional_string(args, "source"))
+    |> maybe_put(:source_account_id, optional_integer(args, "source_account_id"))
+    |> maybe_put(:kind, optional_string(args, "kind"))
+    |> maybe_put(:attention_mode, optional_string(args, "attention_mode"))
+    |> maybe_put(:owner_user_id, optional_string(args, "owner_user_id"))
+    |> maybe_put(:project_id, optional_string(args, "project_id"))
+    |> maybe_put(:agent_actionability, optional_string(args, "agent_actionability"))
+    |> maybe_put(:due_before, optional_string(args, "due_before"))
+    |> maybe_put(:due_after, optional_string(args, "due_after"))
+    |> maybe_put(:query, optional_string(args, "query"))
+  end
+
+  def status_filter(args) when is_map(args) do
+    case Map.get(args, "statuses") do
+      statuses when is_list(statuses) -> statuses
+      status when is_binary(status) -> [status]
+      _other -> optional_csv(args, "status")
+    end
+  end
+
+  def serialize_todo(%Todo{} = todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
+    %{
+      id: todo.id,
+      source: todo.source,
+      source_account_id: todo.source_account_id,
+      source_account_label: todo.source_account_label,
+      project_id: todo.project_id,
+      agent_actionability: todo.agent_actionability,
+      agent_action_label: todo.agent_action_label,
+      agent_action_requires_approval: todo.agent_action_requires_approval,
+      kind: todo.kind,
+      attention_mode: todo.attention_mode,
+      status: todo.status,
+      workflow: Maraithon.Todos.Workflow.current(todo),
+      title: todo.title,
+      summary: todo.summary,
+      next_action: todo.next_action,
+      due_at: todo.due_at,
+      notes: todo.notes,
+      action_plan: todo.action_plan,
+      action_draft: todo.action_draft || %{},
+      owner_user_id: todo.owner_user_id,
+      owner_label: todo.owner_label,
+      priority: todo.priority,
+      source_item_id: todo.source_item_id,
+      source_occurred_at: todo.source_occurred_at,
+      metadata: todo.metadata || %{},
+      attention_profile: AttentionRanker.profile(todo),
+      surface_quality: SurfaceQuality.assess(todo),
+      updated_at: todo.updated_at
+    }
+  end
+end

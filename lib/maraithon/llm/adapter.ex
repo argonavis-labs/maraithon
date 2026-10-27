@@ -1,0 +1,28 @@
+defmodule Maraithon.LLM.Adapter do
+  @moduledoc """
+  Behaviour for LLM providers.
+  """
+
+  @type message :: %{String.t() => term()}
+  @type params :: %{
+          optional(String.t()) => any(),
+          required(String.t()) => any()
+        }
+
+  @type response :: %{
+          optional(:message) => message(),
+          required(:content) => String.t(),
+          model: String.t(),
+          tokens_in: integer(),
+          tokens_out: integer(),
+          finish_reason: String.t(),
+          usage: map()
+        }
+
+  @callback complete(params()) :: {:ok, response()} | {:error, term()}
+
+  @callback stream_complete(params(), on_chunk :: (String.t() -> any())) ::
+              {:ok, response()} | {:error, term()}
+
+  @optional_callbacks stream_complete: 2
+end

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Keep the operator entry point; all evals share execution and report collection.
+exec "$(dirname "$0")/delegation-eval" delegation-eval-preflight

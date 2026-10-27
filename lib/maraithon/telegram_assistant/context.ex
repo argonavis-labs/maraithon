@@ -1,0 +1,1643 @@
+defmodule Maraithon.TelegramAssistant.Context do
+  @moduledoc """
+  Builds the compact Telegram assistant context snapshot for one run.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.Agents
+  alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.BriefingSchedules
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.ContextCache
+  alias Maraithon.Crm
+  alias Maraithon.Goals
+  alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Insights
+  alias Maraithon.Insights.Detail
+  alias Maraithon.LocalCalendar
+  alias Maraithon.Memory
+  alias Maraithon.OAuth
+  alias Maraithon.OpenLoops
+  alias Maraithon.OperatorMemory
+  alias Maraithon.PreferenceMemory
+  alias Maraithon.Projects
+  alias Maraithon.PromptBudget
+  alias Maraithon.Redaction
+  alias Maraithon.Repo
+  alias Maraithon.SourceErrorCopy
+  alias Maraithon.SourceFreshness
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.Conversation
+  alias Maraithon.Tools.GoogleCalendarHelpers
+  alias Maraithon.Todos
+  alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Travel
+  alias Maraithon.UserMemory
+  alias MaraithonWeb.LocalTime
+
+  require Logger
+
+  @calendar_context_lookback_hours 2
+  @calendar_context_forward_hours 72
+  @calendar_context_limit 40
+  @default_context_fetch_timeout_ms 4_000
+  # SPEC 07 R1/R3: raised from 8 now that deep_memory is filtered by model
+  # selection (`Memory.recall/3`) instead of being a raw importance dump.
+  @deep_memory_limit 12
+  # Inner budget for the model-selection call so it fits comfortably inside
+  # the outer @default_context_fetch_timeout_ms fetch budget with room to
+  # fall back to unselected `prompt_context` candidates on expiry.
+  @deep_memory_recall_timeout_ms 2_500
+  @personal_calendar_terms ~w(
+    appointment birthday camp child children dad dentist doctor daughter emma family home jack
+    kid kids medical mom parent personal practice rsvp school soccer son spouse wife husband
+  )
+  @person_focus_modes [:person_context, :linked_item_context]
+  @proactive_prompt_context_bytes 24_000
+  @prompt_todo_limit 12
+  @prompt_todo_item_bytes 1_000
+  @prompt_todo_fields [
+    {"id", 100},
+    {"title", 220},
+    {"next_action", 180},
+    {"attention_profile", 400},
+    {"status", 50},
+    {"priority", 30},
+    {"source", 60},
+    {"due_at", 80},
+    {"counterparty_label", 100},
+    {"summary", 180}
+  ]
+  @prompt_open_loop_bucket_keys ~w(overdue today upcoming no_due_date monitor snoozed todos work)
+  @proactive_prompt_context_fields [
+    {"preference_memory", 2_000},
+    {"operator_memory", 1_500},
+    {"user_memory", 1_500},
+    {"deep_memory", 2_000},
+    {"life_context", 3_000},
+    {"todos", 5_000},
+    {"open_loops", 3_000},
+    {"calendar", 3_000},
+    {"relationships", 2_000},
+    {"goals", 1_500},
+    {"projects", 1_500},
+    {"open_insights", 1_500},
+    {"user", 1_000},
+    {"current_time", 500},
+    {"briefing_schedule", 500},
+    {"source_freshness", 500},
+    {"defaults", 500},
+    {"context_fetch", 500}
+  ]
+
+  def build(attrs) when is_map(attrs) do
+    user_id = fetch_string!(attrs, :user_id)
+    conversation = Map.get(attrs, :conversation)
+    linked_delivery = Map.get(attrs, :linked_delivery)
+    linked_insight = Map.get(attrs, :linked_insight)
+    linked_travel = linked_travel_itinerary(conversation, user_id)
+    linked_todo = linked_todo(attrs, user_id)
+    linked_project = linked_project(attrs, user_id)
+    request_focus = request_focus(attrs)
+
+    today_digest = ContextCache.get_digest(user_id)
+    _ = Maraithon.ContextCache.Builder.maybe_refresh_async(user_id)
+    user_text = latest_user_text(conversation)
+
+    fetched = parallel_fetch(user_id, user_text, request_focus)
+
+    %{
+      user: user_identity_context(user_id),
+      chat: %{id: fetch_string!(attrs, :chat_id)},
+      conversation: serialize_conversation(conversation),
+      linked_item:
+        serialize_linked_item(
+          linked_delivery,
+          linked_insight,
+          linked_travel,
+          linked_todo,
+          linked_project
+        ),
+      recent_turns: serialize_recent_turns(conversation),
+      todo_timeline:
+        Maraithon.Todos.Timeline.for_todo(linked_todo)
+        |> Enum.take(-40)
+        |> Enum.map(fn event ->
+          Map.update!(event, :body, &if(is_binary(&1), do: String.slice(&1, 0, 700)))
+        end),
+      preference_memory: fetched.preference_memory,
+      operator_memory: fetched.operator_memory,
+      user_memory: fetched.user_memory,
+      deep_memory: fetched.deep_memory,
+      life_context: fetched.life_context,
+      open_loops: fetched.open_loops,
+      goals: fetched.goals,
+      relationships: fetched.relationships,
+      open_insights: fetched.open_insights,
+      todos: fetched.todos,
+      calendar: fetched.calendar,
+      briefing_schedule: fetched.briefing_schedule,
+      current_time: current_time_context(fetched.briefing_schedule),
+      connected_accounts: fetched.connected_accounts,
+      source_freshness: fetched.source_freshness,
+      projects: fetched.projects,
+      active_agents: fetched.active_agents,
+      defaults: fetched.defaults,
+      context_fetch: fetched.context_fetch,
+      today_digest: today_digest
+    }
+  end
+
+  @doc false
+  def preproject_prompt_collections(context) when is_map(context) do
+    context
+    |> maybe_project_context_field("todos", &project_prompt_todos/1)
+    |> maybe_project_context_field("open_loops", &project_prompt_open_loops/1)
+  end
+
+  def preproject_prompt_collections(_context), do: %{}
+
+  @doc false
+  def for_proactive_prompt(context, opts \\ [])
+
+  def for_proactive_prompt(context, opts) when is_map(context) and is_list(opts) do
+    max_bytes =
+      opts
+      |> Keyword.get(:max_bytes, @proactive_prompt_context_bytes)
+      |> case do
+        value when is_integer(value) and value > 0 -> min(value, @proactive_prompt_context_bytes)
+        _other -> @proactive_prompt_context_bytes
+      end
+
+    context
+    |> preproject_prompt_collections()
+    |> PromptBudget.project_fields(
+      @proactive_prompt_context_fields,
+      max_bytes,
+      max_depth: 5,
+      list_items: 5
+    )
+  end
+
+  def for_proactive_prompt(_context, _opts), do: %{}
+
+  defp maybe_project_context_field(context, key, projector) do
+    case read_field(context, key) do
+      nil ->
+        context
+
+      value ->
+        context
+        |> Map.delete(key)
+        |> Map.delete(existing_atom_key(key))
+        |> Map.put(key, projector.(value))
+    end
+  end
+
+  defp project_prompt_todos(value) when is_list(value) do
+    value
+    |> Enum.take(@prompt_todo_limit)
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(&project_prompt_todo/1)
+  end
+
+  defp project_prompt_todos(_value), do: []
+
+  defp project_prompt_todo(todo) do
+    todo =
+      case read_field(todo, "attention_profile") do
+        profile when is_map(profile) ->
+          Map.put(todo, "attention_profile", project_prompt_attention_profile(profile))
+
+        _other ->
+          todo
+      end
+
+    PromptBudget.project_fields(todo, @prompt_todo_fields, @prompt_todo_item_bytes)
+  end
+
+  defp project_prompt_attention_profile(profile) do
+    context =
+      profile
+      |> read_field("context")
+      |> case do
+        value when is_map(value) ->
+          PromptBudget.project_fields(
+            value,
+            [{"person", 25}, {"company", 30}, {"relationship", 25}, {"why", 45}],
+            180
+          )
+
+        _other ->
+          %{}
+      end
+
+    profile
+    |> Map.put("context", context)
+    |> PromptBudget.project_fields(
+      [
+        {"bucket", 40},
+        {"bucket_rank", 20},
+        {"relationship_strength", 20},
+        {"personal_family", 10},
+        {"actively_waiting", 10},
+        {"stale_confirmation_candidate", 10},
+        {"context", 180},
+        {"score", 20}
+      ],
+      400
+    )
+  end
+
+  defp project_prompt_open_loops(open_loops) when is_map(open_loops) do
+    buckets = read_field(open_loops, "buckets") || %{}
+
+    items =
+      Enum.reduce_while(@prompt_open_loop_bucket_keys, [], fn bucket, acc ->
+        remaining = @prompt_todo_limit - length(acc)
+
+        if remaining <= 0 do
+          {:halt, acc}
+        else
+          projected =
+            buckets
+            |> read_field(bucket)
+            |> project_prompt_todos()
+            |> Enum.take(remaining)
+            |> Enum.map(&Map.put(&1, "bucket", bucket))
+
+          {:cont, acc ++ projected}
+        end
+      end)
+
+    %{
+      "totals" =>
+        PromptBudget.bounded(
+          read_field(open_loops, "totals") || read_field(open_loops, "counts") || %{},
+          500
+        ),
+      "items" => items
+    }
+  end
+
+  defp project_prompt_open_loops(_value), do: %{"totals" => %{}, "items" => []}
+
+  @doc false
+  def fetcher_keys_for_focus(request_focus) do
+    nil
+    |> fetchers_for_focus(nil, request_focus)
+    |> Enum.map(fn {key, _fun} -> key end)
+  end
+
+  defp parallel_fetch(user_id, user_text, request_focus) do
+    fetchers = fetchers_for_focus(user_id, user_text, request_focus)
+
+    fetchers
+    |> safe_parallel_fetch(
+      defaults: default_fetch_values(),
+      timeout_ms: context_fetch_timeout_ms(),
+      max_concurrency: length(fetchers)
+    )
+  end
+
+  defp fetchers_for_focus(user_id, user_text, request_focus) do
+    normalized_focus = normalize_focus(request_focus)
+
+    user_id
+    |> all_fetchers(user_text, normalized_focus)
+    |> select_fetchers_for_focus(normalized_focus)
+  end
+
+  defp all_fetchers(user_id, user_text, focus) do
+    [
+      {:preference_memory, fn -> PreferenceMemory.prompt_context(user_id) end},
+      {:operator_memory, fn -> OperatorMemory.summaries_for_prompt(user_id) end},
+      {:user_memory, fn -> UserMemory.prompt_context(user_id) end},
+      {:life_context, fn -> Maraithon.LifeContext.prompt_context(user_id) end},
+      # SPEC 07 R1/R3: thread the inbound text as the recall query and route
+      # through `Memory.recall/3` (model-selected) instead of the raw
+      # `prompt_context` dump. The earlier "skip the LLM filter" note (it
+      # added 2-6s per turn) is handled by bounding the model-selection call
+      # with its own inner timeout and degrading to unselected
+      # `prompt_context` candidates rather than blocking or dropping to
+      # nothing — see `deep_memory_context/3`.
+      {:deep_memory, fn -> deep_memory_context(user_id, user_text, focus) end},
+      {:open_loops,
+       fn ->
+         OpenLoops.snapshot(user_id, query: user_text, limit: 8, include_memory?: false)
+       end},
+      {:goals, fn -> Goals.context_snapshot(user_id, limit: 8) end},
+      {:relationships, fn -> serialize_relationships(user_id) end},
+      {:open_insights, fn -> serialize_open_insights(user_id) end},
+      {:todos, fn -> serialize_todos(user_id) end},
+      {:calendar, fn -> serialize_calendar(user_id) end},
+      {:briefing_schedule, fn -> BriefingSchedules.summarize_for_prompt(user_id) end},
+      {:connected_accounts, fn -> serialize_connected_accounts(user_id) end},
+      {:source_freshness, fn -> SourceFreshness.compact_for_prompt(user_id) end},
+      {:projects, fn -> serialize_projects(user_id) end},
+      {:active_agents, fn -> serialize_agents(user_id) end},
+      {:defaults, fn -> tool_defaults(user_id) end}
+    ]
+  end
+
+  defp select_fetchers_for_focus(fetchers, :quick_chat) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :briefing_schedule
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :connector_status) do
+    take_fetchers(fetchers, [
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :delivery_planner) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :life_context,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :projects,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :today_mode) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :life_context,
+      :open_loops,
+      :goals,
+      :relationships,
+      :open_insights,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :waiting_on) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :life_context,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  # SPEC 09 R8: same fetcher set as :waiting_on — the commitment audit's
+  # extra reach (sent Gmail/Slack scanning) comes from tools, not prefetched
+  # context.
+  defp select_fetchers_for_focus(fetchers, :commitment_audit) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :life_context,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  # SPEC 09 R8: narrow recap set. `recent_turns` is included unconditionally
+  # in every Context.build/1 result — that is where the referent signal for
+  # "what else?" comes from.
+  defp select_fetchers_for_focus(fetchers, :continuity) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :life_context,
+      :open_loops,
+      :todos,
+      :briefing_schedule,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :person_context) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :life_context,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :linked_item_context) do
+    # The selected item and its recent conversation are already loaded. Pull
+    # other sources through focused tools only when this request needs them.
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :life_context,
+      :briefing_schedule,
+      :connected_accounts,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, _request_focus), do: fetchers
+
+  defp take_fetchers(fetchers, allowed_keys) do
+    allowed = MapSet.new(allowed_keys)
+    Enum.filter(fetchers, fn {key, _fun} -> MapSet.member?(allowed, key) end)
+  end
+
+  defp request_focus(attrs) when is_map(attrs) do
+    Map.get(attrs, :request_focus) ||
+      Map.get(attrs, "request_focus") ||
+      get_in(attrs, [:model_profile, :request_focus]) ||
+      get_in(attrs, ["model_profile", "request_focus"])
+  end
+
+  defp request_focus(_attrs), do: nil
+
+  defp normalize_focus(value) when is_atom(value), do: value
+
+  defp normalize_focus(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+    |> case do
+      "quick_chat" -> :quick_chat
+      "connector_status" -> :connector_status
+      "today_mode" -> :today_mode
+      "waiting_on" -> :waiting_on
+      "linked_item_context" -> :linked_item_context
+      "person_context" -> :person_context
+      "commitment_audit" -> :commitment_audit
+      "continuity" -> :continuity
+      "delivery_planner" -> :delivery_planner
+      _other -> nil
+    end
+  end
+
+  defp normalize_focus(_value), do: nil
+
+  def safe_parallel_fetch(fetchers, opts \\ []) when is_list(fetchers) and is_list(opts) do
+    timeout_ms =
+      opts
+      |> Keyword.get(:timeout_ms, @default_context_fetch_timeout_ms)
+      |> positive_integer(@default_context_fetch_timeout_ms)
+
+    max_concurrency =
+      opts
+      |> Keyword.get(:max_concurrency, length(fetchers))
+      |> positive_integer(max(length(fetchers), 1))
+
+    defaults = Keyword.get(opts, :defaults, %{})
+    started_monotonic_ms = System.monotonic_time(:millisecond)
+
+    indexed_fetchers = Enum.with_index(fetchers)
+
+    {values, failures} =
+      Task.Supervisor.async_stream_nolink(
+        Maraithon.Runtime.ToolCallSupervisor,
+        indexed_fetchers,
+        fn {{key, fun}, _index} ->
+          run_context_fetcher(key, fun)
+        end,
+        ordered: true,
+        timeout: timeout_ms,
+        on_timeout: :kill_task,
+        max_concurrency: max_concurrency
+      )
+      |> Stream.zip(Enum.with_index(fetchers))
+      |> Enum.reduce({defaults, []}, fn
+        {{:ok, {:ok, key, value, elapsed_ms}}, _fetcher}, {acc, failures} ->
+          {Map.put(acc, key, value), maybe_note_slow_fetch(failures, key, elapsed_ms, timeout_ms)}
+
+        {{:ok, {:error, key, reason, elapsed_ms}}, _fetcher}, {acc, failures} ->
+          {acc, [context_fetch_failure(key, reason, elapsed_ms) | failures]}
+
+        {{:exit, reason}, {{key, _fun}, _index}}, {acc, failures} ->
+          {acc, [context_fetch_failure(key, reason, timeout_ms) | failures]}
+      end)
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started_monotonic_ms
+    failures = Enum.reverse(failures)
+    diagnostics = context_fetch_diagnostics(elapsed_ms, timeout_ms, max_concurrency, failures)
+    emit_context_fetch_telemetry(diagnostics)
+
+    if failures != [] do
+      Logger.warning("Telegram assistant context fetch degraded",
+        elapsed_ms: elapsed_ms,
+        failure_count: length(failures)
+      )
+    end
+
+    Map.put(values, :context_fetch, diagnostics)
+  end
+
+  defp current_time_context(briefing_schedule) do
+    now_utc = DateTime.utc_now() |> DateTime.truncate(:second)
+    offset_hours = read_field(briefing_schedule, "timezone_offset_hours") || -5
+
+    local_now =
+      if is_integer(offset_hours) do
+        DateTime.add(now_utc, offset_hours, :hour)
+      else
+        now_utc
+      end
+
+    %{
+      now_utc: DateTime.to_iso8601(now_utc),
+      local_now: DateTime.to_iso8601(local_now),
+      local_timezone: read_field(briefing_schedule, "local_timezone") || "UTC-5",
+      timezone_offset_hours: offset_hours
+    }
+  end
+
+  defp default_fetch_values do
+    %{
+      preference_memory: %{
+        timezone_offset_hours: -5,
+        rules: [],
+        summary: [],
+        operator_memory_summaries: []
+      },
+      operator_memory: [],
+      user_memory: %{},
+      deep_memory: [],
+      life_context: [],
+      open_loops: %{},
+      goals: %{"active_goals" => [], "counts" => %{}},
+      relationships: [],
+      open_insights: [],
+      todos: [],
+      calendar: empty_calendar_context(),
+      briefing_schedule: BriefingSchedules.summarize_for_prompt(nil),
+      connected_accounts: [],
+      source_freshness: [],
+      projects: [],
+      active_agents: [],
+      defaults: %{}
+    }
+  end
+
+  defp empty_calendar_context do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    %{
+      window: %{
+        since: DateTime.to_iso8601(now),
+        until: DateTime.to_iso8601(DateTime.add(now, @calendar_context_forward_hours, :hour))
+      },
+      policy:
+        "Upcoming personal/family calendar events are first-class attention signals and outrank routine work.",
+      preferred_source: "none",
+      upcoming_events: [],
+      personal_events: [],
+      counts: %{upcoming: 0, personal: 0, local: 0, google: 0},
+      source_status: %{local: "unavailable", google: "unavailable"}
+    }
+  end
+
+  # SPEC 07 R1/R3/R5: build the deep_memory fetcher's real query from the
+  # inbound text, optionally resolve a person_id when the request is
+  # person-focused (R5), then try model-selected recall
+  # (`Memory.recall/3`) before falling back to unselected `prompt_context`
+  # candidates on timeout/error so a slow selection call degrades gracefully
+  # rather than blocking or dropping to an empty context.
+  defp deep_memory_context(user_id, user_text, focus) do
+    query = normalize_optional_text(user_text)
+    person_id = maybe_resolve_person_id(user_id, query, focus)
+
+    recall_opts =
+      [limit: @deep_memory_limit]
+      |> maybe_put_opt(:query, query)
+      |> maybe_put_opt(:person_id, person_id)
+
+    case bounded_task(
+           fn -> Memory.recall(user_id, query || "", recall_opts) end,
+           @deep_memory_recall_timeout_ms
+         ) do
+      {:ok, {:ok, result}} ->
+        result
+        |> Map.take([:summary, :memories, :count])
+        |> Map.put(:error, nil)
+        |> Map.put(:selection_source, "memory_intelligence")
+
+      _other ->
+        Logger.info("Telegram deep memory recall degraded to unselected candidates",
+          user_id_hash: Redaction.fingerprint(user_id),
+          failure_code: "deep_memory_recall_degraded"
+        )
+
+        user_id
+        |> Memory.prompt_context(recall_opts)
+        |> Map.put(:selection_source, "unselected_fallback")
+    end
+  end
+
+  defp maybe_resolve_person_id(_user_id, nil, _focus), do: nil
+
+  defp maybe_resolve_person_id(_user_id, _query, focus) when focus not in @person_focus_modes,
+    do: nil
+
+  defp maybe_resolve_person_id(user_id, query, _focus) do
+    case Crm.list_people(user_id, query: query, limit: 1) do
+      [%{id: id} | _rest] -> id
+      _other -> nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  @doc false
+  # Shared bounding primitive (supervised non-linked task + yield + brutal-kill
+  # shutdown). Also used by `ModelRouting.classify_via_model/1` (SPEC 09 R6)
+  # so there is exactly one bounding shape, not two.
+  def bounded_task(fun, timeout_ms) when is_function(fun, 0) do
+    parent = self()
+
+    timeout_ms =
+      if(is_integer(timeout_ms) and timeout_ms > 0, do: min(timeout_ms, 30_000), else: 4_000)
+
+    task =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        allow_sandbox_access(parent)
+
+        try do
+          {:ok, fun.()}
+        rescue
+          _exception -> :bounded_failure
+        catch
+          _kind, _reason -> :bounded_failure
+        end
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, result}} -> {:ok, result}
+      _other -> :bounded_timeout
+    end
+  rescue
+    _error -> :bounded_timeout
+  catch
+    _kind, _reason -> :bounded_timeout
+  end
+
+  # Lets the spawned Task borrow the calling process's Ecto sandbox
+  # connection under `mix test`; a no-op in dev/prod.
+  defp allow_sandbox_access(parent) do
+    if Maraithon.Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, parent, self())
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_text(_value), do: nil
+
+  defp run_context_fetcher(key, fun) when is_function(fun, 0) do
+    started = System.monotonic_time(:millisecond)
+
+    try do
+      {:ok, key, fun.(), System.monotonic_time(:millisecond) - started}
+    rescue
+      _exception ->
+        {:error, key, :temporary_failure, System.monotonic_time(:millisecond) - started}
+    catch
+      :exit, :timeout ->
+        {:error, key, :timeout, System.monotonic_time(:millisecond) - started}
+
+      :exit, _reason ->
+        {:error, key, :interrupted, System.monotonic_time(:millisecond) - started}
+
+      _kind, _reason ->
+        {:error, key, :temporary_failure, System.monotonic_time(:millisecond) - started}
+    end
+  end
+
+  defp context_fetch_failure(key, reason, elapsed_ms) do
+    %{
+      key: to_string(key),
+      reason: normalize_fetch_reason(reason),
+      elapsed_ms: elapsed_ms
+    }
+  end
+
+  defp maybe_note_slow_fetch(failures, key, elapsed_ms, timeout_ms) do
+    if timeout_ms > 0 and elapsed_ms > div(timeout_ms * 3, 4) do
+      [context_fetch_failure(key, :slow_fetch, elapsed_ms) | failures]
+    else
+      failures
+    end
+  end
+
+  defp context_fetch_diagnostics(elapsed_ms, timeout_ms, max_concurrency, failures) do
+    %{
+      status: if(failures == [], do: "ready", else: "degraded"),
+      elapsed_ms: elapsed_ms,
+      timeout_ms: timeout_ms,
+      max_concurrency: max_concurrency,
+      failure_count: length(failures),
+      failures: failures
+    }
+  end
+
+  defp emit_context_fetch_telemetry(diagnostics) do
+    :telemetry.execute(
+      [:maraithon, :telegram_assistant, :context_fetch],
+      %{
+        elapsed_ms: diagnostics.elapsed_ms,
+        failure_count: diagnostics.failure_count
+      },
+      %{
+        status: diagnostics.status,
+        timeout_ms: diagnostics.timeout_ms,
+        max_concurrency: diagnostics.max_concurrency
+      }
+    )
+  end
+
+  defp normalize_fetch_reason(:timeout), do: "timeout"
+  defp normalize_fetch_reason(:slow_fetch), do: "slow response"
+  defp normalize_fetch_reason(:interrupted), do: "interrupted"
+  defp normalize_fetch_reason("timeout"), do: "timeout"
+  defp normalize_fetch_reason("slow_fetch"), do: "slow response"
+  defp normalize_fetch_reason("interrupted"), do: "interrupted"
+  defp normalize_fetch_reason("timed out"), do: "timeout"
+  defp normalize_fetch_reason("slow response"), do: "slow response"
+  defp normalize_fetch_reason(reason), do: SourceErrorCopy.reason(reason)
+
+  defp context_fetch_timeout_ms do
+    :maraithon
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:context_fetch_timeout_ms, @default_context_fetch_timeout_ms)
+    |> positive_integer(@default_context_fetch_timeout_ms)
+  end
+
+  def prompt_snapshot(context) when is_map(context), do: context
+
+  defp serialize_conversation(%Conversation{} = conversation) do
+    %{
+      id: conversation.id,
+      status: conversation.status,
+      summary: conversation.summary,
+      historical_summary: get_in(conversation.metadata || %{}, ["historical_summary"]),
+      mode: get_in(conversation.metadata || %{}, ["mode"]),
+      linked_delivery_id: conversation.linked_delivery_id,
+      linked_insight_id: conversation.linked_insight_id,
+      travel_itinerary_id: get_in(conversation.metadata || %{}, ["travel_itinerary_id"]),
+      latest_prepared_action_id:
+        get_in(conversation.metadata || %{}, ["latest_prepared_action_id"])
+    }
+  end
+
+  defp serialize_conversation(_conversation), do: %{}
+
+  defp serialize_recent_turns(%Conversation{} = conversation) do
+    TelegramConversations.recent_turns(conversation, limit: 8)
+    |> Enum.map(fn turn ->
+      %{
+        role: turn.role,
+        turn_kind: turn.turn_kind,
+        origin_type: turn.origin_type,
+        text: turn.text,
+        intent: turn.intent,
+        inserted_at: turn.inserted_at
+      }
+    end)
+  end
+
+  defp serialize_recent_turns(_conversation), do: []
+
+  defp latest_user_text(%Conversation{} = conversation) do
+    conversation
+    |> TelegramConversations.recent_turns(limit: 4)
+    |> Enum.find_value(fn turn ->
+      if turn.role == "user", do: turn.text
+    end)
+  end
+
+  defp latest_user_text(_conversation), do: nil
+
+  defp serialize_linked_item(
+         %Delivery{} = delivery,
+         linked_insight,
+         linked_travel,
+         linked_todo,
+         linked_project
+       ) do
+    insight = linked_insight || Repo.preload(delivery, :insight).insight
+    deliveries = insight_deliveries(insight, delivery.user_id)
+
+    detail =
+      insight && Detail.build(insight, deliveries, timezone_info: timezone_info(delivery.user_id))
+
+    %{
+      delivery: serialize_delivery(delivery),
+      insight: serialize_insight(insight),
+      detail: detail && serialize_detail(detail),
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
+      todo: serialize_todo(linked_todo),
+      project: serialize_project(linked_project)
+    }
+  end
+
+  defp serialize_linked_item(_delivery, nil, nil, nil, nil), do: %{}
+
+  defp serialize_linked_item(_delivery, nil, linked_travel, linked_todo, linked_project) do
+    %{
+      delivery: nil,
+      insight: nil,
+      detail: nil,
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
+      todo: serialize_todo(linked_todo),
+      project: serialize_project(linked_project)
+    }
+  end
+
+  defp serialize_linked_item(_delivery, insight, linked_travel, linked_todo, linked_project) do
+    deliveries = insight_deliveries(insight, insight.user_id)
+    detail = Detail.build(insight, deliveries, timezone_info: timezone_info(insight.user_id))
+
+    %{
+      delivery: nil,
+      insight: serialize_insight(insight),
+      detail: serialize_detail(detail),
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
+      todo: serialize_todo(linked_todo),
+      project: serialize_project(linked_project)
+    }
+  end
+
+  defp serialize_open_insights(user_id) do
+    Insights.list_open_with_details_for_user(user_id,
+      limit: 6,
+      timezone_info: timezone_info(user_id)
+    )
+    |> Enum.map(fn %{insight: insight, detail: detail} ->
+      %{
+        id: insight.id,
+        source: insight.source,
+        category: insight.category,
+        attention_mode: insight.attention_mode,
+        tracking_key: insight.tracking_key,
+        title: insight.title,
+        summary: insight.summary,
+        recommended_action: insight.recommended_action,
+        priority: insight.priority,
+        confidence: insight.confidence,
+        detail: serialize_detail(detail)
+      }
+    end)
+  end
+
+  defp serialize_connected_accounts(user_id) do
+    ConnectedAccounts.list_personal_for_user(user_id)
+    |> Enum.map(&serialize_connected_account/1)
+  end
+
+  defp serialize_connected_account(%ConnectedAccount{} = account) do
+    %{
+      provider: public_provider(account.provider),
+      account_label: account_label(account),
+      status: account.status,
+      connected_at: timestamp(account.connected_at),
+      last_refreshed_at: timestamp(account.last_refreshed_at),
+      updated_at: timestamp(account.updated_at)
+    }
+    |> compact_map()
+  end
+
+  defp serialize_todos(user_id) do
+    user_id
+    |> Todos.list_open_for_user(limit: 40)
+    |> AttentionRanker.sort()
+    |> Enum.take(20)
+    |> Enum.map(&Todos.serialize_for_prompt/1)
+  end
+
+  defp serialize_calendar(user_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    since = DateTime.add(now, -@calendar_context_lookback_hours, :hour)
+    until = DateTime.add(now, @calendar_context_forward_hours, :hour)
+
+    {local_events, local_status} = fetch_local_calendar_events(user_id, since, until)
+    {google_events, google_status} = fetch_google_calendar_events(user_id, since, until)
+
+    events =
+      (local_events ++ google_events)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(&calendar_event_dedupe_key/1)
+      |> Enum.sort_by(&calendar_event_sort_value/1)
+      |> Enum.take(@calendar_context_limit)
+
+    personal_events =
+      events
+      |> Enum.filter(&personal_calendar_event?(&1, user_id))
+      |> Enum.take(12)
+
+    %{
+      window: %{
+        since: DateTime.to_iso8601(since),
+        until: DateTime.to_iso8601(until)
+      },
+      policy:
+        "Upcoming personal/family calendar events are first-class attention signals and outrank routine work.",
+      preferred_source: calendar_preferred_source(local_events, google_events),
+      upcoming_events: events,
+      personal_events: personal_events,
+      counts: %{
+        upcoming: length(events),
+        personal: length(personal_events),
+        local: length(local_events),
+        google: length(google_events)
+      },
+      source_status: %{
+        local: local_status,
+        google: google_status
+      }
+    }
+  end
+
+  defp serialize_relationships(user_id) do
+    Crm.summarize_for_prompt(user_id, 20)
+  end
+
+  defp fetch_local_calendar_events(user_id, since, until) do
+    events =
+      user_id
+      |> LocalCalendar.events_around(
+        since: since,
+        until: until,
+        limit: @calendar_context_limit
+      )
+      |> Enum.map(&local_calendar_event_for_prompt/1)
+
+    status = if events == [], do: "empty", else: "ready"
+    {events, status}
+  rescue
+    _exception ->
+      {[], "unavailable"}
+  end
+
+  defp fetch_google_calendar_events(user_id, since, until) do
+    case GoogleCalendarHelpers.list_events(user_id,
+           time_min: DateTime.to_iso8601(since),
+           time_max: DateTime.to_iso8601(until),
+           max_results: @calendar_context_limit
+         ) do
+      {:ok, events} ->
+        events = Enum.map(events, &google_calendar_event_for_prompt/1)
+        status = if events == [], do: "empty", else: "ready"
+        {events, status}
+
+      {:error, reason} ->
+        {[], google_calendar_status(reason)}
+    end
+  rescue
+    _exception ->
+      {[], "unavailable"}
+  end
+
+  defp google_calendar_status(reason), do: SourceErrorCopy.reason(reason)
+
+  defp local_calendar_event_for_prompt(event) do
+    %{
+      id: event.guid,
+      source: "local_calendar",
+      summary: event.title || "Untitled event",
+      start: event.start_at,
+      end: event.end_at,
+      location: event.location,
+      calendar_name: event.calendar_name,
+      is_all_day: event.is_all_day,
+      is_recurring: event.is_recurring,
+      organizer: event.organizer_email,
+      attendees: event.attendee_emails || [],
+      account: event.calendar_name,
+      attention_profile: calendar_attention_profile(event.title, event.calendar_name, nil)
+    }
+  end
+
+  defp google_calendar_event_for_prompt(event) when is_map(event) do
+    summary = read_field(event, "summary")
+    account = read_field(event, "google_account_email")
+
+    %{
+      id: read_field(event, "event_id"),
+      source: "google_calendar",
+      summary: summary || "Untitled event",
+      start: read_field(event, "start"),
+      end: read_field(event, "end"),
+      location: read_field(event, "location"),
+      calendar_id: read_field(event, "calendar_id"),
+      google_account_email: account,
+      account: account,
+      organizer: read_field(event, "organizer"),
+      attendees: read_field(event, "attendees") || [],
+      html_link: read_field(event, "html_link"),
+      attention_profile:
+        calendar_attention_profile(summary, read_field(event, "calendar_id"), account)
+    }
+  end
+
+  defp google_calendar_event_for_prompt(_event), do: nil
+
+  defp calendar_attention_profile(summary, calendar_name, account) do
+    text =
+      [summary, calendar_name, account]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    personal? = contains_any?(text, @personal_calendar_terms) or personal_account?(account)
+
+    %{
+      bucket: if(personal?, do: "personal_family", else: "calendar"),
+      bucket_rank: if(personal?, do: 0, else: 4),
+      personal_family: personal?,
+      source_kind: "calendar_event",
+      context: %{
+        account: account,
+        calendar_name: calendar_name
+      }
+    }
+  end
+
+  defp personal_calendar_event?(event, user_id) do
+    profile = read_field(event, "attention_profile") || %{}
+    account = read_field(event, "account") || read_field(event, "google_account_email")
+
+    read_field(profile, "personal_family") == true or
+      personal_account?(account) or
+      normalize_text(account) == normalize_text(user_id)
+  end
+
+  defp personal_account?(account) when is_binary(account) do
+    normalized = String.downcase(account)
+    String.ends_with?(normalized, "@gmail.com") or String.contains?(normalized, "personal")
+  end
+
+  defp personal_account?(_account), do: false
+
+  defp calendar_preferred_source(local_events, google_events) do
+    cond do
+      local_events != [] and google_events != [] -> "local+google"
+      local_events != [] -> "local"
+      google_events != [] -> "google"
+      true -> "none"
+    end
+  end
+
+  defp calendar_event_dedupe_key(event) when is_map(event) do
+    [
+      read_field(event, "summary"),
+      read_field(event, "start") |> stable_time_value(),
+      read_field(event, "account") || read_field(event, "calendar_name")
+    ]
+    |> Enum.map(&to_string(&1 || ""))
+    |> Enum.join("|")
+    |> String.downcase()
+  end
+
+  defp calendar_event_dedupe_key(event), do: inspect(event)
+
+  defp calendar_event_sort_value(event) when is_map(event) do
+    event
+    |> read_field("start")
+    |> calendar_time_sort_value()
+  end
+
+  defp calendar_event_sort_value(_event), do: 9_999_999_999
+
+  defp calendar_time_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime)
+
+  defp calendar_time_sort_value(%{date: date}) when is_binary(date) do
+    with {:ok, parsed} <- Date.from_iso8601(date),
+         {:ok, datetime} <- DateTime.new(parsed, ~T[00:00:00], "Etc/UTC") do
+      DateTime.to_unix(datetime)
+    else
+      _error -> 9_999_999_999
+    end
+  end
+
+  defp calendar_time_sort_value(%{"date" => date}) when is_binary(date) do
+    calendar_time_sort_value(%{date: date})
+  end
+
+  defp calendar_time_sort_value(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> DateTime.to_unix(datetime)
+      _ -> 9_999_999_999
+    end
+  end
+
+  defp calendar_time_sort_value(_value), do: 9_999_999_999
+
+  defp stable_time_value(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp stable_time_value(%NaiveDateTime{} = datetime), do: NaiveDateTime.to_iso8601(datetime)
+  defp stable_time_value(%Date{} = date), do: Date.to_iso8601(date)
+  defp stable_time_value(%{date: date}) when is_binary(date), do: date
+  defp stable_time_value(%{"date" => date}) when is_binary(date), do: date
+  defp stable_time_value(value) when is_binary(value), do: value
+  defp stable_time_value(nil), do: ""
+  defp stable_time_value(value), do: inspect(value, pretty: false, limit: 20)
+
+  defp serialize_agents(user_id) do
+    Agents.list_agents(user_id: user_id, preload: [:project])
+    |> Enum.map(fn agent ->
+      %{
+        id: agent.id,
+        behavior: agent.behavior,
+        status: agent.status,
+        name: get_in(agent.config || %{}, ["name"]),
+        project_id: agent.project_id,
+        project_name: agent.project && agent.project.name,
+        subscriptions: get_in(agent.config || %{}, ["subscribe"]) || [],
+        tools: get_in(agent.config || %{}, ["tools"]) || [],
+        updated_at: agent.updated_at
+      }
+    end)
+  end
+
+  defp serialize_projects(user_id) do
+    Projects.list_projects(user_id: user_id)
+    |> Enum.map(fn project ->
+      %{
+        id: project.id,
+        name: project.name,
+        slug: project.slug,
+        status: project.status,
+        priority: project.priority,
+        summary: project.summary,
+        description: project.description,
+        metadata:
+          (project.metadata || %{})
+          |> Map.take([
+            "life_domain",
+            "life_domain_confidence",
+            "life_domain_reasoning",
+            "life_domain_needs_confirmation"
+          ])
+      }
+    end)
+  end
+
+  defp tool_defaults(user_id) do
+    excluded = Maraithon.AssistantIdentities.assistant_providers(user_id)
+
+    oauth_providers =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.map(& &1.provider)
+      |> Enum.reject(&(&1 in excluded))
+
+    public_providers =
+      oauth_providers
+      |> Enum.map(&public_provider/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    default_project = Projects.default_project_for_user(user_id)
+
+    %{
+      default_project_id: default_project && default_project.id,
+      default_project_slug: default_project && default_project.slug,
+      linear_connected: Enum.member?(public_providers, "linear"),
+      providers: public_providers
+    }
+  end
+
+  defp serialize_delivery(%Delivery{} = delivery) do
+    %{
+      id: delivery.id,
+      channel: delivery.channel,
+      score: delivery.score,
+      threshold: delivery.threshold,
+      status: delivery.status,
+      sent_at: delivery.sent_at,
+      feedback: delivery.feedback,
+      metadata: Map.take(delivery.metadata || %{}, ["telegram_message_id", "telegram_action"])
+    }
+  end
+
+  defp serialize_delivery(_delivery), do: nil
+
+  defp serialize_insight(nil), do: nil
+
+  defp serialize_insight(insight) do
+    %{
+      id: insight.id,
+      source: insight.source,
+      category: insight.category,
+      attention_mode: insight.attention_mode,
+      tracking_key: insight.tracking_key,
+      title: insight.title,
+      summary: insight.summary,
+      recommended_action: insight.recommended_action,
+      priority: insight.priority,
+      confidence: insight.confidence,
+      status: insight.status,
+      metadata: redact_insight_metadata(insight.metadata || %{})
+    }
+  end
+
+  defp serialize_detail(detail) when is_map(detail) do
+    %{
+      promise_text: detail[:promise_text],
+      requested_by: detail[:requested_by],
+      evidence_checked: detail[:evidence_checked],
+      delivery_evidence: detail[:delivery_evidence],
+      open_loop_reason: detail[:open_loop_reason],
+      data_gaps: detail[:data_gaps]
+    }
+  end
+
+  defp serialize_todo(nil), do: nil
+  defp serialize_todo(todo), do: Todos.serialize_for_prompt(todo)
+
+  defp serialize_project(nil), do: nil
+
+  defp serialize_project(project) do
+    %{
+      id: project.id,
+      name: project.name,
+      slug: project.slug,
+      status: project.status,
+      priority: project.priority,
+      summary: project.summary,
+      description: project.description,
+      metadata:
+        (project.metadata || %{})
+        |> Map.take([
+          "life_domain",
+          "life_domain_confidence",
+          "life_domain_reasoning",
+          "life_domain_needs_confirmation"
+        ])
+    }
+  end
+
+  defp insight_deliveries(nil, _user_id), do: []
+
+  defp insight_deliveries(insight, user_id)
+       when is_binary(insight.id) and is_binary(user_id) do
+    Delivery
+    |> where([delivery], delivery.insight_id == ^insight.id and delivery.user_id == ^user_id)
+    |> order_by([delivery], desc_nulls_last: delivery.sent_at, desc: delivery.inserted_at)
+    |> Repo.all()
+  end
+
+  defp timezone_info(user_id), do: LocalTime.timezone_info_for_user(user_id)
+
+  defp linked_todo(attrs, user_id) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(attrs),
+         todo when not is_nil(todo) <- Todos.get_for_user(user_id, todo_id) do
+      todo
+    else
+      _ -> nil
+    end
+  end
+
+  defp linked_todo_id(attrs) when is_map(attrs) do
+    explicit_id =
+      Map.get(attrs, :linked_todo_id) ||
+        Map.get(attrs, "linked_todo_id") ||
+        get_in(attrs, [:conversation, Access.key(:metadata), "linked_todo_id"]) ||
+        get_in(attrs, ["conversation", "metadata", "linked_todo_id"])
+
+    case normalize_id(explicit_id) do
+      todo_id when is_binary(todo_id) ->
+        todo_id
+
+      _ ->
+        linked_todo_id_from_reply(attrs)
+    end
+  end
+
+  defp linked_todo_id(_attrs), do: nil
+
+  defp linked_todo_id_from_reply(attrs) do
+    chat_id = Map.get(attrs, :chat_id)
+    reply_to_message_id = Map.get(attrs, :reply_to_message_id)
+
+    with chat_id when is_binary(chat_id) <- normalize_id(chat_id),
+         reply_to when is_binary(reply_to) <- normalize_id(reply_to_message_id),
+         turn when not is_nil(turn) <-
+           TelegramConversations.find_turn_by_message(chat_id, reply_to),
+         %{} = todo_data <-
+           Map.get(turn.structured_data || %{}, "linked_todo") ||
+             Map.get(turn.structured_data || %{}, :linked_todo),
+         todo_id when is_binary(todo_id) <- Map.get(todo_data, "id") || Map.get(todo_data, :id) do
+      todo_id
+    else
+      _ -> nil
+    end
+  end
+
+  defp linked_project(attrs, user_id) do
+    chat_id = Map.get(attrs, :chat_id)
+    reply_to_message_id = Map.get(attrs, :reply_to_message_id)
+
+    with chat_id when is_binary(chat_id) <- normalize_id(chat_id),
+         reply_to when is_binary(reply_to) <- normalize_id(reply_to_message_id),
+         turn when not is_nil(turn) <-
+           TelegramConversations.find_turn_by_message(chat_id, reply_to),
+         %{} = project_data <-
+           Map.get(turn.structured_data || %{}, "linked_project") ||
+             Map.get(turn.structured_data || %{}, :linked_project),
+         project_id when is_binary(project_id) <-
+           Map.get(project_data, "id") || Map.get(project_data, :id),
+         project when not is_nil(project) <- Projects.get_project_for_user(project_id, user_id) do
+      project
+    else
+      _ -> nil
+    end
+  end
+
+  defp normalize_id(value) when is_binary(value), do: value
+  defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_id(_value), do: nil
+
+  defp account_label(%ConnectedAccount{provider: provider, metadata: metadata} = account) do
+    metadata = metadata || %{}
+
+    cond do
+      String.starts_with?(provider, "slack:") ->
+        metadata_value(metadata, "team_name") || "Slack workspace"
+
+      String.starts_with?(provider, "google:") or provider == "google" ->
+        metadata_value(metadata, "account_email") || metadata_value(metadata, "email") ||
+          google_provider_suffix(provider) || email_account_id(account.external_account_id) ||
+          "Google account"
+
+      provider == "telegram" ->
+        "Telegram"
+
+      provider == "notion" ->
+        metadata_value(metadata, "workspace_name") || "Notion workspace"
+
+      provider == "notaui" ->
+        metadata_value(metadata, "default_account_label") || "Notaui workspace"
+
+      provider == "github" ->
+        case metadata_value(metadata, "login") do
+          login when is_binary(login) -> "@#{login}"
+          _ -> "GitHub account"
+        end
+
+      provider == "linear" ->
+        linear_account_label(metadata)
+
+      true ->
+        default_account_label(public_provider(provider))
+    end
+  end
+
+  defp linear_account_label(metadata) do
+    metadata
+    |> Map.get("teams", Map.get(metadata, :teams))
+    |> List.wrap()
+    |> Enum.find_value(fn
+      %{"name" => name} when is_binary(name) and name != "" -> Redaction.redact_string(name)
+      %{name: name} when is_binary(name) and name != "" -> Redaction.redact_string(name)
+      _other -> nil
+    end) || "Linear workspace"
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    value = Map.get(metadata, key) || Map.get(metadata, metadata_atom_key(key))
+
+    case value do
+      value when is_binary(value) ->
+        value
+        |> String.trim()
+        |> Redaction.redact_string()
+        |> case do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp metadata_atom_key("account_email"), do: :account_email
+  defp metadata_atom_key("default_account_label"), do: :default_account_label
+  defp metadata_atom_key("email"), do: :email
+  defp metadata_atom_key("login"), do: :login
+  defp metadata_atom_key("team_name"), do: :team_name
+  defp metadata_atom_key("workspace_name"), do: :workspace_name
+  defp metadata_atom_key(key), do: key
+
+  defp google_provider_suffix("google:" <> account), do: email_account_id(account)
+  defp google_provider_suffix(_provider), do: nil
+
+  defp email_account_id(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if String.contains?(value, "@"), do: value
+  end
+
+  defp email_account_id(_value), do: nil
+
+  defp public_provider("google:" <> _), do: "google"
+  defp public_provider("slack:" <> _), do: "slack"
+  defp public_provider(provider) when is_binary(provider), do: provider
+  defp public_provider(nil), do: nil
+  defp public_provider(provider), do: to_string(provider)
+
+  defp default_account_label("google"), do: "Google account"
+  defp default_account_label("slack"), do: "Slack workspace"
+  defp default_account_label("telegram"), do: "Telegram"
+  defp default_account_label("github"), do: "GitHub account"
+  defp default_account_label("linear"), do: "Linear workspace"
+  defp default_account_label("notion"), do: "Notion workspace"
+  defp default_account_label("notaui"), do: "Notaui workspace"
+  defp default_account_label(_provider), do: "Connected account"
+
+  defp timestamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp timestamp(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp timestamp(%Date{} = value), do: Date.to_iso8601(value)
+  defp timestamp(value), do: value
+
+  defp compact_map(map) when is_map(map) do
+    Map.reject(map, fn
+      {_key, nil} -> true
+      {_key, []} -> true
+      {_key, %{}} -> true
+      {_key, ""} -> true
+      _other -> false
+    end)
+  end
+
+  defp redact_insight_metadata(metadata) when is_map(metadata) do
+    Map.take(metadata, [
+      "account",
+      "thread_id",
+      "subject",
+      "to",
+      "from",
+      "detail",
+      "record",
+      "context_brief",
+      "source_ref"
+    ])
+  end
+
+  defp redact_insight_metadata(_metadata), do: %{}
+
+  defp linked_travel_itinerary(%Conversation{} = conversation, user_id) do
+    case get_in(conversation.metadata || %{}, ["travel_itinerary_id"]) do
+      itinerary_id when is_binary(itinerary_id) ->
+        Travel.get_itinerary_for_user(user_id, itinerary_id)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp linked_travel_itinerary(_conversation, _user_id), do: nil
+
+  # Who the user is across channels, so the assistant never mistakes the
+  # user's own messages (group chats especially) for someone contacting them.
+  defp user_identity_context(user_id) do
+    identity = Maraithon.UserIdentity.identity(user_id)
+
+    %{
+      id: user_id,
+      name: List.first(identity.names),
+      emails: identity.emails,
+      phones: identity.phones,
+      identity_note:
+        "Messages from these handles are the user speaking, not someone contacting the user."
+    }
+  end
+
+  defp fetch_string!(attrs, key) do
+    value = Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
+
+    cond do
+      is_binary(value) and value != "" -> value
+      is_integer(value) -> Integer.to_string(value)
+      true -> raise ArgumentError, "missing required context key #{inspect(key)}"
+    end
+  end
+
+  defp read_field(nil, _key), do: nil
+  defp read_field(%_{} = struct, key), do: read_field(Map.from_struct(struct), key)
+
+  defp read_field(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, existing_atom_key(key))
+    end
+  end
+
+  defp read_field(_map, _key), do: nil
+
+  defp existing_atom_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp contains_any?(text, terms) when is_binary(text) and is_list(terms) do
+    normalized = String.downcase(text)
+    Enum.any?(terms, &term_present?(normalized, &1))
+  end
+
+  defp contains_any?(_text, _terms), do: false
+
+  defp term_present?(text, term) when is_binary(term) do
+    if String.match?(term, ~r/^[a-z0-9_]+$/) do
+      Regex.match?(~r/(^|[^a-z0-9_])#{Regex.escape(term)}($|[^a-z0-9_])/, text)
+    else
+      String.contains?(text, term)
+    end
+  end
+
+  defp term_present?(_text, _term), do: false
+
+  defp normalize_text(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+  end
+
+  defp normalize_text(_value), do: ""
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_integer(_value, default), do: default
+
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(nil), do: true
+  defp blank?(_value), do: false
+end

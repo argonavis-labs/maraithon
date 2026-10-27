@@ -1,0 +1,3260 @@
+defmodule Maraithon.InsightNotifications.Actions do
+  @moduledoc """
+  Telegram-native action proposals and execution for actionable insights.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.Connectors.Telegram
+  alias Maraithon.BriefingSchedules
+  alias Maraithon.Drafts
+  alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Insights
+  alias Maraithon.Insights.Insight
+  alias Maraithon.LLM
+  alias Maraithon.Memory.UserVoice
+  alias Maraithon.OperatorMemory
+  alias Maraithon.PreferenceMemory
+  alias Maraithon.Repo
+  alias Maraithon.SourceLabels
+  alias Maraithon.TelegramAssistant.ActionFailureCopy
+  alias Maraithon.Timezones
+  alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
+  alias Maraithon.Tools
+  alias Maraithon.UserMemory
+
+  require Logger
+
+  @callback_prefix "insact"
+  @expected_delivery_revision_key "_maraithon_expected_delivery_revision"
+  @callback_replay_key "_maraithon_callback_replay"
+  @execution_claim_lease_seconds 300
+  @default_provider_execution_timeout_ms 240_000
+  @execution_lease_safety_margin_ms 30_000
+  @execution_owner_key "execution_owner"
+  @execution_claimed_at_key "execution_claimed_at"
+  @execution_lease_expires_at_key "execution_lease_expires_at"
+  @execution_phase_key "execution_phase"
+  @pre_provider_phase "pre_provider"
+  @provider_started_phase "provider_started"
+  @provider_checkpointed_phase "provider_checkpointed"
+  @provider_started_at_key "provider_started_at"
+  @provider_timeout_key "provider_timeout_ms"
+  @outcome_unknown_at_key "outcome_unknown_at"
+  @outcome_evidence_key "outcome_evidence"
+  @max_provider_result_string_length 255
+  @max_provider_label_ids 20
+  @max_preview_length 900
+  @chief_message_max_length 700
+  @section_text_max_length 180
+  @generic_person_candidate_words ~w(
+    Calendar Context Deck Email Finance Gmail Intro Invoice Launch Mail Maraithon Message Next Open
+    Person Product Project Receipt Reminder Reply Slack Status Thread Today Tomorrow Update Video Work
+  )
+  @legacy_notification_fragments [
+    "I think this needs your attention.",
+    "What I'd send",
+    "Fast actions",
+    "I would do this next:",
+    "Since the last check:",
+    "Tap Draft",
+    "appears to be waiting",
+    "still looks open",
+    "thread still looks open",
+    "still looks unclosed",
+    "I found no later reply",
+    "<b>Open work</b>",
+    "<b>Why important</b>"
+  ]
+
+  def telegram_payload(%Delivery{} = delivery) do
+    delivery = ensure_insight_preloaded(delivery)
+
+    %{
+      text: render_message(delivery),
+      reply_markup: build_reply_markup(delivery)
+    }
+  end
+
+  def fetch_delivery_for_chat(delivery_id, chat_id) do
+    fetch_delivery(delivery_id, chat_id)
+  end
+
+  def find_delivery_by_provider_message(chat_id, provider_message_id)
+      when is_binary(chat_id) and is_binary(provider_message_id) do
+    delivery =
+      Delivery
+      |> where([d], d.channel == "telegram" and d.destination == ^chat_id)
+      |> where([d], d.provider_message_id == ^provider_message_id)
+      |> preload(:insight)
+      |> Repo.one()
+
+    case delivery do
+      %Delivery{} = delivery -> {:ok, delivery}
+      nil -> {:error, :delivery_not_found}
+    end
+  end
+
+  def find_delivery_by_provider_message(_chat_id, _provider_message_id),
+    do: {:error, :delivery_not_found}
+
+  def perform_action(%Delivery{} = delivery, action) when is_binary(action) do
+    current =
+      case Repo.get(Delivery, delivery.id) do
+        %Delivery{} = current -> Repo.preload(current, :insight)
+        nil -> nil
+      end
+
+    cond do
+      is_nil(current) ->
+        {:error, :delivery_not_found}
+
+      not direct_action_current?(current, action) ->
+        {:error, :stale_action_revision}
+
+      true ->
+        current
+        |> bind_expected_delivery_revision()
+        |> then(&dispatch_action(action, &1))
+    end
+  end
+
+  defp direct_action_current?(%Delivery{insight: %Insight{status: status}}, _action)
+       when status not in ["acknowledged", "dismissed", "snoozed"],
+       do: true
+
+  defp direct_action_current?(%Delivery{} = delivery, "cancel") do
+    match?(%{"status" => status} when status in ["drafted", "cancelled"], action_state(delivery))
+  end
+
+  defp direct_action_current?(
+         %Delivery{insight: %Insight{status: "acknowledged"}} = delivery,
+         action
+       ) do
+    state = action_state(delivery)
+
+    (action in ["ack", "done"] and is_nil(state)) or
+      (action in ["ack", "done", "send"] and callback_applied?(action, state))
+  end
+
+  defp direct_action_current?(
+         %Delivery{insight: %Insight{status: "dismissed"}} = delivery,
+         action
+       ),
+       do:
+         action == "dismiss" and
+           (is_nil(action_state(delivery)) or callback_applied?(action, action_state(delivery)))
+
+  defp direct_action_current?(%Delivery{insight: %Insight{status: "snoozed"}} = delivery, action),
+    do:
+      action == "snooze" and
+        (is_nil(action_state(delivery)) or callback_applied?(action, action_state(delivery)))
+
+  defp direct_action_current?(_delivery, _action), do: false
+
+  def action_state_for_delivery(%Delivery{} = delivery), do: action_state(delivery)
+
+  @doc false
+  def callback_data_for_action(%Delivery{} = delivery, action) when is_binary(action) do
+    delivery
+    |> ensure_insight_preloaded()
+    |> callback_data(action)
+  end
+
+  def handle_callback(data) when is_map(data) do
+    callback = read_string(data, "data")
+    callback_id = read_string(data, "callback_id")
+    chat_id = read_id_string(data, "chat_id")
+    message_id = read_string(data, "message_id", read_integer(data, "message_id"))
+
+    with {:ok, delivery_id, action, callback_revision} <- parse_callback(callback),
+         {:ok, delivery} <- fetch_delivery(delivery_id, chat_id),
+         {:ok, delivery} <- validate_callback_revision(delivery, action, callback_revision),
+         {:ok, delivery, notice} <- dispatch_action(action, delivery),
+         :ok <- refresh_telegram_message(delivery, chat_id, message_id),
+         :ok <- answer_callback(callback_id, notice) do
+      :ok
+    else
+      {:error, :unsupported_callback} ->
+        {:error, :unsupported_callback}
+
+      {:error, :stale_action_revision} ->
+        with :ok <- answer_callback(callback_id, callback_error_text(:stale_action_revision)) do
+          {:noop, :stale_action_revision}
+        end
+
+      {:error, {:telegram_edit_failed, _detail} = reason} ->
+        if read_boolean(data, "durable_processing", false) do
+          # Keep the durable receipt retryable. The action state above is the
+          # checkpoint, so the retry drains only the missing edit/answer.
+          case answer_callback(callback_id, callback_error_text(reason)) do
+            :ok -> {:error, reason}
+            {:error, _answer_reason} = answer_error -> answer_error
+          end
+        else
+          # Legacy async callbacks retain the historical acknowledgement-only
+          # fallback when the stale card cannot be refreshed.
+          answer_callback(callback_id, callback_error_text(reason))
+        end
+
+      {:error, reason} = error ->
+        case answer_callback(callback_id, callback_error_text(reason)) do
+          :ok -> error
+          {:error, _answer_reason} = answer_error -> answer_error
+        end
+    end
+  end
+
+  def handle_callback(_), do: {:error, :unsupported_callback}
+
+  def render_message(%Delivery{} = delivery) do
+    delivery = ensure_insight_preloaded(delivery)
+    insight = delivery.insight
+    metadata = insight.metadata || %{}
+    action_state = action_state(delivery)
+    action_state_text = render_action_state(action_state, insight) |> String.trim()
+
+    [
+      verified_chief_message(insight, metadata),
+      action_state_text
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  def build_reply_markup(%Delivery{} = delivery) do
+    delivery = ensure_insight_preloaded(delivery)
+    callback_helpful = "insfb:#{delivery.id}:h"
+    callback_not_helpful = "insfb:#{delivery.id}:n"
+
+    rows =
+      delivery
+      |> action_rows()
+      |> Kernel.++([
+        [
+          %{"text" => "Helpful", "callback_data" => callback_helpful},
+          %{"text" => "Not Helpful", "callback_data" => callback_not_helpful}
+        ]
+      ])
+
+    %{"inline_keyboard" => rows}
+  end
+
+  defp action_rows(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => status} when status in ["drafted", "executing"] ->
+        [
+          [
+            %{"text" => "Send Now", "callback_data" => callback_data(delivery, "send")},
+            %{"text" => "Regenerate", "callback_data" => callback_data(delivery, "regenerate")}
+          ],
+          [
+            %{"text" => "Cancel", "callback_data" => callback_data(delivery, "cancel")}
+          ]
+        ]
+
+      %{"status" => status} when status in ["executed", "outcome_unknown"] ->
+        []
+
+      %{"status" => "dismissed"} ->
+        []
+
+      %{"status" => "snoozed"} ->
+        []
+
+      _ ->
+        base_rows =
+          if monitor_insight?(delivery.insight) do
+            []
+          else
+            completion_button =
+              if ackable_insight?(delivery.insight) do
+                %{"text" => "Ack", "callback_data" => callback_data(delivery, "ack")}
+              else
+                %{"text" => "Mark Done", "callback_data" => callback_data(delivery, "done")}
+              end
+
+            case primary_action(delivery.insight) do
+              nil ->
+                [
+                  [completion_button]
+                ]
+
+              %{label: label, callback_action: callback_action} ->
+                [
+                  [
+                    %{
+                      "text" => label,
+                      "callback_data" => callback_data(delivery, callback_action)
+                    },
+                    completion_button
+                  ]
+                ]
+            end
+          end
+
+        base_rows ++
+          [
+            [
+              %{"text" => "Snooze 4h", "callback_data" => callback_data(delivery, "snooze")},
+              %{"text" => "Dismiss", "callback_data" => callback_data(delivery, "dismiss")}
+            ]
+          ]
+    end
+  end
+
+  defp dispatch_action("draft", %Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "drafted"} = state ->
+        {:ok, delivery, "#{action_notice_label(state)} draft ready"}
+
+      _missing ->
+        draft_action(delivery)
+    end
+  end
+
+  defp dispatch_action("regenerate", %Delivery{} = delivery) do
+    if callback_replay?(delivery) do
+      case action_state(delivery) do
+        %{"status" => "drafted"} = state ->
+          {:ok, delivery, "#{action_notice_label(state)} draft ready"}
+
+        _other ->
+          {:error, :stale_action_revision}
+      end
+    else
+      draft_action(delivery)
+    end
+  end
+
+  defp dispatch_action("send", %Delivery{} = delivery), do: execute_action(delivery)
+  defp dispatch_action("cancel", %Delivery{} = delivery), do: cancel_action(delivery)
+  defp dispatch_action("ack", %Delivery{} = delivery), do: acknowledge_insight(delivery)
+  defp dispatch_action("done", %Delivery{} = delivery), do: mark_done(delivery)
+  defp dispatch_action("dismiss", %Delivery{} = delivery), do: dismiss_insight(delivery)
+  defp dispatch_action("snooze", %Delivery{} = delivery), do: snooze_insight(delivery)
+  defp dispatch_action(_action, _delivery), do: {:error, :unsupported_action}
+
+  defp draft_action(%Delivery{} = delivery) do
+    insight = delivery.insight
+
+    with {:ok, action_spec} <- build_action_spec(insight),
+         {:ok, draft} <- generate_draft(action_spec, insight),
+         {:ok, delivery} <- put_action_state(delivery, %{"status" => "drafted", "spec" => draft}) do
+      {:ok, delivery, "#{read_string(action_spec, "notice_label", "Action")} draft ready"}
+    end
+  end
+
+  defp execute_action(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => status} when status in ["drafted", "executing"] ->
+        case claim_action_execution(delivery) do
+          {:ok, claimed_delivery, spec, owner_token} ->
+            execute_claimed_action(claimed_delivery, spec, owner_token)
+
+          {:executed, checkpointed_delivery} ->
+            finish_executed_action(checkpointed_delivery)
+
+          {:outcome_unknown, unknown_delivery} ->
+            finish_outcome_unknown_action(unknown_delivery)
+
+          {:error, _reason} = error ->
+            error
+        end
+
+      %{"status" => "executed"} ->
+        # The provider mutation is already checkpointed. A durable callback
+        # retry drains only local acknowledgement and Telegram presentation.
+        finish_executed_action(delivery)
+
+      %{"status" => "outcome_unknown"} ->
+        # No stable provider idempotency key exists. Unknown is terminal until
+        # a human reconciles the sent thread in Gmail or Slack.
+        finish_outcome_unknown_action(delivery)
+
+      _missing_or_stale ->
+        {:error, :draft_not_ready}
+    end
+  end
+
+  defp claim_action_execution(%Delivery{} = delivery) do
+    expected_revision = expected_delivery_revision(delivery)
+    expected_spec = delivery |> action_state() |> read_map("spec")
+    owner_token = Ecto.UUID.generate()
+
+    Repo.transaction(fn ->
+      current =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:delivery_not_found)
+
+        %Delivery{} = current ->
+          current = Repo.preload(current, :insight)
+          current_state = action_state(current)
+
+          # clock_timestamp/0 is read only after FOR UPDATE succeeds. Both the
+          # claim and its expiry therefore come from the shared database clock,
+          # never from a node clock sampled while waiting for this row.
+          {database_now, new_lease_expires_at} = database_execution_window!()
+
+          claim_locked_action(
+            current,
+            current_state,
+            expected_revision,
+            expected_spec,
+            owner_token,
+            database_now,
+            new_lease_expires_at
+          )
+      end
+    end)
+    |> case do
+      {:ok, {:claimed, %Delivery{} = updated, spec, owner_token}} ->
+        {:ok, updated, spec, owner_token}
+
+      {:ok, {:executed, %Delivery{} = updated}} ->
+        {:executed, updated}
+
+      {:ok, {:outcome_unknown, %Delivery{} = updated}} ->
+        {:outcome_unknown, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "executed"} = state,
+         _expected_revision,
+         expected_spec,
+         _owner_token,
+         _database_now,
+         _new_lease_expires_at
+       ) do
+    if frozen_provider_spec?(state, expected_spec) do
+      {:executed, current}
+    else
+      Repo.rollback(:stale_action_revision)
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "outcome_unknown"} = state,
+         _expected_revision,
+         expected_spec,
+         _owner_token,
+         _database_now,
+         _new_lease_expires_at
+       ) do
+    if frozen_provider_spec?(state, expected_spec) do
+      {:outcome_unknown, current}
+    else
+      Repo.rollback(:stale_action_revision)
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "drafted", "spec" => %{} = spec} = state,
+         expected_revision,
+         expected_spec,
+         owner_token,
+         database_now,
+         lease_expires_at
+       ) do
+    desired_state =
+      execution_claim_state(state, owner_token, database_now, lease_expires_at)
+
+    cond do
+      not frozen_provider_spec?(state, expected_spec) ->
+        Repo.rollback(:stale_action_revision)
+
+      delivery_state_revision(current) != expected_revision ->
+        Repo.rollback(:stale_action_revision)
+
+      not monotone_action_transition?(state, desired_state) ->
+        Repo.rollback(:stale_action_revision)
+
+      true ->
+        updated = persist_action_state(current, desired_state)
+        {:claimed, updated, spec, owner_token}
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "executing", "spec" => %{} = spec} = state,
+         expected_revision,
+         expected_spec,
+         owner_token,
+         database_now,
+         new_lease_expires_at
+       ) do
+    cond do
+      not frozen_provider_spec?(state, expected_spec) ->
+        Repo.rollback(:stale_action_revision)
+
+      execution_claim_live?(state, database_now) ->
+        Repo.rollback(:action_in_progress)
+
+      delivery_state_revision(current) != expected_revision ->
+        Repo.rollback(:stale_action_revision)
+
+      reclaimable_pre_provider_claim?(state) ->
+        desired_state =
+          execution_claim_state(state, owner_token, database_now, new_lease_expires_at)
+
+        if monotone_action_transition?(state, desired_state) do
+          updated = persist_action_state(current, desired_state)
+          {:claimed, updated, spec, owner_token}
+        else
+          Repo.rollback(:stale_action_revision)
+        end
+
+      true ->
+        # A durable provider_started marker, or the absence of affirmative
+        # pre-provider proof, makes the outcome ambiguous forever. Never call
+        # a non-idempotent provider from this state again.
+        desired_state =
+          outcome_unknown_state(state, expired_claim_evidence_code(state), database_now)
+
+        if monotone_action_transition?(state, desired_state) do
+          {:outcome_unknown, persist_action_state(current, desired_state)}
+        else
+          Repo.rollback(:stale_action_revision)
+        end
+    end
+  end
+
+  defp claim_locked_action(
+         _current,
+         _state,
+         _expected_revision,
+         _expected_spec,
+         _owner_token,
+         _database_now,
+         _new_lease_expires_at
+       ),
+       do: Repo.rollback(:draft_not_ready)
+
+  defp execution_claim_state(state, owner_token, claimed_at, lease_expires_at) do
+    state
+    |> Map.drop([
+      @provider_started_at_key,
+      @provider_timeout_key,
+      @outcome_unknown_at_key,
+      @outcome_evidence_key,
+      "result",
+      "executed_at",
+      "acknowledged_at"
+    ])
+    |> Map.put("status", "executing")
+    |> Map.put("started_at", DateTime.to_iso8601(claimed_at))
+    |> Map.put(@execution_owner_key, owner_token)
+    |> Map.put(@execution_claimed_at_key, DateTime.to_iso8601(claimed_at))
+    |> Map.put(@execution_lease_expires_at_key, DateTime.to_iso8601(lease_expires_at))
+    |> Map.put(@execution_phase_key, @pre_provider_phase)
+  end
+
+  defp execution_claim_live?(%{"status" => "executing"} = state, database_now) do
+    with owner_token when is_binary(owner_token) <- read_string(state, @execution_owner_key),
+         {:ok, expires_at} <- execution_datetime(state, @execution_lease_expires_at_key) do
+      present?(owner_token) and DateTime.compare(expires_at, database_now) == :gt
+    else
+      _missing_or_invalid -> false
+    end
+  end
+
+  defp execution_claim_live?(_state, _database_now), do: false
+
+  defp reclaimable_pre_provider_claim?(state) do
+    with true <- read_string(state, @execution_phase_key) == @pre_provider_phase,
+         owner_token when is_binary(owner_token) <- read_string(state, @execution_owner_key),
+         true <- present?(owner_token),
+         {:ok, claimed_at} <- execution_datetime(state, @execution_claimed_at_key),
+         {:ok, expires_at} <- execution_datetime(state, @execution_lease_expires_at_key),
+         :gt <- DateTime.compare(expires_at, claimed_at),
+         nil <- read_string(state, @provider_started_at_key),
+         evidence when evidence == %{} <- read_map(state, @outcome_evidence_key) do
+      true
+    else
+      _not_proven_pre_provider -> false
+    end
+  end
+
+  defp expired_claim_evidence_code(state) do
+    if read_string(state, @execution_phase_key) == @provider_started_phase or
+         present?(read_string(state, @provider_started_at_key)) do
+      "provider_claim_expired"
+    else
+      "execution_phase_unverifiable"
+    end
+  end
+
+  defp execute_claimed_action(%Delivery{} = delivery, spec, owner_token) do
+    with {:ok, started_delivery, hard_deadline} <-
+           checkpoint_provider_started(delivery, spec, owner_token) do
+      case run_action_bounded(spec, started_delivery.insight, hard_deadline) do
+        {:ok, result} ->
+          checkpoint_provider_success(started_delivery, spec, owner_token, result)
+
+        {:error, evidence_code} ->
+          checkpoint_provider_outcome_unknown(
+            started_delivery,
+            spec,
+            owner_token,
+            evidence_code
+          )
+      end
+    end
+  end
+
+  defp checkpoint_provider_started(%Delivery{} = delivery, spec, owner_token) do
+    expected_revision = expected_delivery_revision(delivery)
+
+    Repo.transaction(fn ->
+      current =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:delivery_not_found)
+
+        %Delivery{} = current ->
+          current = Repo.preload(current, :insight)
+          state = action_state(current)
+          database_now = database_now!()
+
+          with true <- execution_owner_matches?(state, owner_token),
+               true <- delivery_state_revision(current) == expected_revision,
+               true <- frozen_provider_spec?(state, spec),
+               true <- read_string(state, "status") == "executing",
+               true <- read_string(state, @execution_phase_key) == @pre_provider_phase,
+               true <- execution_claim_live?(state, database_now),
+               {:ok, budget_ms} <- provider_execution_budget(state, database_now) do
+            # The monotonic deadline is fixed before the durable marker is
+            # committed, so commit/scheduling delay consumes (never extends)
+            # the provider's lease-relative execution budget.
+            hard_deadline = provider_monotonic_now_ms() + budget_ms
+
+            desired_state =
+              state
+              |> Map.put(@execution_phase_key, @provider_started_phase)
+              |> Map.put(@provider_started_at_key, DateTime.to_iso8601(database_now))
+              |> Map.put(@provider_timeout_key, budget_ms)
+
+            if monotone_action_transition?(state, desired_state) do
+              updated = persist_action_state(current, desired_state)
+              {updated, hard_deadline}
+            else
+              Repo.rollback(:stale_action_revision)
+            end
+          else
+            false -> Repo.rollback(:execution_claim_lost)
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, {%Delivery{} = updated, hard_deadline}} ->
+        {:ok, updated, hard_deadline}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp provider_execution_budget(state, database_now) do
+    with {:ok, lease_expires_at} <-
+           execution_datetime(state, @execution_lease_expires_at_key) do
+      remaining_ms =
+        DateTime.diff(lease_expires_at, database_now, :millisecond) -
+          @execution_lease_safety_margin_ms
+
+      budget_ms = min(provider_execution_timeout_ms(), remaining_ms)
+
+      if budget_ms > 0 do
+        {:ok, budget_ms}
+      else
+        {:error, :execution_claim_expiring}
+      end
+    else
+      _invalid -> {:error, :execution_claim_expiring}
+    end
+  end
+
+  defp provider_execution_timeout_ms do
+    configured =
+      case Application.get_env(:maraithon, __MODULE__, []) do
+        opts when is_list(opts) ->
+          Keyword.get(
+            opts,
+            :provider_execution_timeout_ms,
+            @default_provider_execution_timeout_ms
+          )
+
+        _invalid ->
+          @default_provider_execution_timeout_ms
+      end
+
+    configured =
+      if is_integer(configured) and configured > 0 do
+        min(configured, @default_provider_execution_timeout_ms)
+      else
+        @default_provider_execution_timeout_ms
+      end
+
+    min(
+      configured,
+      @execution_claim_lease_seconds * 1_000 - @execution_lease_safety_margin_ms
+    )
+  end
+
+  defp provider_monotonic_now_ms do
+    clock =
+      case Application.get_env(:maraithon, __MODULE__, []) do
+        opts when is_list(opts) -> Keyword.get(opts, :provider_monotonic_clock)
+        _invalid -> nil
+      end
+
+    case clock do
+      clock when is_function(clock, 0) ->
+        case clock.() do
+          now when is_integer(now) -> now
+          _invalid -> raise ArgumentError, "provider monotonic clock must return an integer"
+        end
+
+      _default ->
+        System.monotonic_time(:millisecond)
+    end
+  end
+
+  defp run_action_bounded(spec, insight, hard_deadline) do
+    # Check before spawning: an owner can be descheduled after committing the
+    # durable provider_started marker and resume only after its budget is gone.
+    # In that state even creating the task is unsafe because the child could
+    # reach a non-idempotent provider before the owner gets to Task.yield/2.
+    if provider_execution_remaining_ms(hard_deadline) > 0 do
+      with {:ok, task} <- start_owned_provider_task(spec, insight, hard_deadline) do
+        remaining_ms = provider_execution_remaining_ms(hard_deadline)
+        task_result = if remaining_ms > 0, do: Task.yield(task, remaining_ms), else: nil
+
+        case task_result do
+          {:ok, result} ->
+            result
+
+          {:exit, _reason} ->
+            {:error, :provider_task_failed}
+
+          nil ->
+            terminate_and_confirm_provider_task(task)
+            {:error, :provider_deadline_exceeded}
+        end
+      end
+    else
+      {:error, :provider_deadline_exceeded}
+    end
+  end
+
+  defp start_owned_provider_task(spec, insight, hard_deadline) do
+    task =
+      Task.Supervisor.async(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        # The task may itself sit runnable until after the deadline even though
+        # its owner had budget before spawning it. Fail closed before entering
+        # the non-idempotent provider runner.
+        if provider_execution_remaining_ms(hard_deadline) > 0 do
+          safely_run_action(spec, insight)
+        else
+          {:error, :provider_deadline_exceeded}
+        end
+      end)
+
+    {:ok, task}
+  rescue
+    _exception -> {:error, :provider_task_unavailable}
+  catch
+    :exit, _reason -> {:error, :provider_task_unavailable}
+  end
+
+  defp provider_execution_remaining_ms(hard_deadline) do
+    max(hard_deadline - provider_monotonic_now_ms(), 0)
+  end
+
+  defp safely_run_action(spec, insight) do
+    case call_provider_action(spec, insight) do
+      {:ok, %{} = result} -> {:ok, closed_provider_result(spec, result)}
+      {:ok, _invalid_result} -> {:error, :provider_invalid_result}
+      {:error, _reason} -> {:error, :provider_call_failed}
+      _invalid_result -> {:error, :provider_invalid_result}
+    end
+  rescue
+    _exception -> {:error, :provider_task_failed}
+  catch
+    _kind, _reason -> {:error, :provider_task_failed}
+  end
+
+  defp call_provider_action(spec, insight) do
+    case Application.get_env(:maraithon, __MODULE__, []) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :provider_execution_runner) do
+          runner when is_function(runner, 2) -> runner.(spec, insight)
+          _default -> run_action(spec, insight)
+        end
+
+      _invalid ->
+        run_action(spec, insight)
+    end
+  end
+
+  defp terminate_and_confirm_provider_task(%Task{pid: pid} = task) do
+    down_ref = Process.monitor(pid)
+    _ = Task.shutdown(task, :brutal_kill)
+
+    receive do
+      {:DOWN, ^down_ref, :process, ^pid, _reason} -> :ok
+    end
+  end
+
+  defp checkpoint_provider_success(delivery, spec, owner_token, result) do
+    case safely_checkpoint_provider_success(delivery, spec, owner_token, result) do
+      {:ok, checkpointed_delivery} ->
+        finish_executed_action(checkpointed_delivery)
+
+      {:error, _checkpoint_reason} ->
+        # Provider success without a durable success checkpoint is ambiguous.
+        # The fallback is fenced identically; if the database is unavailable,
+        # provider_started remains durable and is itself never reclaimable.
+        checkpoint_provider_outcome_unknown(
+          delivery,
+          spec,
+          owner_token,
+          :success_checkpoint_failed
+        )
+    end
+  end
+
+  defp safely_checkpoint_provider_success(delivery, spec, owner_token, result) do
+    state = action_state(delivery) || %{}
+
+    desired_state =
+      state
+      |> Map.put("status", "executed")
+      |> Map.put("spec", spec)
+      |> Map.put("result", result)
+      |> Map.put("executed_at", database_now_iso8601())
+      |> Map.put(@execution_phase_key, @provider_checkpointed_phase)
+      |> Map.put(@execution_owner_key, owner_token)
+
+    safely_put_provider_state(delivery, desired_state, owner_token)
+  rescue
+    _exception -> {:error, :provider_state_checkpoint_failed}
+  catch
+    _kind, _reason -> {:error, :provider_state_checkpoint_failed}
+  end
+
+  defp checkpoint_provider_outcome_unknown(delivery, spec, owner_token, evidence_code) do
+    state = action_state(delivery) || %{}
+
+    if frozen_provider_spec?(state, spec) do
+      desired_state =
+        outcome_unknown_state(state, outcome_evidence_code(evidence_code), database_now_iso8601())
+
+      case safely_put_provider_state(delivery, desired_state, owner_token) do
+        {:ok, unknown_delivery} ->
+          {:ok, unknown_delivery, reconciliation_notice(spec)}
+
+        {:error, _checkpoint_reason} ->
+          {:error, :provider_outcome_unknown}
+      end
+    else
+      {:error, :provider_outcome_unknown}
+    end
+  rescue
+    _exception -> {:error, :provider_outcome_unknown}
+  catch
+    _kind, _reason -> {:error, :provider_outcome_unknown}
+  end
+
+  defp safely_put_provider_state(delivery, desired_state, owner_token) do
+    put_action_state(delivery, desired_state, execution_owner: owner_token)
+  rescue
+    _exception -> {:error, :provider_state_checkpoint_failed}
+  catch
+    _kind, _reason -> {:error, :provider_state_checkpoint_failed}
+  end
+
+  defp outcome_evidence_code(code)
+       when code in [
+              :provider_call_failed,
+              :provider_deadline_exceeded,
+              :provider_invalid_result,
+              :provider_task_failed,
+              :provider_task_unavailable,
+              :success_checkpoint_failed
+            ],
+       do: Atom.to_string(code)
+
+  defp outcome_evidence_code(_code), do: "provider_outcome_unverifiable"
+
+  defp outcome_unknown_state(state, evidence_code, database_now) when is_binary(evidence_code) do
+    %{
+      "status" => "outcome_unknown",
+      "spec" => read_map(state, "spec"),
+      "started_at" => bounded_protocol_string(state, "started_at"),
+      @execution_owner_key => bounded_protocol_string(state, @execution_owner_key),
+      @execution_claimed_at_key => bounded_protocol_string(state, @execution_claimed_at_key),
+      @execution_lease_expires_at_key =>
+        bounded_protocol_string(state, @execution_lease_expires_at_key),
+      @execution_phase_key => bounded_protocol_string(state, @execution_phase_key),
+      @provider_started_at_key => bounded_protocol_string(state, @provider_started_at_key),
+      @provider_timeout_key => bounded_protocol_integer(state, @provider_timeout_key),
+      @outcome_unknown_at_key => database_iso8601(database_now),
+      @outcome_evidence_key => %{
+        "code" => String.slice(evidence_code, 0, 64),
+        "manual_reconciliation_required" => true
+      }
+    }
+    |> compact_map()
+  end
+
+  defp finish_outcome_unknown_action(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+    spec = read_map(state, "spec")
+    evidence = read_map(state, @outcome_evidence_key)
+
+    if read_string(state, "status") == "outcome_unknown" and
+         action_state_kind(state) in ["gmail_reply", "slack_reply"] and
+         read_boolean(evidence, "manual_reconciliation_required", false) do
+      {:ok, delivery, reconciliation_notice(spec)}
+    else
+      {:error, :draft_not_ready}
+    end
+  end
+
+  defp frozen_provider_spec?(state, expected_spec)
+       when is_map(state) and is_map(expected_spec) and map_size(expected_spec) > 0 do
+    read_map(state, "spec") == expected_spec and
+      action_state_kind(state) in ["gmail_reply", "slack_reply"]
+  end
+
+  defp frozen_provider_spec?(_state, _expected_spec), do: false
+
+  defp execution_datetime(state, key) do
+    case read_string(state, key) do
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> {:ok, datetime}
+          _invalid -> :error
+        end
+
+      _missing ->
+        :error
+    end
+  end
+
+  defp database_execution_window! do
+    case Repo.query!(
+           """
+           WITH db_clock AS MATERIALIZED (
+             SELECT timezone('UTC', clock_timestamp()) AS claimed_at
+           )
+           SELECT claimed_at,
+                  claimed_at + ($1::bigint * interval '1 second') AS lease_expires_at
+           FROM db_clock
+           """,
+           [@execution_claim_lease_seconds],
+           log: false
+         ).rows do
+      [[claimed_at, lease_expires_at]] ->
+        {database_datetime!(claimed_at), database_datetime!(lease_expires_at)}
+    end
+  end
+
+  defp database_now! do
+    case Repo.query!("SELECT timezone('UTC', clock_timestamp())", [], log: false).rows do
+      [[value]] -> database_datetime!(value)
+    end
+  end
+
+  defp database_now_iso8601 do
+    database_now!() |> DateTime.to_iso8601()
+  end
+
+  defp database_datetime!(%NaiveDateTime{} = value), do: DateTime.from_naive!(value, "Etc/UTC")
+  defp database_datetime!(%DateTime{} = value), do: value
+
+  defp database_iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp database_iso8601(value) when is_binary(value), do: String.slice(value, 0, 64)
+
+  defp bounded_protocol_string(state, key) do
+    case read_string(state, key) do
+      value when is_binary(value) -> String.slice(value, 0, 64)
+      _missing -> nil
+    end
+  end
+
+  defp bounded_protocol_integer(state, key) do
+    case read_integer(state, key) do
+      value when is_integer(value) and value > 0 ->
+        min(value, @execution_claim_lease_seconds * 1_000)
+
+      _missing_or_invalid ->
+        nil
+    end
+  end
+
+  defp closed_provider_result(%{"kind" => "gmail_reply"}, result) do
+    result = stringify_map_keys(result)
+
+    compact_map(%{
+      "source" => "gmail",
+      "provider" => bounded_result_string(result, "provider"),
+      "message_id" => bounded_result_string(result, "message_id"),
+      "thread_id" => bounded_result_string(result, "thread_id"),
+      "label_ids" => bounded_result_strings(result, "label_ids")
+    })
+  end
+
+  defp closed_provider_result(%{"kind" => "slack_reply"}, result) do
+    result = stringify_map_keys(result)
+
+    compact_map(%{
+      "source" => "slack",
+      "team_id" => bounded_result_string(result, "team_id"),
+      "channel" => bounded_result_string(result, "channel"),
+      "token_provider" => bounded_result_string(result, "token_provider"),
+      "ts" => bounded_result_string(result, "ts"),
+      "ok" => bounded_result_boolean(result, "ok")
+    })
+  end
+
+  defp bounded_result_string(result, key) do
+    case fetch(result, key) do
+      value when is_binary(value) ->
+        String.slice(value, 0, @max_provider_result_string_length)
+
+      value when is_integer(value) ->
+        Integer.to_string(value)
+
+      value when is_atom(value) ->
+        value |> Atom.to_string() |> String.slice(0, @max_provider_result_string_length)
+
+      _invalid ->
+        nil
+    end
+  end
+
+  defp bounded_result_strings(result, key) do
+    case fetch(result, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.take(@max_provider_label_ids)
+        |> Enum.map(fn value -> bounded_result_string(%{"value" => value}, "value") end)
+        |> Enum.reject(&is_nil/1)
+
+      _invalid ->
+        []
+    end
+  end
+
+  defp bounded_result_boolean(result, key) do
+    case fetch(result, key) do
+      value when value in [true, false] -> value
+      _invalid -> nil
+    end
+  end
+
+  defp finish_executed_action(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+    spec = read_map(state, "spec")
+    result = read_map(state, "result")
+    kind = read_string(state, "kind", read_string(spec, "kind"))
+
+    cond do
+      kind in ["gmail_reply", "slack_reply", "manual_complete", "manual_ack"] ->
+        spec = if map_size(spec) == 0, do: %{"kind" => kind}, else: spec
+
+        with :ok <- ensure_execution_acknowledged(delivery, state, spec, result),
+             {:ok, delivery} <- checkpoint_execution_ack(delivery, state) do
+          {:ok, delivery, execution_notice(spec)}
+        end
+
+      true ->
+        {:error, :draft_not_ready}
+    end
+  end
+
+  defp ensure_execution_acknowledged(delivery, state, spec, result) do
+    insight = Repo.get(Insight, delivery.insight_id) || delivery.insight
+
+    with :ok <- maybe_acknowledge_execution(insight, state, spec, result),
+         {:ok, _todo} <- Todos.sync_from_insight(Repo.get!(Insight, delivery.insight_id)) do
+      :ok
+    end
+  end
+
+  defp maybe_acknowledge_execution(insight, state, spec, result) do
+    if execution_acknowledged?(insight, state, spec) do
+      :ok
+    else
+      case acknowledge_with_result(insight, spec, result) do
+        {:ok, _insight} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp execution_acknowledged?(%Insight{} = insight, state, spec) do
+    resolution = read_map(insight.metadata || %{}, "telegram_resolution")
+
+    is_binary(read_string(state, "acknowledged_at")) or
+      (insight.status == "acknowledged" and
+         read_string(resolution, "kind") == read_string(spec, "kind"))
+  end
+
+  defp checkpoint_execution_ack(delivery, state) do
+    if is_binary(read_string(state, "acknowledged_at")) do
+      {:ok, delivery}
+    else
+      put_action_state(delivery, Map.put(state, "acknowledged_at", now_iso8601()))
+    end
+  end
+
+  defp cancel_action(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "cancelled"} ->
+        {:ok, delivery, "Draft cleared"}
+
+      _other ->
+        with {:ok, delivery} <- put_action_state(delivery, %{"status" => "cancelled"}) do
+          {:ok, delivery, "Draft cleared"}
+        end
+    end
+  end
+
+  defp mark_done(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "executed", "kind" => "manual_complete"} ->
+        finish_executed_action(delivery)
+
+      _other ->
+        with {:ok, delivery} <-
+               put_action_state(delivery, %{
+                 "status" => "executed",
+                 "kind" => "manual_complete",
+                 "result" => %{"status" => "marked_complete_in_telegram"},
+                 "executed_at" => now_iso8601()
+               }) do
+          finish_executed_action(delivery)
+        end
+    end
+  end
+
+  defp acknowledge_insight(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "executed", "kind" => "manual_ack"} ->
+        finish_executed_action(delivery)
+
+      _other ->
+        with {:ok, checkpointed} <-
+               put_action_state(delivery, %{
+                 "status" => "executed",
+                 "kind" => "manual_ack",
+                 "result" => %{"status" => "acknowledged_in_telegram"},
+                 "executed_at" => now_iso8601()
+               }) do
+          finish_executed_action(checkpointed)
+        end
+    end
+  end
+
+  defp dismiss_insight(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "dismissed"} ->
+        finish_dismissed_insight(delivery)
+
+      _other ->
+        with {:ok, checkpointed} <-
+               put_action_state(delivery, %{
+                 "status" => "dismissed",
+                 "dismissed_at" => now_iso8601()
+               }) do
+          finish_dismissed_insight(checkpointed)
+        end
+    end
+  end
+
+  defp finish_dismissed_insight(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+
+    with :ok <- ensure_insight_status_and_todo(delivery, "dismissed"),
+         {:ok, checkpointed} <- checkpoint_action_synchronized(delivery, state) do
+      {:ok, checkpointed, "Insight dismissed"}
+    end
+  end
+
+  defp snooze_insight(%Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "snoozed"} ->
+        finish_snoozed_insight(delivery)
+
+      _other ->
+        snooze_until = existing_or_new_snooze_deadline(delivery.insight)
+
+        with {:ok, checkpointed} <-
+               put_action_state(delivery, %{
+                 "status" => "snoozed",
+                 "until" => DateTime.to_iso8601(snooze_until)
+               }) do
+          finish_snoozed_insight(checkpointed)
+        end
+    end
+  end
+
+  defp finish_snoozed_insight(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+
+    with {:ok, snooze_until} <- parse_snooze_deadline(read_string(state, "until")),
+         :ok <- ensure_insight_snoozed_and_todo(delivery, snooze_until),
+         {:ok, checkpointed} <- checkpoint_action_synchronized(delivery, state) do
+      {:ok, checkpointed, "Snoozed for 4 hours"}
+    end
+  end
+
+  defp checkpoint_action_synchronized(delivery, state) do
+    if is_binary(read_string(state, "synchronized_at")) do
+      {:ok, delivery}
+    else
+      put_action_state(delivery, Map.put(state, "synchronized_at", now_iso8601()))
+    end
+  end
+
+  defp parse_snooze_deadline(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
+      _invalid -> {:error, :invalid_snooze_deadline}
+    end
+  end
+
+  defp parse_snooze_deadline(_value), do: {:error, :invalid_snooze_deadline}
+
+  defp existing_or_new_snooze_deadline(%Insight{
+         status: "snoozed",
+         snoozed_until: %DateTime{} = snoozed_until
+       }),
+       do: snoozed_until
+
+  defp existing_or_new_snooze_deadline(_insight),
+    do: DateTime.add(DateTime.utc_now(), 4, :hour)
+
+  defp ensure_insight_status_and_todo(%Delivery{} = delivery, status) do
+    insight = Repo.get(Insight, delivery.insight_id) || delivery.insight
+
+    result =
+      case {status, insight.status} do
+        {"dismissed", "dismissed"} -> {:ok, insight}
+        {"dismissed", _other} -> Insights.dismiss(delivery.user_id, delivery.insight_id)
+        _unsupported -> {:error, :unsupported_action}
+      end
+
+    with {:ok, _updated} <- result,
+         {:ok, _todo} <- Todos.sync_from_insight(Repo.get!(Insight, delivery.insight_id)) do
+      :ok
+    end
+  end
+
+  defp ensure_insight_snoozed_and_todo(%Delivery{} = delivery, snooze_until) do
+    insight = Repo.get(Insight, delivery.insight_id) || delivery.insight
+
+    result =
+      if insight.status == "snoozed" and match?(%DateTime{}, insight.snoozed_until) do
+        {:ok, insight}
+      else
+        Insights.snooze(delivery.user_id, delivery.insight_id, snooze_until)
+      end
+
+    with {:ok, _updated} <- result,
+         {:ok, _todo} <- Todos.sync_from_insight(Repo.get!(Insight, delivery.insight_id)) do
+      :ok
+    end
+  end
+
+  defp build_action_spec(%Insight{} = insight) do
+    metadata = insight.metadata || %{}
+
+    cond do
+      insight.source == "gmail" ->
+        to = gmail_target_address(insight, metadata)
+
+        if blank?(to) do
+          {:error, :action_not_available}
+        else
+          {:ok,
+           %{
+             "kind" => "gmail_reply",
+             "notice_label" => "Email",
+             "account" => read_string(metadata, "account"),
+             "to" => to,
+             "subject" =>
+               normalize_reply_subject(read_string(metadata, "subject", insight.title)),
+             "thread_id" => read_string(metadata, "thread_id"),
+             "reply_to_message_id" => insight.source_id,
+             "person" => record_value(metadata, "person"),
+             "context" => build_context(insight, metadata),
+             "operator_needs" => operator_needs(insight, metadata),
+             "suggested_reply_points" => read_string_list(metadata, "suggested_reply_points"),
+             "draft_plan" => draft_plan(insight, metadata),
+             "voice_guidance" => operator_voice_guidance(insight.user_id)
+           }}
+        end
+
+      insight.source == "slack" ->
+        team_id = read_string(metadata, "team_id")
+        channel_id = read_string(metadata, "channel_id")
+        thread_ts = read_string(metadata, "thread_ts") || slack_source_ts(insight.source_id)
+
+        if blank?(team_id) or blank?(channel_id) do
+          {:error, :action_not_available}
+        else
+          {:ok,
+           %{
+             "kind" => "slack_reply",
+             "notice_label" => "Slack",
+             "team_id" => team_id,
+             "channel" => channel_id,
+             "thread_ts" => thread_ts,
+             "person" => record_value(metadata, "person"),
+             "context" => build_context(insight, metadata),
+             "operator_needs" => operator_needs(insight, metadata),
+             "suggested_reply_points" => read_string_list(metadata, "suggested_reply_points"),
+             "draft_plan" => draft_plan(insight, metadata),
+             "voice_guidance" => operator_voice_guidance(insight.user_id)
+           }}
+        end
+
+      true ->
+        {:error, :action_not_available}
+    end
+  end
+
+  defp generate_draft(%{"kind" => "gmail_reply"} = spec, %Insight{} = insight) do
+    fallback = %{
+      "kind" => "gmail_reply",
+      "account" => spec["account"],
+      "to" => spec["to"],
+      "subject" => spec["subject"],
+      "body" => fallback_email_body(spec, insight),
+      "thread_id" => spec["thread_id"],
+      "reply_to_message_id" => spec["reply_to_message_id"]
+    }
+
+    prompt = email_prompt(spec, insight)
+
+    case llm_json(prompt) do
+      {:ok, %{"subject" => subject, "body" => body}}
+      when is_binary(subject) and is_binary(body) ->
+        {:ok,
+         fallback
+         |> Map.put("subject", Drafts.sanitize_text(subject))
+         |> Map.put("body", Drafts.sanitize_text(body))}
+
+      _ ->
+        {:ok, fallback}
+    end
+  end
+
+  defp generate_draft(%{"kind" => "slack_reply"} = spec, %Insight{} = insight) do
+    fallback = %{
+      "kind" => "slack_reply",
+      "team_id" => spec["team_id"],
+      "channel" => spec["channel"],
+      "thread_ts" => spec["thread_ts"],
+      "text" => fallback_slack_text(spec, insight)
+    }
+
+    prompt = slack_prompt(spec, insight)
+
+    case llm_json(prompt) do
+      {:ok, %{"text" => text}} when is_binary(text) ->
+        {:ok, Map.put(fallback, "text", Drafts.sanitize_text(text))}
+
+      _ ->
+        {:ok, fallback}
+    end
+  end
+
+  defp run_action(%{"kind" => "gmail_reply"} = spec, %Insight{} = insight) do
+    args = %{
+      "user_id" => insight.user_id,
+      "account" => read_string(spec, "account"),
+      "to" => read_string(spec, "to"),
+      "subject" => read_string(spec, "subject"),
+      "body" => read_string(spec, "body"),
+      "thread_id" => read_string(spec, "thread_id"),
+      "reply_to_message_id" => read_string(spec, "reply_to_message_id")
+    }
+
+    Tools.execute("gmail_send_message", compact_map(args))
+  end
+
+  defp run_action(%{"kind" => "slack_reply"} = spec, %Insight{} = insight) do
+    args = %{
+      "user_id" => insight.user_id,
+      "team_id" => read_string(spec, "team_id"),
+      "channel" => read_string(spec, "channel"),
+      "text" => read_string(spec, "text"),
+      "thread_ts" => read_string(spec, "thread_ts")
+    }
+
+    Tools.execute("slack_post_message", compact_map(args))
+  end
+
+  defp run_action(_spec, _insight), do: {:error, :action_not_available}
+
+  defp acknowledge_with_result(%Insight{} = insight, spec, result) do
+    Repo.transaction(fn ->
+      current =
+        Insight
+        |> where(
+          [candidate],
+          candidate.id == ^insight.id and candidate.user_id == ^insight.user_id
+        )
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:not_found)
+
+        %Insight{} = current ->
+          merged_metadata =
+            (current.metadata || %{})
+            |> Map.put(
+              "telegram_resolution",
+              compact_map(%{
+                "kind" => read_string(spec, "kind"),
+                "completed_at" =>
+                  DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+                "result" => stringify_map_keys(result)
+              })
+            )
+
+          with {:ok, updated} <-
+                 current
+                 |> Ecto.Changeset.change(
+                   status: "acknowledged",
+                   snoozed_until: nil,
+                   metadata: merged_metadata
+                 )
+                 |> Repo.update(),
+               {:ok, _todo} <- Todos.sync_from_insight(updated) do
+            updated
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, %Insight{} = updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp put_action_state(%Delivery{} = delivery, action_state, opts \\ [])
+       when is_map(action_state) and is_list(opts) do
+    expected_revision = expected_delivery_revision(delivery)
+    expected_execution_owner = Keyword.get(opts, :execution_owner)
+    desired_state = stringify_map_keys(action_state)
+
+    Repo.transaction(fn ->
+      current =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:delivery_not_found)
+
+        %Delivery{} = current ->
+          current = Repo.preload(current, :insight)
+          current_state = action_state(current)
+
+          cond do
+            not execution_owner_matches?(current_state, expected_execution_owner) ->
+              Repo.rollback(:execution_claim_lost)
+
+            delivery_state_revision(current) != expected_revision ->
+              Repo.rollback(:stale_action_revision)
+
+            not monotone_action_transition?(current_state, desired_state) ->
+              Repo.rollback(:stale_action_revision)
+
+            true ->
+              persist_action_state(current, desired_state)
+          end
+      end
+    end)
+    |> case do
+      {:ok, %Delivery{} = updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp expected_delivery_revision(%Delivery{} = delivery) do
+    read_string(delivery.metadata || %{}, @expected_delivery_revision_key) ||
+      delivery_state_revision(delivery)
+  end
+
+  defp execution_owner_matches?(_state, nil), do: true
+
+  defp execution_owner_matches?(state, owner_token) when is_binary(owner_token),
+    do: read_string(state || %{}, @execution_owner_key) == owner_token
+
+  defp execution_owner_matches?(_state, _owner_token), do: false
+
+  defp persist_action_state(%Delivery{} = current, desired_state) do
+    metadata =
+      current.metadata
+      |> Kernel.||(%{})
+      |> Map.delete(@expected_delivery_revision_key)
+      |> Map.put("telegram_action", desired_state)
+
+    case current
+         |> Ecto.Changeset.change(metadata: metadata)
+         |> Repo.update() do
+      {:ok, updated} -> Repo.preload(updated, :insight)
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp monotone_action_transition?(nil, %{"status" => desired})
+       when desired in ["drafted", "executed", "cancelled", "dismissed", "snoozed"],
+       do: true
+
+  defp monotone_action_transition?(%{"status" => "cancelled"}, %{"status" => desired})
+       when desired in ["drafted", "executed", "cancelled", "dismissed", "snoozed"],
+       do: true
+
+  defp monotone_action_transition?(
+         %{"status" => "drafted"} = current,
+         %{"status" => "executing"} = desired
+       ),
+       do: read_map(current, "spec") == read_map(desired, "spec")
+
+  defp monotone_action_transition?(%{"status" => "drafted"}, %{"status" => desired})
+       when desired in ["drafted", "executed", "cancelled"],
+       do: true
+
+  defp monotone_action_transition?(
+         %{"status" => "executing"} = current,
+         %{"status" => desired_status} = desired
+       )
+       when desired_status in ["executing", "executed", "outcome_unknown"],
+       do: read_map(current, "spec") == read_map(desired, "spec")
+
+  defp monotone_action_transition?(
+         %{"status" => "outcome_unknown"} = current,
+         %{"status" => "outcome_unknown"} = desired
+       ),
+       do: read_map(current, "spec") == read_map(desired, "spec")
+
+  defp monotone_action_transition?(
+         %{"status" => "executed"} = current,
+         %{"status" => "executed"} = desired
+       ),
+       do: action_state_kind(current) == action_state_kind(desired)
+
+  defp monotone_action_transition?(%{"status" => terminal}, %{"status" => terminal})
+       when terminal in ["dismissed", "snoozed"],
+       do: true
+
+  defp monotone_action_transition?(_current, _desired), do: false
+
+  defp action_state_kind(state) when is_map(state) do
+    read_string(state, "kind", read_string(read_map(state, "spec"), "kind"))
+  end
+
+  defp fetch_delivery(delivery_id, chat_id) when is_binary(delivery_id) do
+    delivery =
+      Delivery
+      |> where([d], d.id == ^delivery_id)
+      |> preload([:insight])
+      |> Repo.one()
+
+    cond do
+      is_nil(delivery) ->
+        {:error, :delivery_not_found}
+
+      to_string(delivery.destination) != to_string(chat_id) ->
+        {:error, :unauthorized_chat}
+
+      true ->
+        {:ok, delivery}
+    end
+  end
+
+  defp fetch_delivery(_delivery_id, _chat_id), do: {:error, :delivery_not_found}
+
+  defp refresh_telegram_message(%Delivery{} = delivery, chat_id, message_id) do
+    payload = telegram_payload(delivery)
+    module = telegram_module()
+    _ = Code.ensure_loaded(module)
+
+    cond do
+      function_exported?(module, :edit_message_text, 4) and present?(message_id) ->
+        case module.edit_message_text(chat_id, message_id, payload.text,
+               parse_mode: "HTML",
+               reply_markup: payload.reply_markup
+             ) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:telegram_edit_failed, reason}}
+        end
+
+      function_exported?(module, :send_message, 3) ->
+        case module.send_message(chat_id, payload.text,
+               parse_mode: "HTML",
+               reply_markup: payload.reply_markup
+             ) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+        end
+
+      true ->
+        {:error, :telegram_module_missing}
+    end
+  end
+
+  defp render_action_state(nil, _insight), do: ""
+
+  defp render_action_state(%{"status" => "executing"} = state, insight),
+    do: render_action_state(Map.put(state, "status", "drafted"), insight)
+
+  defp render_action_state(%{"status" => "drafted"} = state, _insight) do
+    spec = read_map(state, "spec")
+
+    case read_string(spec, "kind") do
+      "gmail_reply" ->
+        body = read_string(spec, "body")
+        subject = read_string(spec, "subject")
+
+        "\n\n<b>Email draft ready</b>\n<b>Subject:</b> #{safe(subject)}\n<pre>#{safe(truncate(body, @max_preview_length))}</pre>"
+
+      "slack_reply" ->
+        text = read_string(spec, "text")
+        "\n\n<b>Slack draft ready</b>\n<pre>#{safe(truncate(text, @max_preview_length))}</pre>"
+
+      _ ->
+        ""
+    end
+  end
+
+  defp render_action_state(%{"status" => "executed"} = state, insight) do
+    kind = read_string(state, "kind", read_string(read_map(state, "spec"), "kind"))
+
+    title_line = completed_item_line(insight)
+
+    {heading, details} =
+      case kind do
+        "gmail_reply" ->
+          {"Sent", "Sent via Gmail."}
+
+        "slack_reply" ->
+          {"Sent", "Sent in Slack."}
+
+        "manual_complete" ->
+          {"Marked Done", "Marked complete from Telegram."}
+
+        "manual_ack" ->
+          {"Acknowledged", "Acknowledged from Telegram."}
+
+        _ ->
+          {"Completed", "Action completed."}
+      end
+
+    "\n\n<b>#{heading}</b>\n#{details}#{title_line}"
+  end
+
+  defp render_action_state(%{"status" => "outcome_unknown"} = state, _insight) do
+    provider =
+      case action_state_kind(state) do
+        "gmail_reply" -> "Gmail"
+        "slack_reply" -> "Slack"
+        _other -> "The provider"
+      end
+
+    "\n\n<b>Send needs review</b>\n#{provider} may have accepted this message. Check the sent thread before sending anything else."
+  end
+
+  defp render_action_state(%{"status" => "snoozed"} = state, _insight) do
+    until_text = read_string(state, "until")
+    "\n\n<b>Snoozed</b>\nUntil: #{safe(until_text)}"
+  end
+
+  defp render_action_state(%{"status" => "dismissed"}, _insight), do: "\n\n<b>Dismissed</b>"
+  defp render_action_state(%{"status" => "cancelled"}, _insight), do: ""
+  defp render_action_state(_, _insight), do: ""
+
+  defp completed_item_line(%Insight{} = insight) do
+    title = insight.title
+
+    if present?(title) do
+      "\nItem: #{safe(truncate(title, @section_text_max_length))}"
+    else
+      ""
+    end
+  end
+
+  defp completed_item_line(_insight), do: ""
+
+  defp action_state(%Delivery{} = delivery) do
+    case delivery.metadata do
+      %{"telegram_action" => %{} = state} -> state
+      _ -> nil
+    end
+  end
+
+  defp verified_chief_message(%Insight{} = insight, metadata) do
+    candidates = [
+      fn -> chief_message(insight, metadata) end,
+      fn -> fallback_chief_message(insight, metadata) end
+    ]
+
+    Enum.reduce_while(candidates, nil, fn candidate_fun, _last_error ->
+      message = candidate_fun.()
+
+      case verify_chief_message(message) do
+        :ok ->
+          {:halt, message}
+
+        {:error, issues} ->
+          {:cont, {:error, issues}}
+      end
+    end)
+    |> case do
+      message when is_binary(message) ->
+        message
+
+      {:error, issues} ->
+        Logger.warning("Telegram insight notification failed chief-of-staff verification",
+          insight_id: insight.id,
+          issues: issues
+        )
+
+        fallback_chief_message(insight, metadata)
+        |> truncate(@chief_message_max_length)
+    end
+  end
+
+  defp chief_message(%Insight{} = insight, metadata) do
+    insight_sections(insight, metadata)
+    |> Enum.map(fn {label, text} -> message_section(label, text) end)
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp fallback_chief_message(%Insight{} = insight, metadata) do
+    insight_sections(insight, metadata)
+    |> Enum.map(fn {label, text} -> message_section(label, text, 120) end)
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp insight_sections(%Insight{} = insight, metadata) do
+    label = if monitor_insight?(insight), do: "Watching", else: "Needs action"
+
+    polished =
+      UserFacingCopy.polish_attrs(%{
+        "title" => todo_text(insight, metadata),
+        "summary" => context_text(insight, metadata),
+        "metadata" => metadata || %{}
+      })
+
+    [
+      {label, Map.get(polished, "title")},
+      {"Next", next_text(insight, metadata) |> UserFacingCopy.polish_text()},
+      {"Context", Map.get(polished, "summary")},
+      {"Person", person_text(insight, metadata) |> UserFacingCopy.polish_text()},
+      {"Why now", why_important_text(insight, metadata) |> UserFacingCopy.polish_text()}
+    ]
+  end
+
+  defp verify_chief_message(message) when is_binary(message) do
+    required_sections = ["Next", "Context", "Person", "Why now"]
+
+    issues =
+      []
+      |> maybe_append("too_long", String.length(message) > @chief_message_max_length)
+      |> maybe_append(
+        "missing_needs_action_or_watching",
+        not (String.contains?(message, "<b>Needs action</b>") or
+               String.contains?(message, "<b>Watching</b>"))
+      )
+      |> then(fn issues ->
+        Enum.reduce(required_sections, issues, fn section, acc ->
+          maybe_append(
+            acc,
+            "missing_#{section}",
+            not String.contains?(message, "<b>#{section}</b>")
+          )
+        end)
+      end)
+      |> maybe_append(
+        "legacy_copy",
+        Enum.any?(@legacy_notification_fragments, &String.contains?(message, &1))
+      )
+
+    if issues == [], do: :ok, else: {:error, issues}
+  end
+
+  defp message_section(label, text, max_length \\ @section_text_max_length)
+  defp message_section(_label, text, _max_length) when not is_binary(text), do: nil
+
+  defp message_section(label, text, max_length) do
+    text =
+      text
+      |> compact_sentence()
+      |> truncate(max_length)
+      |> ensure_sentence()
+
+    if blank?(text), do: nil, else: "<b>#{safe(label)}</b>\n#{safe(text)}"
+  end
+
+  defp todo_text(%Insight{} = insight, metadata) do
+    person = person_name(insight, metadata)
+    subject = read_string(metadata, "subject")
+    commitment = record_value(metadata, "commitment")
+
+    cond do
+      present?(commitment) ->
+        commitment
+
+      String.match?(to_string(insight.title), ~r/^reply owed:/i) ->
+        reply_todo_text(person, subject || insight.title)
+
+      present?(insight.title) ->
+        insight.title
+
+      true ->
+        insight.recommended_action
+    end
+  end
+
+  defp reply_todo_text(person, subject) do
+    subject = clean_subject(subject)
+
+    cond do
+      present?(person) and present?(subject) -> "Reply to #{person} about #{subject}"
+      present?(person) -> "Reply to #{person}"
+      present?(subject) -> "Reply on #{subject}"
+      true -> "Reply to the thread"
+    end
+  end
+
+  defp context_text(%Insight{} = insight, metadata) do
+    subject = subject_text(metadata)
+    person = person_name(insight, metadata)
+
+    context =
+      read_string(metadata, "context_brief") ||
+        metadata |> read_map("attention") |> read_string("change_summary") ||
+        insight.summary
+
+    context =
+      cond do
+        present?(subject) and blank?(context) ->
+          subject_thread_sentence(subject)
+
+        present?(subject) and generic_followup_context?(context) ->
+          "#{subject_thread_sentence(subject)} #{waiting_context_sentence(person)}"
+
+        true ->
+          context
+      end
+
+    [context, due_sentence(insight, metadata)]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp person_text(%Insight{} = insight, metadata) do
+    person = person_name(insight, metadata)
+    identity = person_identity_text(metadata)
+    source = source_label(insight, metadata)
+
+    cond do
+      present?(person) ->
+        [person, identity, source]
+
+      subject = subject_text(metadata) ->
+        ["Owner to confirm", "#{subject} thread", source]
+
+      true ->
+        ["Owner to confirm", source]
+    end
+    |> Enum.reject(&blank?/1)
+    |> case do
+      [] -> nil
+      [primary] -> primary
+      [primary | details] -> "#{primary} — #{Enum.join(details, " · ")}"
+    end
+  end
+
+  defp why_important_text(%Insight{} = insight, metadata) do
+    why_now = read_string(metadata, "why_now")
+    context = conversation_context(metadata)
+
+    cond do
+      present?(why_now) ->
+        why_now
+
+      monitor_insight?(insight) ->
+        "The thread matters, but the next move may not be yours unless it stalls or asks back."
+
+      present?(read_string(context, "open_loop_reason")) ->
+        read_string(context, "open_loop_reason")
+
+      match?(%DateTime{}, insight.due_at) ->
+        "The deadline is active and no completion signal is recorded."
+
+      insight.category in ["reply_urgent", "reply_owed", "commitment_unresolved"] ->
+        "A named person is waiting on the next step, with no recorded closure signal."
+
+      true ->
+        "Source context says this remains open; decide whether to act, delegate, or dismiss it."
+    end
+  end
+
+  defp next_text(%Insight{} = insight, metadata) do
+    explicit =
+      record_value(metadata, "next_action") ||
+        read_string(metadata, "next_action") ||
+        insight.recommended_action
+
+    suggestions = suggested_next_actions_text(metadata)
+
+    cond do
+      present?(explicit) and generic_next_action?(explicit) and present?(suggestions) ->
+        suggestions
+
+      present?(explicit) and generic_next_action?(explicit) ->
+        inferred_next_action(insight, metadata)
+
+      present?(explicit) ->
+        explicit
+
+      present?(suggestions) ->
+        suggestions
+
+      monitor_insight?(insight) ->
+        "Watch for a blocker, a direct request back to you, or a stall in progress."
+
+      true ->
+        inferred_next_action(insight, metadata)
+    end
+    |> proactive_next_step_text(insight, metadata)
+  end
+
+  defp person_name(metadata) do
+    record_value(metadata, "person") ||
+      read_string(metadata, "person") ||
+      first_email_name(read_string(metadata, "from")) ||
+      first_email_name(read_string(metadata, "to"))
+  end
+
+  defp person_name(%Insight{} = insight, metadata) do
+    person_name(metadata) || inferred_person_name(insight)
+  end
+
+  defp inferred_person_name(%Insight{} = insight) do
+    [insight.title, insight.summary, insight.recommended_action]
+    |> Enum.find_value(&inferred_person_from_text/1)
+  end
+
+  defp inferred_person_from_text(value) when is_binary(value) do
+    text =
+      value
+      |> compact_sentence()
+      |> String.replace(~r/^reply owed:\s*/i, "")
+
+    patterns = [
+      ~r/\b(?i:send)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})\s+(?:a|an|her|his|promised|revised|that|the|their|this|updated)\b/u,
+      ~r/\b(?i:(?:reply|respond|follow up|check in|circle back|sync|confirm))\s+(?:with|to)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})(?=\s+(?:about|after|before|by|for|if|on|regarding|re|that|this|today|tomorrow|when|whether|with)|[.!?,;:]|$)/u,
+      ~r/\b(?i:(?:ask|call|email|message|ping|text))\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})(?=\s+(?:about|after|before|by|for|if|on|regarding|re|that|this|today|tomorrow|when|whether|with)|[.!?,;:]|$)/u,
+      ~r/\b(?i:to)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})(?=\s+(?:about|after|before|by|for|if|on|regarding|re|that|this|today|tomorrow|when|whether|with)|[.!?,;:]|$)/u,
+      ~r/^([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})\s+(?i:(?:asked|is waiting|needs|requested|wants))\b/u
+    ]
+
+    Enum.find_value(patterns, fn pattern ->
+      case Regex.run(pattern, text) do
+        [_, candidate] -> normalize_inferred_person(candidate)
+        _ -> nil
+      end
+    end)
+  end
+
+  defp inferred_person_from_text(_value), do: nil
+
+  defp normalize_inferred_person(candidate) when is_binary(candidate) do
+    candidate =
+      candidate
+      |> String.trim()
+      |> String.replace(~r/[.!?,;:]+$/, "")
+
+    words = String.split(candidate, ~r/\s+/, trim: true)
+
+    cond do
+      candidate == "" ->
+        nil
+
+      length(words) > 3 ->
+        nil
+
+      Enum.any?(words, &generic_person_candidate_word?/1) ->
+        nil
+
+      true ->
+        candidate
+    end
+  end
+
+  defp normalize_inferred_person(_candidate), do: nil
+
+  defp generic_person_candidate_word?(word) when is_binary(word) do
+    normalized = String.trim(word, "'-")
+    normalized in @generic_person_candidate_words
+  end
+
+  defp generic_person_candidate_word?(_word), do: false
+
+  defp due_sentence(%Insight{due_at: %DateTime{} = due_at, user_id: user_id}, metadata) do
+    timezone = insight_timezone(user_id, metadata)
+    offset_hours = Timezones.offset_at(timezone.name, due_at, timezone.offset_hours)
+    display_time = DateTime.add(due_at, offset_hours, :hour)
+    timezone_label = Timezones.label(timezone.name, offset_hours)
+
+    "Due #{Calendar.strftime(display_time, "%b %-d at %-I:%M %p")} #{timezone_label}."
+  end
+
+  defp due_sentence(%Insight{}, _metadata), do: nil
+
+  defp insight_timezone(user_id, metadata) do
+    metadata_timezone(metadata) || user_timezone(user_id) || default_timezone()
+  end
+
+  defp metadata_timezone(metadata) when is_map(metadata) do
+    timezone_name =
+      read_string(metadata, "timezone") ||
+        read_string(metadata, "timezone_name") ||
+        metadata |> read_map("briefing_schedule") |> read_string("timezone_name")
+
+    offset_hours =
+      read_integer(metadata, "timezone_offset_hours") ||
+        metadata |> read_map("briefing_schedule") |> read_integer("timezone_offset_hours")
+
+    if present?(timezone_name) or not is_nil(offset_hours) do
+      normalize_timezone(timezone_name, offset_hours)
+    end
+  end
+
+  defp metadata_timezone(_metadata), do: nil
+
+  defp user_timezone(user_id) when is_binary(user_id) do
+    user_id
+    |> BriefingSchedules.summarize_for_prompt()
+    |> case do
+      %{timezone_name: timezone_name, timezone_offset_hours: offset_hours} ->
+        normalize_timezone(timezone_name, offset_hours)
+
+      _other ->
+        default_timezone()
+    end
+  rescue
+    _exception -> default_timezone()
+  end
+
+  defp user_timezone(_user_id), do: default_timezone()
+
+  defp normalize_timezone(timezone_name, offset_hours) do
+    case Timezones.normalize(to_string(timezone_name || "")) do
+      "offset:" <> offset ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset)}
+
+      normalized when is_binary(normalized) ->
+        fallback = offset_hours || Timezones.standard_offset(normalized)
+        %{name: normalized, offset_hours: Timezones.normalize_offset(fallback)}
+
+      _other ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset_hours)}
+    end
+  end
+
+  defp default_timezone do
+    %{name: nil, offset_hours: -5}
+  end
+
+  defp clean_subject(subject) when is_binary(subject) do
+    subject
+    |> String.trim()
+    |> String.replace(~r/^reply owed:\s*/i, "")
+    |> String.replace(~r/^(re|fw|fwd):\s*/i, "")
+    |> String.trim()
+  end
+
+  defp clean_subject(_subject), do: nil
+
+  defp subject_text(metadata) when is_map(metadata) do
+    clean_subject(
+      read_string(metadata, "subject") ||
+        record_value(metadata, "subject") ||
+        read_string(metadata, "thread_subject")
+    )
+  end
+
+  defp subject_text(_metadata), do: nil
+
+  defp subject_thread_sentence(subject) when is_binary(subject) do
+    "Thread: #{subject}."
+  end
+
+  defp waiting_context_sentence(person) when is_binary(person) do
+    "#{person} is tied to this open thread; no later reply or delivery is recorded."
+  end
+
+  defp waiting_context_sentence(_person) do
+    "No later reply or delivery is recorded."
+  end
+
+  defp generic_followup_context?(context) when is_binary(context) do
+    context = String.downcase(context)
+
+    String.contains?(context, [
+      "no later reply",
+      "no sent follow-up",
+      "no follow-up",
+      "no later follow-through",
+      "no follow-through"
+    ])
+  end
+
+  defp generic_followup_context?(_context), do: false
+
+  defp person_identity_text(metadata) when is_map(metadata) do
+    record = read_map(metadata, "record")
+    person = person_name(metadata)
+
+    identity =
+      [
+        first_present([
+          read_string(record, "company"),
+          read_string(record, "organization"),
+          read_string(record, "org"),
+          read_string(metadata, "company"),
+          read_string(metadata, "organization"),
+          read_string(metadata, "org")
+        ]),
+        first_present([
+          read_string(record, "relationship_context"),
+          read_string(metadata, "relationship_context"),
+          read_string(record, "relationship"),
+          read_string(metadata, "relationship")
+        ]),
+        first_present([
+          read_string(record, "project"),
+          read_string(record, "project_name"),
+          read_string(metadata, "project"),
+          read_string(metadata, "project_name")
+        ]),
+        person_map_identity(metadata)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(person && String.downcase(&1) == String.downcase(person)))
+      |> Enum.uniq()
+      |> Enum.take(2)
+      |> Enum.join("; ")
+
+    cond do
+      present?(identity) ->
+        identity
+
+      subject = subject_text(metadata) ->
+        "contact on #{subject} thread"
+
+      email_domain = person_email_domain(metadata) ->
+        "contact from #{email_domain}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp person_identity_text(_metadata), do: nil
+
+  defp person_map_identity(metadata) do
+    metadata
+    |> first_person_map()
+    |> case do
+      %{} = person ->
+        first_present([
+          read_string(person, "relationship_context"),
+          read_string(person, "relationship"),
+          read_string(person, "company"),
+          read_string(person, "organization"),
+          read_string(person, "project")
+        ])
+
+      _ ->
+        nil
+    end
+  end
+
+  defp first_person_map(metadata) do
+    case fetch(metadata, "people") do
+      people when is_list(people) ->
+        Enum.find(people, &is_map/1)
+
+      %{} = person ->
+        person
+
+      _ ->
+        case fetch(metadata, "crm_people") do
+          people when is_list(people) -> Enum.find(people, &is_map/1)
+          %{} = person -> person
+          _ -> nil
+        end
+    end
+  end
+
+  defp person_email_domain(metadata) do
+    [read_string(metadata, "from"), read_string(metadata, "to")]
+    |> Enum.find_value(fn value ->
+      case Regex.run(~r/@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/, to_string(value)) do
+        [_, domain] -> domain
+        _ -> nil
+      end
+    end)
+  end
+
+  defp suggested_next_actions_text(metadata) when is_map(metadata) do
+    points =
+      read_string_list(metadata, "suggested_next_actions") ++
+        read_string_list(metadata, "suggested_reply_points") ++
+        record_value_list(metadata, "suggested_next_actions") ++
+        record_value_list(metadata, "suggested_reply_points")
+
+    points =
+      points
+      |> Enum.map(&compact_sentence/1)
+      |> Enum.reject(&blank?/1)
+      |> Enum.reject(&generic_suggestion_point?/1)
+      |> Enum.uniq()
+      |> Enum.take(3)
+
+    case points do
+      [] -> nil
+      points -> "Suggested: #{Enum.join(points, "; ")}"
+    end
+  end
+
+  defp suggested_next_actions_text(_metadata), do: nil
+
+  defp generic_suggestion_point?(point) when is_binary(point) do
+    point = String.downcase(point)
+
+    String.match?(point, ~r/^acknowledge\s+[a-z]/) or
+      String.contains?(point, [
+        "answer the ask",
+        "answer the specific ask",
+        "answer the specific request",
+        "name the owner",
+        "concrete timing commitment",
+        "give timing only if",
+        "owner, next step",
+        "owner / next step",
+        "owner, eta",
+        "exact artifact",
+        "current status"
+      ])
+  end
+
+  defp generic_suggestion_point?(_point), do: false
+
+  defp generic_next_action?(text) when is_binary(text) do
+    text = String.downcase(text)
+
+    String.contains?(text, [
+      "owner, eta",
+      "owner / next step / eta",
+      "owner, next step, and eta",
+      "owner, current status",
+      "exact artifact",
+      "artifact or update",
+      "promised update, current status, and timing you can stand behind",
+      "reply with a clear owner and timing",
+      "concrete next step, owner",
+      "reply now with owner"
+    ])
+  end
+
+  defp generic_next_action?(_text), do: false
+
+  defp inferred_next_action(%Insight{} = insight, metadata) do
+    person = person_name(insight, metadata)
+    subject = subject_text(metadata)
+    commitment = record_value(metadata, "commitment")
+
+    cond do
+      present?(subject) and present?(person) ->
+        "Suggested: open the #{subject} thread, confirm what #{person} is waiting on, then send the concrete update or mark it not important if it no longer matters."
+
+      present?(subject) ->
+        "Suggested: open the #{subject} thread, confirm the owner and specific request, then send the concrete update or mark it not important if it no longer matters."
+
+      present?(commitment) ->
+        "Suggested: verify whether the promised item is ready; if it is, send it, otherwise reply with the current status and realistic timing."
+
+      insight.source == "slack" ->
+        "Suggested: open the thread, answer the direct request, and name the next step or owner only if the conversation needs one."
+
+      true ->
+        "Suggested: open the source, confirm the specific request, then reply with the concrete next step or dismiss it if it is no longer important."
+    end
+  end
+
+  defp proactive_next_step_text(base_text, %Insight{} = insight, metadata)
+       when is_binary(base_text) do
+    case primary_action(insight) do
+      %{label: label} ->
+        action_intro =
+          "Suggested: tap #{label} to draft for approval before #{delivery_verb(insight)}."
+
+        action_detail = proactive_action_detail(base_text, insight, metadata)
+
+        [action_intro, action_detail]
+        |> Enum.reject(&blank?/1)
+        |> Enum.join(" ")
+
+      _ ->
+        base_text
+    end
+  end
+
+  defp proactive_next_step_text(base_text, _insight, _metadata), do: base_text
+
+  defp proactive_action_detail(base_text, %Insight{} = insight, metadata) do
+    person = person_name(insight, metadata) || "them"
+    subject = subject_text(metadata)
+
+    cond do
+      present?(subject) and inferred_next_action_text?(base_text) ->
+        "Then open the #{subject} thread to confirm what #{person} is waiting on; close if done."
+
+      present?(base_text) ->
+        "Next: #{strip_suggested_prefix(base_text)}"
+
+      true ->
+        case insight.source do
+          "slack" ->
+            "Next: answer the Slack thread with the specific update, next step, and timing the evidence supports."
+
+          _ ->
+            "Next: reply with the specific update, next step, and timing the evidence supports."
+        end
+    end
+  end
+
+  defp inferred_next_action_text?(text) when is_binary(text) do
+    text = String.downcase(text)
+
+    String.contains?(text, [
+      "confirm what",
+      "confirm the specific request",
+      "mark it not important",
+      "if it no longer matters"
+    ])
+  end
+
+  defp inferred_next_action_text?(_text), do: false
+
+  defp strip_suggested_prefix(text) when is_binary(text) do
+    text
+    |> String.replace(~r/^suggested:\s*/i, "")
+    |> compact_sentence()
+  end
+
+  defp delivery_verb(%Insight{source: "slack"}), do: "posting"
+  defp delivery_verb(_insight), do: "sending"
+
+  defp first_present(values) do
+    Enum.find(values, &present?/1)
+  end
+
+  defp compact_sentence(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp compact_sentence(_value), do: ""
+
+  defp ensure_sentence(value) when is_binary(value) do
+    if value == "" or String.match?(value, ~r/[.!?]$/), do: value, else: value <> "."
+  end
+
+  defp primary_action(%Insight{} = insight) do
+    if ackable_insight?(insight) or monitor_insight?(insight) do
+      nil
+    else
+      case insight.source do
+        "gmail" ->
+          if draft_action_available?(insight),
+            do: %{label: "Draft Email", callback_action: "draft"},
+            else: nil
+
+        "slack" ->
+          if draft_action_available?(insight),
+            do: %{label: "Draft Slack", callback_action: "draft"},
+            else: nil
+
+        _ ->
+          nil
+      end
+    end
+  end
+
+  defp draft_action_available?(%Insight{source: "gmail"} = insight) do
+    metadata = insight.metadata || %{}
+    present?(gmail_target_address(insight, metadata))
+  end
+
+  defp draft_action_available?(%Insight{source: "slack"} = insight) do
+    metadata = insight.metadata || %{}
+    present?(read_string(metadata, "team_id")) and present?(read_string(metadata, "channel_id"))
+  end
+
+  defp draft_action_available?(_insight), do: false
+
+  defp ackable_insight?(%Insight{} = insight) do
+    insight.category == "important_fyi" or
+      read_boolean(insight.metadata || %{}, "ackable", false)
+  end
+
+  defp monitor_insight?(%Insight{} = insight), do: insight.attention_mode == "monitor"
+
+  defp validate_callback_revision(%Delivery{} = delivery, action, callback_revision) do
+    delivery = ensure_insight_preloaded(delivery)
+
+    cond do
+      callback_revision == action_revision(delivery) ->
+        {:ok, bind_expected_delivery_revision(delivery)}
+
+      callback_applied?(action, action_state(delivery)) ->
+        {:ok,
+         delivery
+         |> bind_expected_delivery_revision()
+         |> mark_callback_replay()}
+
+      true ->
+        {:error, :stale_action_revision}
+    end
+  end
+
+  defp callback_applied?(action, state) do
+    case {action, state} do
+      {action, %{"status" => "drafted"}} when action in ["draft", "regenerate"] ->
+        true
+
+      {"send", %{"status" => status, "spec" => %{} = spec}}
+      when status in ["executing", "executed", "outcome_unknown"] ->
+        read_string(spec, "kind") in ["gmail_reply", "slack_reply"]
+
+      {"cancel", %{"status" => "cancelled"}} ->
+        true
+
+      {"ack", %{"status" => "executed", "kind" => "manual_ack"}} ->
+        true
+
+      {"done", %{"status" => "executed", "kind" => "manual_complete"}} ->
+        true
+
+      {"dismiss", %{"status" => "dismissed"}} ->
+        true
+
+      {"snooze", %{"status" => "snoozed"}} ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp bind_expected_delivery_revision(%Delivery{} = delivery) do
+    metadata =
+      (delivery.metadata || %{})
+      |> Map.put(@expected_delivery_revision_key, delivery_state_revision(delivery))
+
+    %{delivery | metadata: metadata}
+  end
+
+  defp mark_callback_replay(%Delivery{} = delivery) do
+    %{delivery | metadata: Map.put(delivery.metadata || %{}, @callback_replay_key, true)}
+  end
+
+  defp callback_replay?(%Delivery{} = delivery),
+    do: Map.get(delivery.metadata || %{}, @callback_replay_key, false)
+
+  defp action_revision(%Delivery{} = delivery) do
+    insight = delivery.insight
+
+    {
+      delivery.id,
+      delivery_state_revision(delivery),
+      insight.id,
+      insight.dedupe_key,
+      insight.tracking_key,
+      insight.source_id,
+      datetime_revision(insight.source_occurred_at),
+      datetime_revision(insight.updated_at)
+    }
+    |> deterministic_revision()
+  end
+
+  defp delivery_state_revision(%Delivery{} = delivery) do
+    # Delivery bookkeeping (provider_message_id, sent_at, feedback, etc.) is
+    # written after Telegram receives the message and must not invalidate the
+    # buttons embedded in that message. Only the actionable state participates
+    # in this compare-and-swap revision.
+    {delivery.id, action_state(delivery)}
+    |> deterministic_revision()
+  end
+
+  defp deterministic_revision(value) do
+    value
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 8)
+  end
+
+  defp datetime_revision(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp datetime_revision(_datetime), do: nil
+
+  defp parse_callback(value) when is_binary(value) do
+    case Regex.run(
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):([a-z_]+):([0-9a-f]{8})$/i,
+           value,
+           capture: :all_but_first
+         ) do
+      [delivery_id, action, revision] ->
+        {:ok, delivery_id, String.downcase(action), String.downcase(revision)}
+
+      _ ->
+        {:error, :unsupported_callback}
+    end
+  end
+
+  defp parse_callback(_), do: {:error, :unsupported_callback}
+
+  defp callback_data(%Delivery{} = delivery, action),
+    do: "#{@callback_prefix}:#{delivery.id}:#{action}:#{action_revision(delivery)}"
+
+  defp llm_json(prompt) when is_binary(prompt) do
+    params = %{
+      "messages" => [%{"role" => "user", "content" => prompt}],
+      "max_tokens" => 500,
+      "temperature" => 0.2,
+      "reasoning_effort" => "low"
+    }
+
+    with {:ok, response} <- LLM.complete(params),
+         {:ok, parsed} <- decode_json(response.content) do
+      {:ok, parsed}
+    else
+      {:error, reason} ->
+        Logger.warning("Telegram insight draft generation failed", reason: inspect(reason))
+        {:error, reason}
+    end
+  end
+
+  defp decode_json(content) when is_binary(content) do
+    trimmed =
+      content
+      |> String.trim()
+      |> String.trim_leading("```json")
+      |> String.trim_leading("```")
+      |> String.trim_trailing("```")
+      |> String.trim()
+
+    case Jason.decode(trimmed) do
+      {:ok, %{} = data} -> {:ok, data}
+      _ -> {:error, :invalid_json}
+    end
+  end
+
+  defp email_prompt(spec, insight) do
+    memory = draft_memory_context(insight.user_id)
+    voice_guidance = operator_voice_guidance(insight.user_id)
+
+    """
+    Write a concise email reply in the operator's first-person voice.
+
+    Return ONLY valid JSON:
+    {"subject":"...","body":"..."}
+
+    Constraints:
+    - Write in the operator's first-person voice, not as Maraithon or an assistant.
+    - Be concrete, direct, calm, and brief.
+    - Avoid corporate filler, over-apologizing, and vague "circling back" phrasing.
+    - Do not use em dashes. Use commas, periods, colons, or parentheses.
+    - Do not include AI-ish filler such as "I hope this finds you well", "circling back", "just wanted to", or assistant sign-offs.
+    - Include only the next step, owner, and ETA that the source evidence supports.
+    - Do not claim attachments, delivery, or completed work unless explicitly proven.
+    - If the promised artifact is not clearly available, send an honest progress update plus a firm ETA.
+    - Use draft_plan and suggested_reply_points as drafting instructions, not text to quote.
+    - If operator_needs are present, ask for or name the missing detail instead of inventing it.
+    - Close the loop in one message.
+    - Follow durable operator style and action preferences when they are relevant.
+
+    Insight JSON:
+    #{Jason.encode!(draft_prompt_payload(spec, insight))}
+
+    Operator voice guidance JSON:
+    #{Jason.encode!(voice_guidance)}
+
+    Draft memory JSON:
+    #{Jason.encode!(memory)}
+    """
+  end
+
+  defp slack_prompt(spec, insight) do
+    memory = draft_memory_context(insight.user_id)
+    voice_guidance = operator_voice_guidance(insight.user_id)
+
+    """
+    Write a concise Slack reply in the operator's first-person voice for an unresolved follow-through item.
+
+    Return ONLY valid JSON:
+    {"text":"..."}
+
+    Constraints:
+    - Write in the operator's first-person voice, not as Maraithon or an assistant.
+    - Be direct, short, calm, and useful.
+    - Avoid corporate filler, over-apologizing, and vague status language.
+    - Do not use em dashes. Use commas, periods, colons, or parentheses.
+    - Do not include AI-ish filler such as "I hope this finds you well", "circling back", "just wanted to", or assistant sign-offs.
+    - Include owner / next step / ETA when appropriate.
+    - Do not claim work is already done unless proven.
+    - Use draft_plan and suggested_reply_points as drafting instructions, not text to quote.
+    - If operator_needs are present, ask for or name the missing detail instead of inventing it.
+    - Follow durable operator style and action preferences when they are relevant.
+
+    Insight JSON:
+    #{Jason.encode!(draft_prompt_payload(spec, insight))}
+
+    Operator voice guidance JSON:
+    #{Jason.encode!(voice_guidance)}
+
+    Draft memory JSON:
+    #{Jason.encode!(memory)}
+    """
+  end
+
+  defp draft_memory_context(user_id) when is_binary(user_id) do
+    %{
+      preference_memory: PreferenceMemory.prompt_context(user_id),
+      operator_summaries: OperatorMemory.summaries_for_prompt(user_id),
+      user_memory_profile: UserMemory.prompt_context(user_id),
+      email_voice: UserVoice.prompt_context(user_id, "gmail"),
+      slack_voice: UserVoice.prompt_context(user_id, "slack")
+    }
+  end
+
+  defp draft_memory_context(_user_id) do
+    %{
+      preference_memory: PreferenceMemory.prompt_context(nil),
+      operator_summaries: [],
+      user_memory_profile: UserMemory.prompt_context(nil),
+      email_voice: UserVoice.prompt_context(nil, "gmail"),
+      slack_voice: UserVoice.prompt_context(nil, "slack")
+    }
+  end
+
+  defp fallback_email_body(spec, insight) do
+    greeting = email_greeting(spec["person"], spec["to"])
+    needs_line = fallback_needs_line(read_string_list(spec, "operator_needs"))
+
+    reply_points_line =
+      fallback_reply_points_line(read_string_list(spec, "suggested_reply_points"))
+
+    """
+    #{greeting}
+
+    Thanks for the nudge. #{fallback_context_sentence(insight)}
+
+    #{reply_points_line}
+    #{needs_line}
+
+    I don't want to leave this open. I'll send the remaining detail and a concrete ETA shortly.
+
+    Best,
+    #{sender_name(insight.user_id)}
+    """
+    |> String.trim()
+  end
+
+  defp fallback_slack_text(spec, insight) do
+    reply_points = read_string_list(spec, "suggested_reply_points")
+
+    [
+      "On it.",
+      fallback_context_sentence(insight),
+      fallback_reply_points_sentence(reply_points),
+      "I'll confirm the specific request from the thread, send the next step I can stand behind, and only commit to timing the evidence supports."
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp execution_notice(%{"kind" => "gmail_reply"}), do: "Email sent"
+  defp execution_notice(%{"kind" => "slack_reply"}), do: "Slack reply sent"
+  defp execution_notice(%{"kind" => "manual_complete"}), do: "Marked complete"
+  defp execution_notice(%{"kind" => "manual_ack"}), do: "Acknowledged"
+  defp execution_notice(_), do: "Action completed"
+
+  defp reconciliation_notice(%{"kind" => "gmail_reply"}),
+    do: "Check Gmail before sending again"
+
+  defp reconciliation_notice(%{"kind" => "slack_reply"}),
+    do: "Check Slack before sending again"
+
+  defp reconciliation_notice(_spec), do: "Check the provider before sending again"
+
+  defp action_notice_label(state) do
+    state
+    |> read_map("spec")
+    |> read_string("notice_label", "Action")
+  end
+
+  defp now_iso8601 do
+    DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  end
+
+  defp callback_error_text(:action_not_available),
+    do:
+      "No quick action is available for this item. Use the latest message or handle it in the source app."
+
+  defp callback_error_text(reason)
+       when reason in [:action_in_progress, :execution_claim_expiring, :execution_claim_lost],
+       do: "This send is already in progress. Check again shortly."
+
+  defp callback_error_text(:provider_outcome_unknown),
+    do: "This send may have completed. Check Gmail or Slack before sending again."
+
+  defp callback_error_text(:draft_not_ready), do: "Draft first, then choose Send Now."
+
+  defp callback_error_text(:delivery_not_found),
+    do: "That item is no longer available. Use the latest Maraithon message."
+
+  defp callback_error_text(:unauthorized_chat),
+    do: "This button belongs to another chat. Use the latest message in this chat."
+
+  defp callback_error_text(:stale_action_revision),
+    do: "That action is stale. Use the buttons on the latest Maraithon message."
+
+  defp callback_error_text(:unsupported_action),
+    do:
+      "That button no longer matches this item. Use the latest Maraithon message before deciding."
+
+  defp callback_error_text({:telegram_edit_failed, _}),
+    do: "Action completed. Open the latest Maraithon message for the updated state."
+
+  defp callback_error_text("google_account_reauth_required"),
+    do: "Reconnect Google before using this action"
+
+  defp callback_error_text("slack_workspace_reauth_required"),
+    do: "Reconnect Slack before using this action"
+
+  defp callback_error_text("google_account_not_connected"), do: "Connect Google first"
+  defp callback_error_text("slack_workspace_not_connected"), do: "Connect Slack first"
+  defp callback_error_text(reason), do: ActionFailureCopy.insight_action(reason)
+
+  defp answer_callback(nil, _text), do: :ok
+
+  defp answer_callback(callback_id, text) do
+    case telegram_module().answer_callback_query(callback_id, text: text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
+  end
+
+  defp gmail_target_address(insight, metadata) do
+    case insight.category do
+      "reply_urgent" -> read_string(metadata, "from")
+      _ -> read_string(metadata, "to") || read_string(metadata, "from")
+    end
+  end
+
+  defp source_label(%Insight{} = insight, metadata) do
+    account =
+      read_string(metadata, "account") ||
+        read_string(metadata, "team_id")
+
+    source = source_display(insight.source)
+
+    cond do
+      present?(account) -> "#{source} · #{account}"
+      true -> source
+    end
+  end
+
+  defp source_display(source) when is_binary(source),
+    do: SourceLabels.label(source, fallback: "connected context")
+
+  defp source_display(_source), do: "connected context"
+
+  defp build_context(%Insight{}, metadata) do
+    compact_map(%{
+      "record" => read_map(metadata, "record"),
+      "context_brief" => read_string(metadata, "context_brief"),
+      "signals" => read_string_list(metadata, "signals"),
+      "evidence" => record_value_list(metadata, "evidence"),
+      "coverage_evidence" =>
+        conversation_context(metadata) |> read_string_list("coverage_evidence"),
+      "completion_evidence" =>
+        conversation_context(metadata) |> read_string_list("completion_evidence"),
+      "conversation_context" => conversation_context(metadata),
+      "person" => record_value(metadata, "person"),
+      "commitment" => record_value(metadata, "commitment"),
+      "next_action" => record_value(metadata, "next_action"),
+      "account" => read_string(metadata, "account"),
+      "channel_name" => read_string(metadata, "channel_name"),
+      "missing_inputs" => read_string_list(metadata, "missing_inputs"),
+      "suggested_reply_points" => read_string_list(metadata, "suggested_reply_points"),
+      "draft_plan" => read_string(metadata, "draft_plan")
+    })
+  end
+
+  defp draft_prompt_payload(spec, %Insight{} = insight) do
+    compact_map(%{
+      "title" => insight.title,
+      "summary" => insight.summary,
+      "recommended_action" => insight.recommended_action,
+      "source" => insight.source,
+      "category" => insight.category,
+      "priority" => insight.priority,
+      "confidence" => insight.confidence,
+      "attention_mode" => insight.attention_mode,
+      "person" => spec["person"],
+      "context" => spec["context"],
+      "to" => spec["to"],
+      "subject" => spec["subject"],
+      "operator_needs" => read_string_list(spec, "operator_needs"),
+      "suggested_reply_points" => read_string_list(spec, "suggested_reply_points"),
+      "draft_plan" => read_string(spec, "draft_plan")
+    })
+  end
+
+  defp operator_needs(%Insight{} = insight, metadata) do
+    explicit = read_string_list(metadata, "missing_inputs")
+    record = read_map(metadata, "record")
+    context = conversation_context(metadata)
+
+    inferred =
+      []
+      |> maybe_append(
+        "ETA or delivery timing to give #{record_value(metadata, "person") || "them"}",
+        eta_needed?(insight, metadata, record)
+      )
+      |> maybe_append(
+        "Final owner if the thread is moving but ownership is unclear",
+        read_string(context, "ownership_state") in ["shared_owner", "unknown"]
+      )
+      |> maybe_append(
+        "Artifact or concrete answer if the source evidence does not prove it is ready",
+        artifact_needed?(insight, metadata, record)
+      )
+
+    (explicit ++ inferred)
+    |> Enum.uniq()
+    |> Enum.take(3)
+  end
+
+  defp draft_plan(%Insight{} = insight, metadata) do
+    explicit = read_string(metadata, "draft_plan")
+    record = read_map(metadata, "record")
+    context = conversation_context(metadata)
+
+    explicit ||
+      cond do
+        read_string(context, "notification_posture") == "heads_up" ->
+          "Acknowledge the thread is moving, confirm whether you still own the remaining follow-through, and avoid implying nobody responded."
+
+        insight.source == "gmail" and read_string(record, "commitment") != nil ->
+          "Reply in-thread in your voice with the actual promise, current status, and timing you can safely stand behind."
+
+        insight.source == "slack" ->
+          "Reply in the Slack thread in your voice with the shortest useful status, next step, and evidence-backed timing."
+
+        true ->
+          nil
+      end
+  end
+
+  defp conversation_context(metadata) when is_map(metadata) do
+    read_map(metadata, "conversation_context")
+  end
+
+  defp conversation_context(_metadata), do: %{}
+
+  defp eta_needed?(%Insight{} = insight, metadata, record) do
+    text =
+      [
+        insight.recommended_action,
+        insight.summary,
+        read_string(metadata, "why_now"),
+        read_string(record, "next_action")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    String.contains?(text, ["eta", "deadline", "today", "tomorrow", "when"]) and
+      blank?(read_string(record, "deadline")) and
+      is_nil(insight.due_at)
+  end
+
+  defp artifact_needed?(%Insight{} = insight, metadata, record) do
+    text =
+      [
+        insight.title,
+        insight.summary,
+        insight.recommended_action,
+        read_string(record, "commitment"),
+        read_string(metadata, "context_brief")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    String.contains?(text, ["send", "share", "deck", "doc", "artifact", "proposal", "answer"]) and
+      read_string_list(record, "completion_evidence") == [] and
+      read_string_list(metadata, "completion_evidence") == []
+  end
+
+  defp operator_voice_guidance(user_id) do
+    %{
+      "speaker" => speaker_name(user_id),
+      "write_as" => "operator in first person",
+      "style_rules" => [
+        "short and direct",
+        "specific next step over general reassurance",
+        "low-apology unless the operator clearly caused the delay",
+        "no assistant or Maraithon framing",
+        "do not invent facts, attachments, completion, or availability",
+        "use a concrete ETA only when evidence or the operator supplied one"
+      ]
+    }
+  end
+
+  defp fallback_context_sentence(%Insight{} = insight), do: insight.summary
+
+  defp fallback_reply_points_line([]), do: nil
+
+  defp fallback_reply_points_line(points) when is_list(points) do
+    "Useful reply points: #{Enum.join(points, " ")}"
+  end
+
+  defp fallback_reply_points_sentence([]), do: nil
+
+  defp fallback_reply_points_sentence(points) when is_list(points) do
+    points
+    |> Enum.take(2)
+    |> Enum.join(" ")
+  end
+
+  defp fallback_needs_line([]), do: "I am checking the final detail now."
+
+  defp fallback_needs_line(needs) when is_list(needs) do
+    "I am checking: #{Enum.join(needs, "; ")}."
+  end
+
+  defp slack_source_ts("slack:" <> rest) do
+    rest
+    |> String.split(":")
+    |> List.last()
+    |> normalize_blank()
+  end
+
+  defp slack_source_ts(_), do: nil
+
+  defp email_greeting(person, to_field) do
+    candidate =
+      normalize_blank(person) ||
+        normalize_blank(first_email_name(to_field)) ||
+        "there"
+
+    "Hi #{candidate},"
+  end
+
+  defp first_email_name(value) when is_binary(value) do
+    value
+    |> String.split(",", parts: 2)
+    |> List.first()
+    |> to_string()
+    |> String.trim()
+    |> case do
+      "" ->
+        nil
+
+      raw ->
+        raw
+        |> String.replace(~r/<[^>]+>/, "")
+        |> String.replace("\"", "")
+        |> String.trim()
+        |> case do
+          "" ->
+            nil
+
+          cleaned ->
+            cleaned
+            |> String.split(~r/\s+/, trim: true)
+            |> List.first()
+        end
+    end
+  end
+
+  defp first_email_name(_), do: nil
+
+  defp normalize_reply_subject(subject) when is_binary(subject) do
+    trimmed = String.trim(subject)
+
+    cond do
+      trimmed == "" -> "Quick follow-up"
+      String.match?(trimmed, ~r/^re:/i) -> trimmed
+      true -> "Re: #{trimmed}"
+    end
+  end
+
+  defp normalize_reply_subject(_), do: "Quick follow-up"
+
+  defp sender_name(user_id) do
+    System.get_env("MARAITHON_DEFAULT_SENDER_NAME") ||
+      Application.get_env(:maraithon, :insights, [])
+      |> Keyword.get(:default_sender_name, speaker_name(user_id))
+  end
+
+  defp speaker_name(user_id) when is_binary(user_id) do
+    name =
+      user_id
+      |> String.split("@", parts: 2)
+      |> List.first()
+      |> String.split(~r/[._-]+/)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&String.capitalize/1)
+      |> Enum.join(" ")
+
+    case name do
+      "" -> "the operator"
+      name -> name
+    end
+  end
+
+  defp speaker_name(_), do: "the operator"
+
+  defp ensure_insight_preloaded(%Delivery{insight: %Insight{}} = delivery), do: delivery
+  defp ensure_insight_preloaded(%Delivery{} = delivery), do: Repo.preload(delivery, :insight)
+
+  defp telegram_module do
+    Application.get_env(:maraithon, :insights, [])
+    |> Keyword.get(:telegram_module, Telegram)
+  end
+
+  defp compact_map(map) do
+    Enum.reduce(map, %{}, fn
+      {_key, nil}, acc -> acc
+      {_key, ""}, acc -> acc
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
+  defp maybe_append(list, item, true) when is_binary(item), do: list ++ [item]
+  defp maybe_append(list, _item, _condition), do: list
+
+  defp stringify_map_keys(map) when is_map(map) do
+    Enum.reduce(map, %{}, fn
+      {key, value}, acc when is_map(value) ->
+        Map.put(acc, to_string(key), stringify_map_keys(value))
+
+      {key, value}, acc when is_list(value) ->
+        Map.put(
+          acc,
+          to_string(key),
+          Enum.map(value, fn
+            item when is_map(item) -> stringify_map_keys(item)
+            item -> item
+          end)
+        )
+
+      {key, value}, acc ->
+        Map.put(acc, to_string(key), value)
+    end)
+  end
+
+  defp stringify_map_keys(other), do: other
+
+  defp read_map(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      %{} = value -> value
+      _ -> %{}
+    end
+  end
+
+  defp read_string(map, key, default \\ nil) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> default
+          trimmed -> trimmed
+        end
+
+      value when is_integer(value) ->
+        Integer.to_string(value)
+
+      _ ->
+        default
+    end
+  end
+
+  defp read_integer(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_integer(value) ->
+        value
+
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {parsed, ""} -> parsed
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_boolean(map, key, default) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when value in [true, false] ->
+        value
+
+      value when is_binary(value) ->
+        case String.downcase(String.trim(value)) do
+          "true" -> true
+          "1" -> true
+          "yes" -> true
+          "false" -> false
+          "0" -> false
+          "no" -> false
+          _ -> default
+        end
+
+      _ ->
+        default
+    end
+  end
+
+  defp read_id_string(map, key) when is_map(map) and is_binary(key) do
+    read_string(map, key) || read_integer(map, key) |> normalize_id()
+  end
+
+  defp normalize_id(nil), do: nil
+  defp normalize_id(value) when is_binary(value), do: value
+  defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_id(value), do: to_string(value)
+
+  defp read_string_list(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      list when is_list(list) ->
+        list
+        |> Enum.filter(&is_binary/1)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+
+      value when is_binary(value) ->
+        [String.trim(value)]
+
+      _ ->
+        []
+    end
+  end
+
+  defp fetch(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, fn
+          {map_key, value} when is_atom(map_key) ->
+            if Atom.to_string(map_key) == key, do: value
+
+          _ ->
+            nil
+        end)
+    end
+  end
+
+  defp record_value(metadata, key) do
+    metadata
+    |> read_map("record")
+    |> read_string(key)
+  end
+
+  defp record_value_list(metadata, key) do
+    metadata
+    |> read_map("record")
+    |> read_string_list(key)
+  end
+
+  defp safe(value) when is_binary(value) do
+    value
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+  end
+
+  defp safe(value), do: to_string(value || "")
+
+  defp truncate(value, max) when is_binary(value) and is_integer(max) and max > 3 do
+    if String.length(value) > max, do: String.slice(value, 0, max - 3) <> "...", else: value
+  end
+
+  defp truncate(value, _max), do: to_string(value || "")
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
+
+  defp blank?(value), do: not present?(value)
+
+  defp normalize_blank(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_blank(_), do: nil
+end

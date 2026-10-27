@@ -1,0 +1,24 @@
+// Config.xcconfig — committed base config.
+//
+// This file is the entry point that xcodegen wires into both Debug and
+// Release. It deliberately defines nothing of its own; its only job is
+// to optionally pull in your per-developer settings.
+//
+// Each developer (and CI runner) creates Config.local.xcconfig from the
+// committed Config.local.xcconfig.example and sets DEVELOPMENT_TEAM to
+// their own Apple Developer team ID. See docs/SIGNING.md.
+//
+// The "#include?" form is the optional include: if the local file is
+// missing (e.g. a fresh clone), xcodebuild simply continues without it.
+// The monorepo build scripts supply an ad-hoc Debug signing fallback ("-")
+// so fresh-clone builds still produce launchable app bundles; only Release
+// archives need a real team. For local companion runs that need Full Disk
+// Access to persist across rebuilds, run:
+//   make setup-companion-signing
+//   make run-companion
+// make run-companion clears stale Maraithon Full Disk Access rows once when
+// the pinned signing identity is introduced or changes. If macOS is still
+// stuck on an old dev app row, run:
+//   make reset-companion-fda
+
+#include? "Config.local.xcconfig"

@@ -1,0 +1,74 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-6">
+    <header class="flex flex-wrap items-end justify-between gap-3">
+      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+        Connected Apps
+      </h1>
+      <span class="text-xs/5 text-zinc-500"><%= @connected_count %> connected</span>
+    </header>
+
+    <%= if @connection_errors != [] do %>
+      <.alert color="amber">
+        <%= for error <- @connection_errors do %>
+          <p class="text-sm font-medium"><%= error.message %></p>
+          <%= if detail = connection_error_detail(error) do %>
+            <p class="mt-1 text-xs"><%= detail %></p>
+          <% end %>
+        <% end %>
+      </.alert>
+    <% end %>
+
+    <ul role="list" class="divide-y divide-zinc-950/5 overflow-hidden rounded-lg border border-zinc-950/10 bg-white">
+      <li :for={provider <- @providers}>
+        <a
+          href={provider_detail_path(provider)}
+          class="grid grid-cols-1 gap-2 px-4 py-3 transition hover:bg-zinc-950/[0.025] sm:px-6 lg:grid-cols-12 lg:items-center"
+        >
+          <span class="flex min-w-0 items-center gap-3 lg:col-span-6">
+            <.oauth_logo provider={provider.logo} />
+            <span class="min-w-0">
+              <span class="block truncate text-sm/6 font-semibold text-zinc-950">
+                <%= provider.label %>
+              </span>
+              <span class="mt-0.5 block truncate text-sm/6 text-zinc-500">
+                <%= provider.description %>
+              </span>
+            </span>
+          </span>
+
+          <span class="flex items-center gap-3 lg:col-span-3">
+            <.badge color={connection_status_color(provider.status)} class="whitespace-nowrap">
+              <%= connection_status_label(provider.status) %>
+            </.badge>
+            <span class="min-w-0">
+              <span class="block truncate text-sm/6 text-zinc-500">
+                <%= provider_account_summary(provider) %>
+              </span>
+              <%= if local_source_summary = provider_local_source_summary(provider) do %>
+                <span class="mt-0.5 block truncate text-xs/5 text-zinc-500">
+                  <%= local_source_summary %>
+                </span>
+              <% end %>
+            </span>
+          </span>
+
+          <span class="flex items-center justify-end gap-3 lg:col-span-3">
+            <%= cond do %>
+              <% provider[:connect_blocked?] -> %>
+                <span class="text-xs/5 text-zinc-400">
+                  <%= provider[:connect_block_reason] %>
+                </span>
+              <% connection_action_enabled?(provider) -> %>
+                <span class="text-xs/5 font-medium text-zinc-950">
+                  <%= connection_primary_action(provider) %>
+                </span>
+              <% true -> %>
+                <span class="text-xs/5 text-zinc-400">Connection needed</span>
+            <% end %>
+            <span class="text-zinc-400" aria-hidden="true">→</span>
+          </span>
+        </a>
+      </li>
+    </ul>
+  </div>
+</Layouts.app>

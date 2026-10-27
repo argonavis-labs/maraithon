@@ -1,0 +1,23 @@
+# A local database only. This is not a production deployment configuration.
+name: maraithon-dev
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PGPASSWORD:-maraithon-local-only}
+      POSTGRES_DB: ${PGDATABASE:-maraithon_dev}
+    ports:
+      - "127.0.0.1:${PGPORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/dev/init-db.sql:/docker-entrypoint-initdb.d/10-maraithon.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:

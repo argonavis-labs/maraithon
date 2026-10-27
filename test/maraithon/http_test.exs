@@ -1,0 +1,477 @@
+defmodule Maraithon.HTTPTest do
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
+  alias Maraithon.HTTP
+
+  describe "get/2" do
+    test "successfully fetches JSON response" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/test", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"status": "ok", "value": 42}))
+      end)
+
+      {:ok, response} = HTTP.get("http://localhost:#{bypass.port}/test")
+
+      assert response["status"] == "ok"
+      assert response["value"] == 42
+    end
+
+    test "returns raw body for non-JSON response" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/html", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html")
+        |> Plug.Conn.resp(200, "<html><body>Hello</body></html>")
+      end)
+
+      {:ok, response} = HTTP.get("http://localhost:#{bypass.port}/html")
+
+      assert response == "<html><body>Hello</body></html>"
+    end
+
+    test "returns error for 401 unauthorized" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/unauthorized", fn conn ->
+        Plug.Conn.resp(conn, 401, "Unauthorized")
+      end)
+
+      {:error, :unauthorized} = HTTP.get("http://localhost:#{bypass.port}/unauthorized")
+    end
+
+    test "returns error for 429 rate limited" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/rate-limited", fn conn ->
+        Plug.Conn.resp(conn, 429, "Too many requests")
+      end)
+
+      assert {:error, {:rate_limited, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/rate-limited")
+    end
+
+    test "never returns provider-controlled 429 content" do
+      bypass = Bypass.open()
+      provider_secret = "provider-controlled-account-detail"
+
+      Bypass.expect_once(bypass, "GET", "/rate-limited-secret", fn conn ->
+        Plug.Conn.resp(conn, 429, provider_secret)
+      end)
+
+      result = HTTP.get("http://localhost:#{bypass.port}/rate-limited-secret")
+
+      assert result == {:error, {:rate_limited, :provider_limited}}
+      refute inspect(result) =~ provider_secret
+    end
+
+    test "returns the Retry-After seconds for 429 responses that include the header" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/rate-limited-with-header", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "17")
+        |> Plug.Conn.resp(429, "slow down")
+      end)
+
+      assert {:error, {:rate_limited, 17, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/rate-limited-with-header")
+    end
+
+    test "honours an HTTP-date Retry-After without retrying before its deadline" do
+      bypass = Bypass.open()
+      before = DateTime.utc_now()
+      deadline = before |> DateTime.add(120) |> DateTime.truncate(:second)
+
+      Bypass.expect_once(bypass, "GET", "/date-limited", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", Req.Utils.format_http_date(deadline))
+        |> Plug.Conn.resp(429, "private provider detail")
+      end)
+
+      assert {:error, {:rate_limited, seconds, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/date-limited")
+
+      assert DateTime.compare(DateTime.add(DateTime.utc_now(), seconds), deadline) != :lt
+      assert DateTime.compare(DateTime.add(before, seconds), DateTime.add(deadline, 1)) != :gt
+    end
+
+    test "past dates allow an immediate retry and malformed dates use caller backoff" do
+      bypass = Bypass.open()
+
+      for {path, value, result} <- [
+            {"/past", "Mon, 01 Jan 2024 09:00:00 GMT", {:rate_limited, 0, :provider_limited}},
+            {"/invalid", "tomorrow at lunch", {:rate_limited, :provider_limited}}
+          ] do
+        Bypass.expect_once(bypass, "GET", path, fn conn ->
+          conn |> Plug.Conn.put_resp_header("retry-after", value) |> Plug.Conn.resp(429, "wait")
+        end)
+
+        assert {:error, ^result} = HTTP.get("http://localhost:#{bypass.port}#{path}")
+      end
+    end
+
+    test "preserves closed 401 semantics when the diagnostic body overflows" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized-unauthorized", fn conn ->
+        Plug.Conn.resp(conn, 401, String.duplicate("provider-auth-detail", 2_000))
+      end)
+
+      assert {:error, :unauthorized} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized-unauthorized")
+    end
+
+    test "preserves Retry-After when a 429 diagnostic body overflows" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized-rate-limit", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "29")
+        |> Plug.Conn.resp(429, String.duplicate("provider-rate-detail", 2_000))
+      end)
+
+      assert {:error, {:rate_limited, 29, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized-rate-limit")
+    end
+
+    test "returns error for other status codes" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/error", fn conn ->
+        Plug.Conn.resp(conn, 500, "Internal Server Error")
+      end)
+
+      {:error, {:http_status, 500, body}} = HTTP.get("http://localhost:#{bypass.port}/error")
+      assert body == "Internal Server Error"
+    end
+
+    test "warning logs expose only closed status metadata" do
+      bypass = Bypass.open()
+      secret_body = "provider-prompt-secret"
+      secret_path = "/error/provider-user-secret"
+
+      Bypass.expect_once(bypass, "GET", secret_path, fn conn ->
+        Plug.Conn.resp(conn, 500, secret_body)
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 500, ^secret_body}} =
+                   HTTP.get("http://localhost:#{bypass.port}#{secret_path}")
+        end)
+
+      assert log =~ "HTTP request failed"
+      refute log =~ secret_body
+      refute log =~ "provider-user-secret"
+    end
+
+    test "callers can suppress a lower-level warning when they own fallback logging" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/fallback", fn conn ->
+        Plug.Conn.resp(conn, 503, "temporary provider detail")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 503, _body}} =
+                   HTTP.get("http://localhost:#{bypass.port}/fallback", [], log_failures?: false)
+        end)
+
+      refute log =~ "HTTP request failed"
+      refute log =~ "temporary provider detail"
+    end
+
+    test "bounds returned error bodies before callers inspect them" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized", fn conn ->
+        Plug.Conn.resp(conn, 500, String.duplicate("x", 50_000))
+      end)
+
+      assert {:error, {:http_status, 500, body}} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized")
+
+      assert byte_size(body) <= 16_000
+      assert String.valid?(body)
+    end
+
+    test "returns caller-declared expected statuses without warning noise" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/missing", fn conn ->
+        Plug.Conn.resp(conn, 404, "Not Found")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 404, "Not Found"}} =
+                   HTTP.get("http://localhost:#{bypass.port}/missing", [],
+                     expected_statuses: [404]
+                   )
+        end)
+
+      refute log =~ "HTTP request failed"
+    end
+
+    test "supports narrow expected-error matchers without changing the error" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/handled-error", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, Jason.encode!(%{"error" => "handled"}))
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 400, body}} =
+                   HTTP.get("http://localhost:#{bypass.port}/handled-error", [],
+                     expected_error?: fn status, response_body ->
+                       status == 400 and String.contains?(response_body, "handled")
+                     end
+                   )
+
+          assert body =~ "handled"
+        end)
+
+      refute log =~ "HTTP request failed"
+    end
+
+    test "expected-error matcher failures remain warning-level" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/matcher-failed", fn conn ->
+        Plug.Conn.resp(conn, 400, "unexpected")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 400, "unexpected"}} =
+                   HTTP.get("http://localhost:#{bypass.port}/matcher-failed", [],
+                     expected_error?: fn _status, _body -> raise "matcher failed" end
+                   )
+        end)
+
+      assert log =~ "HTTP request failed"
+    end
+
+    test "stops buffering an oversized successful response" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized-success", fn conn ->
+        Plug.Conn.resp(conn, 200, String.duplicate("x", 100_000))
+      end)
+
+      assert {:error, {:http_status, 200, "response_body_too_large"}} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized-success", [],
+                 max_response_body_bytes: 1_024,
+                 log_failures?: false
+               )
+    end
+
+    test "does not follow redirects carrying credential-bearing request data" do
+      source = Bypass.open()
+      target = Bypass.open()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(target, "POST", "/capture", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Plug.Conn.resp(conn, 200, "captured")
+      end)
+
+      Bypass.expect_once(source, "POST", "/redirect", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("location", "http://localhost:#{target.port}/capture")
+        |> Plug.Conn.resp(307, "redirect")
+      end)
+
+      capture_log(fn ->
+        assert {:error, {:http_status, 307, "redirect"}} =
+                 HTTP.post_form(
+                   "http://localhost:#{source.port}/redirect",
+                   %{client_secret: "never-forward-this"}
+                 )
+      end)
+
+      assert Agent.get(counter, & &1) == 0
+    end
+
+    test "passes headers" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/headers", fn conn ->
+        auth = Plug.Conn.get_req_header(conn, "authorization")
+        assert auth == ["Bearer token123"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"authenticated": true}))
+      end)
+
+      {:ok, response} =
+        HTTP.get(
+          "http://localhost:#{bypass.port}/headers",
+          [{"Authorization", "Bearer token123"}]
+        )
+
+      assert response["authenticated"] == true
+    end
+  end
+
+  describe "post_json/3" do
+    test "posts JSON body" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "POST", "/api", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(body) == %{"name" => "test", "value" => 123}
+
+        content_type = Plug.Conn.get_req_header(conn, "content-type")
+        assert content_type == ["application/json"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"created": true}))
+      end)
+
+      {:ok, response} =
+        HTTP.post_json(
+          "http://localhost:#{bypass.port}/api",
+          %{name: "test", value: 123}
+        )
+
+      assert response["created"] == true
+    end
+  end
+
+  describe "post_form/3" do
+    test "posts form-encoded body" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "POST", "/form", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert URI.decode_query(body) == %{"username" => "test", "password" => "secret"}
+
+        content_type = Plug.Conn.get_req_header(conn, "content-type")
+        assert hd(content_type) =~ "application/x-www-form-urlencoded"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"logged_in": true}))
+      end)
+
+      {:ok, response} =
+        HTTP.post_form(
+          "http://localhost:#{bypass.port}/form",
+          %{username: "test", password: "secret"}
+        )
+
+      assert response["logged_in"] == true
+    end
+  end
+
+  describe "put_json/3" do
+    test "sends PUT request with JSON body" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "PUT", "/resource/1", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(body) == %{"name" => "updated"}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"updated": true}))
+      end)
+
+      {:ok, response} =
+        HTTP.put_json(
+          "http://localhost:#{bypass.port}/resource/1",
+          %{name: "updated"}
+        )
+
+      assert response["updated"] == true
+    end
+  end
+
+  describe "patch_json/3" do
+    test "sends PATCH request with JSON body" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "PATCH", "/resource/1", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(body) == %{"status" => "active"}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"patched": true}))
+      end)
+
+      {:ok, response} =
+        HTTP.patch_json(
+          "http://localhost:#{bypass.port}/resource/1",
+          %{status: "active"}
+        )
+
+      assert response["patched"] == true
+    end
+  end
+
+  describe "delete/2" do
+    test "sends DELETE request" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "DELETE", "/resource/1", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"deleted": true}))
+      end)
+
+      {:ok, response} = HTTP.delete("http://localhost:#{bypass.port}/resource/1")
+
+      assert response["deleted"] == true
+    end
+
+    test "passes headers on delete" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "DELETE", "/resource/1", fn conn ->
+        auth = Plug.Conn.get_req_header(conn, "authorization")
+        assert auth == ["Bearer admin"]
+
+        Plug.Conn.resp(conn, 204, "")
+      end)
+
+      {:ok, ""} =
+        HTTP.delete(
+          "http://localhost:#{bypass.port}/resource/1",
+          [{"Authorization", "Bearer admin"}]
+        )
+    end
+  end
+
+  describe "module structure" do
+    test "exports expected functions" do
+      functions = Maraithon.HTTP.__info__(:functions)
+
+      assert {:get, 1} in functions
+      assert {:get, 2} in functions
+      assert {:post_json, 2} in functions
+      assert {:post_json, 3} in functions
+      assert {:post_form, 2} in functions
+      assert {:post_form, 3} in functions
+      assert {:put_json, 2} in functions
+      assert {:put_json, 3} in functions
+      assert {:patch_json, 2} in functions
+      assert {:patch_json, 3} in functions
+      assert {:delete, 1} in functions
+      assert {:delete, 2} in functions
+    end
+  end
+end

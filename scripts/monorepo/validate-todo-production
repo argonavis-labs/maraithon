@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+project="${MARAITHON_GCP_PROJECT:-maraithon}"
+region="${MARAITHON_GCP_REGION:-us-central1}"
+service="${MARAITHON_GCP_SERVICE:-maraithon}"
+job="${service}-todo-validation"
+
+require_command gcloud
+
+if [[ "${project}" != "maraithon" ]]; then
+  echo "Refusing to validate an unpinned GCP project: ${project}" >&2
+  exit 64
+fi
+
+validation_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+if ! gcloud run jobs execute "${job}" \
+  --project "${project}" \
+  --region "${region}" \
+  --wait \
+  --quiet; then
+  validation_error=""
+
+  for _attempt in $(seq 1 20); do
+    validation_error="$(gcloud logging read \
+      "resource.type=cloud_run_job AND resource.labels.job_name=${job} AND timestamp>=\"${validation_started_at}\" AND textPayload:\"TODO_OUTCOME_VALIDATION_ERROR=\"" \
+      --project "${project}" \
+      --limit 1 \
+      --order=desc \
+      --format 'value(textPayload)' 2>/dev/null || true)"
+
+    if [[ "${validation_error}" == TODO_OUTCOME_VALIDATION_ERROR=* ]]; then
+      break
+    fi
+
+    sleep 3
+  done
+
+  if [[ "${validation_error}" == TODO_OUTCOME_VALIDATION_ERROR=* ]]; then
+    echo "${validation_error}" >&2
+  else
+    echo "Todo validation failed before an aggregate-only error report was available" >&2
+  fi
+
+  exit 1
+fi
+
+validation_report=""
+for _attempt in $(seq 1 20); do
+  validation_report="$(gcloud logging read \
+    "resource.type=cloud_run_job AND resource.labels.job_name=${job} AND timestamp>=\"${validation_started_at}\" AND textPayload:\"TODO_LAUNCH_VALIDATION=\"" \
+    --project "${project}" \
+    --limit 1 \
+    --order=desc \
+    --format 'value(textPayload)' 2>/dev/null || true)"
+
+  if [[ "${validation_report}" == TODO_LAUNCH_VALIDATION=* ]]; then
+    break
+  fi
+
+  sleep 3
+done
+
+if [[ "${validation_report}" != TODO_LAUNCH_VALIDATION=* ]]; then
+  echo "Todo validation completed but its aggregate-only report was not available" >&2
+  exit 1
+fi
+
+echo "${validation_report}"

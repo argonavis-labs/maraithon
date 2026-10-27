@@ -1,0 +1,51 @@
+defmodule Maraithon.ChiefOfStaff.Skill do
+  @moduledoc """
+  Internal capability contract for the AI Chief of Staff behavior.
+
+  Skills intentionally mirror the runtime behavior callbacks so existing
+  structured workflow modules can be adapted with minimal rewrite in the first
+  implementation slice.
+  """
+
+  alias Maraithon.Behaviors.Behavior
+
+  @callback id() :: String.t()
+  @callback label() :: String.t()
+  @callback description() :: String.t()
+  @callback default_config() :: map()
+  @callback requirements() :: [map()]
+  @callback subscriptions(config :: map(), user_id :: String.t()) :: [String.t()]
+  @callback init(config :: map()) :: Behavior.state()
+  @callback interested_in?(config :: map(), Behavior.context()) :: boolean()
+
+  @callback handle_wakeup(Behavior.state(), Behavior.context()) ::
+              {:effect, Behavior.effect(), Behavior.state()}
+              | {:emit, {atom(), map()}, Behavior.state()}
+              | {:continue, Behavior.state()}
+              | {:idle, Behavior.state()}
+
+  @callback handle_effect_result(
+              {:llm_call | :tool_call, result :: any()},
+              Behavior.state(),
+              Behavior.context()
+            ) ::
+              {:emit, {atom(), map()}, Behavior.state()}
+              | {:effect, Behavior.effect(), Behavior.state()}
+              | {:continue, Behavior.state()}
+              | {:idle, Behavior.state()}
+
+  @callback handle_effect_error(
+              :llm_call | :tool_call,
+              reason :: any(),
+              Behavior.state(),
+              Behavior.context()
+            ) ::
+              {:emit, {atom(), map()}, Behavior.state()}
+              | {:effect, Behavior.effect(), Behavior.state()}
+              | {:continue, Behavior.state()}
+              | {:idle, Behavior.state()}
+
+  @callback next_wakeup(Behavior.state()) :: Behavior.wakeup_schedule()
+
+  @optional_callbacks interested_in?: 2, label: 0, description: 0, handle_effect_error: 4
+end

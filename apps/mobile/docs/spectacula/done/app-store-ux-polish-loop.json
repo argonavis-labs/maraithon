@@ -1,0 +1,79 @@
+{
+  "spec_id": "app-store-ux-polish-loop",
+  "slug": "app-store-ux-polish-loop",
+  "title": "App Store UX Polish Loop Specification",
+  "stage": "done",
+  "spec_path": "../specs/app-store-ux-polish-loop.md",
+  "created_at": "2026-05-26T02:41:28Z",
+  "approved_at": "2026-05-26T02:41:28Z",
+  "started_at": "2026-05-26T02:41:28Z",
+  "completed_at": "2026-05-26T02:53:58Z",
+  "updated_at": "2026-05-26T02:53:58Z",
+  "summary": "Completed an App Store UX polish pass across People, Todos, and Chat with shared UI primitives, deterministic relationship-care logic, chat search/prompts, visual screenshots, and production simulator verification.",
+  "next_action": "Future pass: integrate server-side Chief-of-Staff ranking and real assistant responses when backend support is available.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Production simulator verification passed against maraithon.com for kent@runner.now and verified app launched in Simulator.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "5. Functional Requirements",
+      "6. Technical Design",
+      "7. Validation Matrix",
+      "10. Completion Notes",
+      "11. Verification"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/app-store-ux-polish-loop.md",
+      "MaraithonMobile/Core/DesignSystem/CommandRow.swift",
+      "MaraithonMobile/Features/CRM/RelationshipCareInsight.swift",
+      "MaraithonMobile/Features/CRM/ContactDetailView.swift",
+      "MaraithonMobile/Features/CRM/ContactEditorView.swift",
+      "MaraithonMobile/Features/CRM/ContactRow.swift",
+      "MaraithonMobile/Features/Todos/TodoEditorView.swift",
+      "MaraithonMobile/Features/Todos/TodoRow.swift",
+      "MaraithonMobile/Features/Chat/ChatThreadFiltering.swift",
+      "MaraithonMobile/Features/Chat/ChatThreadsView.swift",
+      "MaraithonMobile/Features/Chat/ChatDetailView.swift",
+      "MaraithonMobileUITests/VisualSmokeUITests.swift",
+      "build/verification/app-store-polish"
+    ],
+    "notes": "Changes preserve the native SwiftUI/SwiftData architecture and production mobile API contract. The visual smoke test is opt-in and skips unless a snapshot directory and magic token are provided."
+  },
+  "verification": {
+    "format": "passed: xcodegen generate",
+    "lint": "passed: bash -n scripts/verify-production-simulator.sh",
+    "typecheck": "passed: xcodebuild build",
+    "build": "passed",
+    "tests": "passed: MaraithonMobileTests",
+    "visual_review": "passed: VisualSmokeUITests captured today/todos/people/chat/chat-detail screenshots",
+    "production_simulator": "passed: scripts/verify-production-simulator.sh run 20260526025221",
+    "production_assertions": "passed: todo created/completed, person created/updated for kent@runner.now",
+    "spec_review": "passed",
+    "notes": "The verified app was launched in Simulator as com.bliss.maraithonmobile after the production run."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T02:41:28Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial App Store UX polish spec saved."
+    },
+    {
+      "at": "2026-05-26T02:41:28Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "User requested implementation and verification loop with delegated product/design decisions."
+    },
+    {
+      "at": "2026-05-26T02:53:58Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed App Store UX polish pass and passed final production simulator verification for run 20260526025221."
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "spec_id": "agent-manifest-md-skill-harness",
+  "slug": "agent-manifest-md-skill-harness",
+  "title": "Agent Manifest and Markdown Skill Harness Specification",
+  "stage": "done",
+  "spec_path": "../done/agent-manifest-md-skill-harness.md",
+  "created_at": "2026-05-08T21:08:00Z",
+  "updated_at": "2026-05-08T22:42:00Z",
+  "summary": "Draft architecture spec for database-backed marketplace agents: reusable package/version definitions composed from system prompt, model/intelligence, goals, Markdown skills, connectors, MCP/tool catalog, budgets, and per-user installed agent instances executed by a generic harness.",
+  "next_action": "Monitor runtime behavior for installed manifest-backed agents and use follow-up specs for external publishing, ratings, or third-party marketplace submission flows.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md",
+    "docs/spectacula/specs/chief-of-staff-shared-acquisition-and-attention-arbitration.md",
+    "docs/spectacula/specs/source-backed-morning-briefing.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "Implemented phases 0-6. Targeted tests passed for marketplace manifests, Markdown skills/tool catalog, agent package lifecycle, manifest source-behavior delegation, default operator installation, and source-backed morning briefing. Full mix precommit passed with 1070 tests, 0 failures."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented phases 0-6 for manifest-backed marketplace agents, moved active product intelligence into Markdown skill packs, and assembled the default Chief of Staff package into runtime bootstrap for the primary operator.",
+    "pending_steps": [
+      "Use follow-up specs for external marketplace publishing, package ratings, and third-party submission review if needed"
+    ],
+    "open_questions": [],
+    "last_reviewed_sections": [],
+    "artifacts": [
+      "docs/spectacula/done/agent-manifest-md-skill-harness.md"
+    ],
+    "notes": "Marketplace agents are reusable database-driven packages with package versions, changelogs, install/pause/remove/upgrade operations, explicit model/intelligence policy, required loadable Markdown skills for manifest-backed agents, connector/MCP/tool metadata, run observability, default primary-operator installation, manifest source-behavior delegation for existing acquisition/delivery loops, and no heuristic fallback for source-backed briefing generation."
+  },
+  "history": [
+    {
+      "at": "2026-05-08T21:08:00Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created for manifest-driven Markdown skill harness architecture."
+    },
+    {
+      "at": "2026-05-08T21:22:00Z",
+      "event": "spec_updated",
+      "from_stage": "specs",
+      "to_stage": "specs",
+      "note": "Expanded architecture to treat agents as database-backed marketplace packages with immutable package versions and per-user installed agent instances."
+    },
+    {
+      "at": "2026-05-08T22:33:00Z",
+      "event": "implementation_completed",
+      "from_stage": "specs",
+      "to_stage": "done",
+      "note": "Completed phases 0-6: package/install split, manifest envelope, Markdown skill loader, generic agent loop, tool/MCP catalog, database-driven marketplace operations, and compatibility-shim migration away from behavior-specific product intelligence."
+    },
+    {
+      "at": "2026-05-08T22:36:00Z",
+      "event": "implementation_hardened",
+      "from_stage": "done",
+      "to_stage": "done",
+      "note": "Manifest-backed package sync and direct package-version changesets now require at least one Markdown skill path, and sync validates that the referenced skills load."
+    },
+    {
+      "at": "2026-05-08T22:42:00Z",
+      "event": "runtime_assembled",
+      "from_stage": "done",
+      "to_stage": "done",
+      "note": "Runtime bootstrap now syncs built-in packages, installs the default Chief of Staff package for the primary operator, resumes it as a manifest-backed agent, delegates scheduled cycles through source-behavior shims, and has briefing cron coverage for manifest-installed Chief of Staff agents."
+    }
+  ]
+}

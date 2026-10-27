@@ -1,0 +1,63 @@
+title = "Maraithon secret scanning"
+
+[extend]
+useDefault = true
+
+# Each exception requires BOTH an exact file and the reviewed fixture value.
+# Do not allowlist whole test directories, commits, or arbitrary token patterns.
+
+[[allowlists]]
+description = "Public Phoenix dev-only signing fixture; production requires SECRET_KEY_BASE"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)config/dev\.exs$''']
+regexes = ['''^3IadP309K00mRFjtXDTLWZHczvFZSP3Ztsi89n2acYMuFc4vlfJ2fFZgxHxo3vUx$''']
+
+[[allowlists]]
+description = "Public Phoenix test-only signing fixture; production requires SECRET_KEY_BASE"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)config/test\.exs$''']
+regexes = ['''^vvoIwP8nNJp8lGFZ9RR6Y7P31JfQ2raSNyk9Yev1qEa74gLVB0jW7aP8eFztubBE$''']
+
+[[allowlists]]
+description = "Swift type declaration, not key material"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)apps/companion/Sources/Maraithon/Crypto/DeviceKey\.swift$''']
+regexes = ['''^Curve25519\.KeyAgreement\.PrivateKey$''']
+
+[[allowlists]]
+description = "Synthetic Stripe value used to verify redaction"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)apps/companion/Tests/MaraithonTests/AI/OnDeviceSummarizerTests\.swift$''']
+regexes = ['''^sk_live_supersecret$''']
+
+[[allowlists]]
+description = "Illustrative public Sparkle key; base64 of repeated test text"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)apps/companion/docs/RELEASE\.md$''']
+regexes = ['''^dGVzdHRlc3R0ZXN0dGVzdHRlc3R0ZXN0dGVzdHRl$''']
+
+[[allowlists]]
+description = "Synthetic Slack value in redaction fixtures"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/maraithon/action_ledger_test\.exs$''', '''(?:^|/)test/maraithon/diagnostics_export_test\.exs$''']
+regexes = ['''^xoxb-1234567890-secret$''']
+
+[[allowlists]]
+description = "Synthetic OpenAI value in failure-copy fixture"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/maraithon/telegram_assistant/work_summary_test\.exs$''']
+regexes = ['''^sk-proj-12345678901234567890$''']
+
+[[allowlists]]
+description = "Static synthetic JWT used to verify redaction"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/maraithon/redaction_test\.exs$''']
+regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTYifQ\.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c$''']

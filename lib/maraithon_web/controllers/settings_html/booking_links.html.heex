@@ -1,0 +1,6 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-6">
+    <.page_header title="Booking links"><:actions><.button href={~p"/settings/assistant"} variant="plain">Assistant settings</.button></:actions></.page_header>
+    <.calendar_link_form calendar_link_rows={@calendar_link_rows} action={~p"/settings/booking-links"} />
+  </div>
+</Layouts.app>

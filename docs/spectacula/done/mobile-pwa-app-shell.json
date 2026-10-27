@@ -1,0 +1,70 @@
+{
+  "spec_id": "mobile-pwa-app-shell",
+  "slug": "mobile-pwa-app-shell",
+  "title": "Mobile PWA App Shell",
+  "stage": "done",
+  "spec_path": "../specs/mobile-pwa-app-shell.md",
+  "created_at": "2026-05-25T03:00:27Z",
+  "updated_at": "2026-05-25T03:00:27Z",
+  "summary": "Implemented an installable mobile PWA shell with manifest metadata, app icons, offline fallback, safe service-worker caching, mobile app metadata, and a safe-area-aware bottom tab bar.",
+  "next_action": "Open the app on a mobile viewport or device and validate install, navigation, and offline fallback behavior visually.",
+  "blockers": [],
+  "reference_examples": [
+    "AGENTS.md",
+    "DESIGN.md",
+    "Phoenix authenticated app shell",
+    "Existing command palette and People/Todos navigation"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`MIX_ARCHIVES=/tmp/maraithon-mix-archives-otp26 mix compile --force --warnings-as-errors` passed. `MIX_ARCHIVES=/tmp/maraithon-mix-archives-otp26 mix test test/maraithon_web/pwa_static_test.exs test/maraithon_web/live/people_live_test.exs` passed with 8 tests, 0 failures. `MIX_ARCHIVES=/tmp/maraithon-mix-archives-otp26 mix precommit` passed with 1921 tests, 0 failures, and assistant_eval 60/60. The MIX_ARCHIVES prefix isolates OTP 26 from a stale OTP 28 Hex archive in the local environment."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the mobile PWA app shell, static PWA assets, safe service worker, mobile app metadata, mobile bottom navigation, and focused PWA coverage; full precommit passed.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": ["All"],
+    "artifacts": [
+      "docs/spectacula/specs/mobile-pwa-app-shell.md",
+      "docs/spectacula/done/mobile-pwa-app-shell.json",
+      "priv/static/manifest.webmanifest",
+      "priv/static/sw.js",
+      "priv/static/offline.html",
+      "priv/static/images/app-icon.svg",
+      "priv/static/images/app-icon-192.png",
+      "priv/static/images/app-icon-512.png",
+      "lib/maraithon_web/components/layouts/root.html.heex",
+      "lib/maraithon_web/components/admin_navigation.ex",
+      "test/maraithon_web/pwa_static_test.exs"
+    ],
+    "notes": "Service worker intentionally avoids caching authenticated HTML, API responses, or user data. Verification used isolated MIX_ARCHIVES because the default Hex archive was polluted by an OTP 28 process."
+  },
+  "history": [
+    {
+      "at": "2026-05-25T03:00:27Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Created a mobile PWA app-shell specification from the user's request and app design constraints."
+    },
+    {
+      "at": "2026-05-25T03:00:27Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implemented manifest, app icons, service worker, offline fallback, mobile metadata, and mobile shell navigation."
+    },
+    {
+      "at": "2026-05-25T03:00:27Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed and verified with focused PWA and People tests plus full `mix precommit`."
+    }
+  ]
+}

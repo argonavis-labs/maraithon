@@ -1,0 +1,853 @@
+defmodule Maraithon.InsightNotifications do
+  @moduledoc """
+  Telegram delivery + feedback tuning for actionable insights.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.Telegram
+  alias Maraithon.DeliveryErrorCopy
+  alias Maraithon.InsightNotifications.Actions
+  alias Maraithon.InsightNotifications.{Delivery, MemoryGate, ThresholdProfile}
+  alias Maraithon.Insights
+  alias Maraithon.Insights.Insight
+  alias Maraithon.PreferenceMemory
+  alias Maraithon.Repo
+  alias Maraithon.SourceFreshness
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.TodoActions
+  alias Maraithon.TelegramRouter
+  alias MaraithonWeb.TelegramLink
+
+  require Logger
+
+  @default_threshold 0.78
+  @min_threshold 0.35
+  @max_threshold 0.97
+  @helpful_delta 0.03
+  @not_helpful_delta 0.05
+  @eligible_insight_limit 50
+
+  @doc """
+  Polls for open insights, stages eligible Telegram deliveries, and dispatches pending ones.
+  """
+  def dispatch_telegram_batch(opts \\ []) do
+    if telegram_configured?() and not TelegramAssistant.unified_push_explicitly_disabled?() do
+      batch_size = Keyword.get(opts, :batch_size, 20)
+
+      staged = stage_eligible_telegram_deliveries()
+
+      pending =
+        Delivery
+        |> where([d], d.channel == "telegram" and d.status == "pending")
+        |> order_by([d], desc: d.score, asc: d.inserted_at)
+        |> preload([:insight])
+        |> limit(^batch_size)
+        |> Repo.all()
+
+      Enum.reduce(pending, empty_dispatch_result(staged), fn delivery, acc ->
+        case send_delivery(delivery) do
+          :ok -> %{acc | sent: acc.sent + 1}
+          :skip -> acc
+          {:error, _reason} -> %{acc | failed: acc.failed + 1}
+        end
+      end)
+    else
+      empty_dispatch_result()
+    end
+  end
+
+  defp empty_dispatch_result(staged \\ 0), do: %{staged: staged, sent: 0, failed: 0}
+
+  @doc """
+  Handles Telegram webhook events while preserving the legacy asynchronous API.
+  """
+  def handle_telegram_event(event), do: handle_telegram_event(event, [])
+
+  def handle_telegram_event(event, opts) when is_list(opts) do
+    if Keyword.get(opts, :durable, false) do
+      process_telegram_event_durable(event)
+    else
+      _ = dispatch_telegram_event(event, :async)
+      :ok
+    end
+  end
+
+  @doc """
+  Processes a durably accepted Telegram event with a closed result contract.
+  """
+  @spec process_telegram_event_durable(term()) ::
+          :ok | {:noop, atom()} | {:error, term()}
+  def process_telegram_event_durable(event), do: dispatch_telegram_event(event, :durable)
+
+  @ignored_telegram_event_types ~w(
+    photo document video location contact sticker poll unknown inline_query
+    member_joined member_left chat_member_updated ignored_update
+  )
+
+  defp dispatch_telegram_event(%{} = event, mode) do
+    type = read_string(event, "type")
+    data = fetch(event, "data")
+    source = read_string(event, "source")
+
+    cond do
+      source not in [nil, "telegram"] ->
+        {:error, :invalid_telegram_event}
+
+      type in ["message", "voice", "audio"] and is_map(data) ->
+        handle_message_event(data, mode)
+
+      type == "edited_message" and is_map(data) ->
+        normalize_processing_result(TelegramRouter.handle_edited_message(data))
+
+      type == "callback_query" and is_map(data) ->
+        handle_callback_query(mark_processing_mode(data, mode))
+
+      type in @ignored_telegram_event_types ->
+        {:noop, :ignored_update}
+
+      is_binary(type) and String.starts_with?(type, "channel_") ->
+        {:noop, :ignored_update}
+
+      true ->
+        {:error, :invalid_telegram_event}
+    end
+  end
+
+  defp dispatch_telegram_event(_event, _mode), do: {:error, :invalid_telegram_event}
+
+  defp handle_message_event(data, mode) when is_map(data) do
+    chat_id = read_id_string(data, "chat_id")
+    text = read_string(data, "text")
+
+    if is_binary(chat_id), do: touch_telegram_freshness(chat_id)
+
+    cond do
+      is_nil(chat_id) ->
+        {:noop, :unlinked_or_unroutable}
+
+      String.starts_with?(text || "", "/start") or String.starts_with?(text || "", "/link") ->
+        link_telegram_chat(chat_id, text, read_map(data, "from"))
+
+      true ->
+        case maybe_handle_preference_command(chat_id, text) do
+          :pass ->
+            case mode do
+              :durable -> Maraithon.TelegramAssistant.ChatWorker.process_durable(chat_id, data)
+              :async -> Maraithon.TelegramAssistant.ChatWorker.enqueue(chat_id, data)
+            end
+
+          result ->
+            normalize_processing_result(result)
+        end
+    end
+  end
+
+  defp handle_message_event(_data, _mode), do: {:error, :invalid_telegram_event}
+
+  def get_or_create_profile(user_id) when is_binary(user_id) do
+    case Repo.get_by(ThresholdProfile, user_id: user_id) do
+      %ThresholdProfile{} = profile ->
+        {:ok, profile}
+
+      nil ->
+        %ThresholdProfile{}
+        |> ThresholdProfile.changeset(%{user_id: user_id, score_threshold: @default_threshold})
+        |> Repo.insert()
+        |> case do
+          {:ok, profile} -> {:ok, profile}
+          {:error, _} -> {:ok, Repo.get_by!(ThresholdProfile, user_id: user_id)}
+        end
+    end
+  end
+
+  defp stage_eligible_telegram_deliveries do
+    ConnectedAccounts.list_connected_provider("telegram")
+    |> Enum.reduce(0, fn account, acc ->
+      acc + stage_for_account(account)
+    end)
+  end
+
+  defp stage_for_account(account) do
+    destination = account.external_account_id || get_in(account.metadata, ["chat_id"])
+    now = DateTime.utc_now()
+
+    if is_binary(destination) and String.trim(destination) != "" do
+      {:ok, profile} = get_or_create_profile(account.user_id)
+
+      # Cheap filters (score threshold, delivery eligibility, standing
+      # preference rules) run first so the memory gate — the only step that
+      # pays for a recall — only runs against the survivors.
+      scored_candidates =
+        account.user_id
+        |> Insights.list_open_for_user(limit: @eligible_insight_limit)
+        |> Enum.map(fn insight -> {insight, insight_score(insight)} end)
+        |> Enum.filter(fn {insight, score} ->
+          score >= profile.score_threshold and
+            telegram_delivery_eligible?(insight) and
+            PreferenceMemory.allow_telegram_interrupt?(account.user_id, insight, now)
+        end)
+
+      # SPEC 07 review finding 3: this used to call MemoryGate.allow_interrupt?/2
+      # once per insight (up to @eligible_insight_limit times), each paying its
+      # own embedding recall round-trip serially inside this global tick. Now
+      # it recalls once for the whole batch (or skips the gate entirely when
+      # the user has no gate-relevant memories at all) and reuses that single
+      # recall for each insight's decision.
+      memory_allowed =
+        memory_gate_allowed(account.user_id, Enum.map(scored_candidates, &elem(&1, 0)))
+
+      Enum.reduce(scored_candidates, 0, fn {insight, score}, count ->
+        if Map.get(memory_allowed, insight.id, true) and
+             not delivery_exists?(insight.id, destination) do
+          attrs = %{
+            insight_id: insight.id,
+            user_id: account.user_id,
+            channel: "telegram",
+            destination: destination,
+            score: score,
+            threshold: profile.score_threshold,
+            status: "pending"
+          }
+
+          case Repo.insert(
+                 Delivery.changeset(%Delivery{}, attrs),
+                 on_conflict: :nothing,
+                 conflict_target: [:insight_id, :channel, :destination],
+                 returning: true
+               ) do
+            {:ok, %Delivery{id: nil}} -> count
+            {:ok, _delivery} -> count + 1
+            {:error, _reason} -> count
+          end
+        else
+          count
+        end
+      end)
+    else
+      0
+    end
+  end
+
+  defp memory_gate_allowed(_user_id, []), do: %{}
+
+  defp memory_gate_allowed(user_id, insights) do
+    if MemoryGate.any_gate_memories?(user_id) do
+      MemoryGate.allow_interrupt_batch?(user_id, insights)
+    else
+      Map.new(insights, &{&1.id, true})
+    end
+  end
+
+  defp send_delivery(%Delivery{} = delivery) do
+    case TelegramAssistant.deliver_insight(delivery) do
+      :ok ->
+        :ok
+
+      {:fallback, :disabled} ->
+        if TelegramAssistant.unified_push_explicitly_disabled?() do
+          :skip
+        else
+          payload = Actions.telegram_payload(delivery)
+
+          case telegram_module().send_message(
+                 delivery.destination,
+                 payload.text,
+                 parse_mode: "HTML",
+                 reply_markup: payload.reply_markup
+               ) do
+            {:ok, result} ->
+              message_id = read_message_id(result)
+
+              delivery
+              |> Ecto.Changeset.change(%{
+                status: "sent",
+                sent_at: DateTime.utc_now(),
+                provider_message_id: message_id,
+                metadata:
+                  Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
+              })
+              |> Repo.update()
+
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("Failed to send Telegram insight notification",
+                reason: inspect(reason)
+              )
+
+              delivery
+              |> Ecto.Changeset.change(%{
+                status: "failed",
+                error_message: DeliveryErrorCopy.storage_message(reason)
+              })
+              |> Repo.update()
+
+              {:error, reason}
+          end
+        end
+
+      {:error, reason} ->
+        Logger.warning("Failed to broker Telegram insight notification", reason: inspect(reason))
+        {:error, reason}
+    end
+  end
+
+  defp handle_feedback_callback(data) when is_map(data) do
+    callback_data = read_string(data, "data")
+    callback_id = read_string(data, "callback_id")
+    chat_id = read_id_string(data, "chat_id")
+
+    with {:ok, delivery_id, feedback} <- parse_feedback_data(callback_data),
+         %Delivery{} = delivery <- Repo.get(Delivery, delivery_id),
+         :ok <- authorize_feedback_delivery(delivery, chat_id),
+         {:ok, updated_delivery} <- apply_feedback(delivery, feedback) do
+      maybe_answer_callback(callback_id, feedback_ack_text(updated_delivery, feedback))
+    else
+      {:error, :already_recorded} ->
+        with :ok <- maybe_answer_callback(callback_id, "Feedback already recorded") do
+          {:noop, :feedback_already_recorded}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+
+      nil ->
+        {:error, :feedback_delivery_not_found}
+
+      other ->
+        {:error, {:invalid_feedback_processing_result, other}}
+    end
+  end
+
+  defp handle_feedback_callback(_), do: {:error, :invalid_telegram_event}
+
+  defp mark_processing_mode(data, :durable), do: Map.put(data, :durable_processing, true)
+  defp mark_processing_mode(data, _mode), do: data
+
+  defp handle_callback_query(data) when is_map(data) do
+    case read_string(data, "data") do
+      "tgtodo:" <> _ ->
+        normalize_callback_result(TodoActions.handle_callback(data))
+
+      "insfb:" <> _ ->
+        normalize_callback_result(handle_feedback_callback(data))
+
+      _other ->
+        cascade_callback(data)
+    end
+  end
+
+  defp handle_callback_query(_), do: {:error, :invalid_telegram_event}
+
+  defp cascade_callback(data) do
+    case normalize_callback_result(TelegramRouter.handle_callback_query(data)) do
+      {:noop, :unsupported_callback} ->
+        case normalize_callback_result(Actions.handle_callback(data)) do
+          {:noop, :unsupported_callback} -> {:noop, :unsupported_callback}
+          result -> result
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp normalize_callback_result(:ignored), do: {:noop, :unsupported_callback}
+
+  defp normalize_callback_result({:error, :unsupported_callback}),
+    do: {:noop, :unsupported_callback}
+
+  defp normalize_callback_result(result), do: normalize_processing_result(result)
+
+  defp normalize_processing_result(:ok), do: :ok
+  defp normalize_processing_result({:noop, reason}) when is_atom(reason), do: {:noop, reason}
+  defp normalize_processing_result({:error, reason}), do: {:error, reason}
+
+  defp normalize_processing_result(other),
+    do: {:error, {:invalid_telegram_processing_result, other}}
+
+  defp authorize_feedback_delivery(%Delivery{} = delivery, chat_id) do
+    if delivery.channel == "telegram" and to_string(delivery.destination) == chat_id do
+      :ok
+    else
+      {:error, :feedback_delivery_mismatch}
+    end
+  end
+
+  defp apply_feedback(%Delivery{id: delivery_id}, feedback)
+       when feedback in ["helpful", "not_helpful"] do
+    status = if feedback == "helpful", do: "feedback_helpful", else: "feedback_not_helpful"
+
+    Repo.transaction(fn ->
+      delivery =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one!()
+
+      if delivery.feedback in ["helpful", "not_helpful"] do
+        Repo.rollback(:already_recorded)
+      end
+
+      with {:ok, updated_delivery} <-
+             delivery
+             |> Ecto.Changeset.change(%{
+               status: status,
+               feedback: feedback,
+               feedback_at: DateTime.utc_now()
+             })
+             |> Repo.update(),
+           {:ok, _updated_insight} <- apply_insight_feedback(delivery, feedback),
+           {:ok, _profile} <- tune_threshold(delivery.user_id, feedback) do
+        updated_delivery
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        other -> Repo.rollback({:invalid_feedback_subwrite_result, other})
+      end
+    end)
+    |> case do
+      {:ok, updated_delivery} -> {:ok, Repo.preload(updated_delivery, :insight)}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    reason ->
+      Logger.warning("Telegram insight feedback persistence failed",
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      {:error, :feedback_persistence_failed}
+  catch
+    :exit, reason ->
+      Logger.warning("Telegram insight feedback persistence exited",
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      {:error, :feedback_persistence_failed}
+  end
+
+  defp apply_insight_feedback(delivery, "helpful"),
+    do: Insights.acknowledge(delivery.user_id, delivery.insight_id)
+
+  defp apply_insight_feedback(delivery, "not_helpful"),
+    do: Insights.dismiss(delivery.user_id, delivery.insight_id)
+
+  defp tune_threshold(user_id, feedback) do
+    with {:ok, _profile} <- get_or_create_profile(user_id),
+         %ThresholdProfile{} = profile <- lock_threshold_profile(user_id) do
+      delta = if feedback == "helpful", do: -@helpful_delta, else: @not_helpful_delta
+
+      profile
+      |> ThresholdProfile.changeset(%{
+        score_threshold: clamp(profile.score_threshold + delta, @min_threshold, @max_threshold),
+        helpful_count: profile.helpful_count + if(feedback == "helpful", do: 1, else: 0),
+        not_helpful_count:
+          profile.not_helpful_count + if(feedback == "not_helpful", do: 1, else: 0),
+        last_feedback_at: DateTime.utc_now()
+      })
+      |> Repo.update()
+    else
+      nil -> {:error, :threshold_profile_not_found}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp lock_threshold_profile(user_id) do
+    ThresholdProfile
+    |> where([profile], profile.user_id == ^user_id)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
+  end
+
+  defp maybe_handle_preference_command(chat_id, text) when is_binary(chat_id) do
+    command_text = String.trim(text || "")
+
+    case ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
+      nil -> maybe_reply_preference_help(chat_id, command_text)
+      account -> handle_connected_preference_command(account.user_id, chat_id, command_text)
+    end
+  end
+
+  defp maybe_handle_preference_command(_chat_id, _text), do: :pass
+
+  defp handle_connected_preference_command(user_id, chat_id, text) do
+    cond do
+      text in ["/preferences", "/prefs", "/memory"] ->
+        telegram_send(chat_id, PreferenceMemory.render_summary(user_id))
+
+      String.starts_with?(text, "/prefer") or String.starts_with?(text, "/policy") ->
+        instruction = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
+
+        reply =
+          case PreferenceMemory.apply_explicit_instruction(user_id, instruction) do
+            {:ok, %{reply: reply}} -> reply
+            {:error, _reason} -> preference_help_text()
+          end
+
+        telegram_send(chat_id, reply)
+
+      String.starts_with?(text, "/forget") ->
+        rule_id = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
+
+        reply =
+          case PreferenceMemory.forget_rule(user_id, rule_id) do
+            {:ok, reply} -> reply
+            {:error, :rule_not_found} -> "No saved rule matched that id."
+            {:error, _reason} -> preference_help_text()
+          end
+
+        telegram_send(chat_id, reply)
+
+      true ->
+        :pass
+    end
+  end
+
+  defp maybe_reply_preference_help(chat_id, command_text) do
+    if command_text in ["/preferences", "/prefs", "/memory"] or
+         String.starts_with?(command_text, "/prefer") or
+         String.starts_with?(command_text, "/policy") or
+         String.starts_with?(command_text, "/forget") do
+      telegram_send(
+        chat_id,
+        "Link this chat first with /start your@email.com, then use /prefer or /preferences."
+      )
+    else
+      :pass
+    end
+  end
+
+  defp preference_help_text do
+    """
+    Preference commands:
+    /preferences
+    /prefer ignore receipts
+    /prefer ignore sales outreach unless I've engaged
+    /prefer treat investors as urgent
+    /prefer don't interrupt after 8pm unless external
+    /forget RULE_ID
+    """
+    |> String.trim()
+  end
+
+  # Inbound webhook traffic is one proof of Telegram liveness; successful
+  # outbound sends are the other. Both route through
+  # `SourceFreshness.touch_telegram_liveness/2` (throttled, status-blind so a
+  # wrongly-flagged account heals on the next proof of life).
+  defp touch_telegram_freshness(chat_id) do
+    SourceFreshness.touch_telegram_liveness(chat_id, %{last_webhook_at: DateTime.utc_now()})
+  end
+
+  defp link_telegram_chat(chat_id, command_text, from_user) do
+    case parse_link_user_id(command_text) do
+      {:error, :invalid_token} ->
+        telegram_send(
+          chat_id,
+          "That Telegram link expired or is invalid. Generate a new Connect Telegram link before linking Telegram."
+        )
+
+      nil ->
+        telegram_send(
+          chat_id,
+          "Use /start your-email@example.com to link this Telegram chat to Maraithon."
+        )
+
+      {:ok, user_id} ->
+        link_telegram_chat_to_user(chat_id, user_id, from_user)
+    end
+  end
+
+  defp link_telegram_chat_to_user(chat_id, user_id, from_user) do
+    case Accounts.get_user(user_id) do
+      nil ->
+        telegram_send(chat_id, "No Maraithon user found for #{user_id}.")
+
+      _user ->
+        metadata = %{
+          "chat_id" => to_string(chat_id),
+          "telegram_user_id" => to_string(read_integer(from_user, "id") || ""),
+          "username" => read_string(from_user, "username"),
+          "first_name" => read_string(from_user, "first_name"),
+          "last_name" => read_string(from_user, "last_name")
+        }
+
+        case ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+               external_account_id: to_string(chat_id),
+               metadata: metadata
+             }) do
+          {:ok, _account} ->
+            telegram_send(
+              chat_id,
+              "Linked to Maraithon user #{user_id}. Important insights will be sent here."
+            )
+
+          {:error, _reason} ->
+            telegram_send(chat_id, "Could not link this chat right now.")
+        end
+    end
+  end
+
+  defp parse_link_user_id(command_text) when is_binary(command_text) do
+    parts =
+      command_text
+      |> String.trim()
+      |> String.split(~r/\s+/, trim: true)
+
+    candidate =
+      case parts do
+        [command, arg | _] when is_binary(command) ->
+          if command_matches?(command, "/start") or command_matches?(command, "/link"),
+            do: arg,
+            else: nil
+
+        _ ->
+          nil
+      end
+
+    cond do
+      is_nil(candidate) ->
+        nil
+
+      telegram_link_token?(candidate) ->
+        case TelegramLink.verify_token(candidate) do
+          {:ok, user_id} when is_binary(user_id) -> {:ok, user_id}
+          _error -> {:error, :invalid_token}
+        end
+
+      true ->
+        case Accounts.normalize_email(candidate) do
+          "" -> nil
+          normalized -> {:ok, normalized}
+        end
+    end
+  end
+
+  defp parse_link_user_id(_), do: nil
+
+  defp telegram_link_token?(candidate) when is_binary(candidate) do
+    String.contains?(candidate, ".") and not String.contains?(candidate, "@")
+  end
+
+  defp telegram_link_token?(_candidate), do: false
+
+  defp command_matches?(command, base) when is_binary(command) and is_binary(base) do
+    normalized =
+      command
+      |> String.trim()
+      |> String.downcase()
+      |> String.split("@", parts: 2)
+      |> List.first()
+
+    normalized == base
+  end
+
+  defp parse_feedback_data(value) when is_binary(value) do
+    case Regex.run(~r/^insfb:([0-9a-f\-]{36}):(h|n)$/i, value, capture: :all_but_first) do
+      [delivery_id, "h"] -> {:ok, delivery_id, "helpful"}
+      [delivery_id, "n"] -> {:ok, delivery_id, "not_helpful"}
+      _ -> {:error, :invalid_callback_data}
+    end
+  end
+
+  defp parse_feedback_data(_), do: {:error, :invalid_callback_data}
+
+  defp insight_score(%Insight{} = insight) do
+    case read_float(insight.metadata || %{}, "telegram_fit_score") do
+      value when is_float(value) ->
+        clamp(value, 0.0, 1.0)
+
+      nil ->
+        confidence = clamp(insight.confidence || 0.0, 0.0, 1.0)
+        priority = clamp((insight.priority || 0) / 100, 0.0, 1.0)
+
+        clamp(0.65 * confidence + 0.35 * priority, 0.0, 1.0)
+    end
+  end
+
+  defp telegram_delivery_eligible?(%Insight{} = insight) do
+    attention = read_map(insight.metadata || %{}, "attention")
+
+    case insight.attention_mode do
+      "monitor" -> read_boolean(attention, "re_notify_eligible", false)
+      _ -> true
+    end
+  end
+
+  defp maybe_answer_callback(nil, _text), do: :ok
+
+  defp maybe_answer_callback(callback_id, text) do
+    case telegram_module().answer_callback_query(callback_id, text: text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
+  end
+
+  defp telegram_send(chat_id, text) do
+    case telegram_module().send_message(chat_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
+    end
+  end
+
+  defp feedback_ack_text(%Delivery{} = delivery, feedback) do
+    learned_reply =
+      case PreferenceMemory.learn_from_feedback(delivery.user_id, delivery.insight, feedback) do
+        {:ok, %{reply: reply}} when is_binary(reply) and reply != "" -> reply
+        _ -> nil
+      end
+
+    base =
+      case feedback do
+        "helpful" -> "Thanks, we will send similar insights."
+        "not_helpful" -> "Got it, we will be more selective."
+        _ -> "Feedback saved."
+      end
+
+    if is_binary(learned_reply),
+      do: truncate_callback_text("#{base} #{learned_reply}"),
+      else: base
+  end
+
+  defp truncate_callback_text(text) when is_binary(text) do
+    if String.length(text) <= 180, do: text, else: String.slice(text, 0, 177) <> "..."
+  end
+
+  defp delivery_exists?(insight_id, destination) do
+    Delivery
+    |> where([d], d.insight_id == ^insight_id)
+    |> where([d], d.channel == "telegram")
+    |> where([d], d.destination == ^to_string(destination))
+    |> Repo.exists?()
+  end
+
+  defp read_message_id(result) when is_map(result) do
+    value = read_string(result, "message_id") || read_integer(result, "message_id")
+
+    case value do
+      nil -> nil
+      number when is_integer(number) -> Integer.to_string(number)
+      string when is_binary(string) -> string
+      _ -> nil
+    end
+  end
+
+  defp read_string(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_integer(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_integer(value) ->
+        value
+
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {parsed, ""} -> parsed
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_id_string(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_integer(value) ->
+        Integer.to_string(value)
+
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_map(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
+  defp read_boolean(map, key, default) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_boolean(value) ->
+        value
+
+      value when is_binary(value) ->
+        case String.downcase(String.trim(value)) do
+          "true" -> true
+          "false" -> false
+          _ -> default
+        end
+
+      _ ->
+        default
+    end
+  end
+
+  defp read_float(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_float(value) ->
+        value
+
+      value when is_integer(value) ->
+        value / 1
+
+      value when is_binary(value) ->
+        case Float.parse(value) do
+          {parsed, ""} -> parsed
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp fetch(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, fn
+          {map_key, value} when is_atom(map_key) -> if Atom.to_string(map_key) == key, do: value
+          _ -> nil
+        end)
+    end
+  end
+
+  defp clamp(value, min, _max) when value < min, do: min
+  defp clamp(value, _min, max) when value > max, do: max
+  defp clamp(value, _min, _max), do: value
+
+  defp telegram_configured? do
+    module = telegram_module()
+
+    if function_exported?(module, :configured?, 0) do
+      module.configured?()
+    else
+      true
+    end
+  end
+
+  defp telegram_module do
+    Application.get_env(:maraithon, :insights, [])
+    |> Keyword.get(:telegram_module, Telegram)
+  end
+end
